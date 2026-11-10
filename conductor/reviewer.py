@@ -57,7 +57,8 @@ def parse_verdict(content: str) -> tuple[bool, str] | None:
     return data["ok"], str(data.get("reason", ""))
 
 
-def review(profile: Profile, spec: str, diff: str, post: Post = http_post) -> Verdict:
+def review(profile: Profile, spec: str, diff: str, post: Post | None = None) -> Verdict:
+    post = post or http_post
     api_key = os.environ.get(profile.api_key_env)
     if not api_key:
         raise ReviewerError(f"environment variable {profile.api_key_env} is not set")
