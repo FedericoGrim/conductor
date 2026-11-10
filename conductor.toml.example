@@ -1,0 +1,73 @@
+# Copy to conductor.toml (project root) or ~/.config/conductor/conductor.toml.
+# Model ids are examples: refresh them with `python scripts/list-models.py --privacy <level>`
+# and check that every model supports tool calling, or OpenCode cannot edit files with it.
+#
+# Each [privacy.<level>] is a profile:
+#   provider        OpenCode provider id (`opencode auth login` must know it)
+#   base_url        OpenAI-compatible endpoint, used for workers (via opencode.json) and the reviewer
+#   api_key_env     environment variable holding the key for the reviewer call
+#   tiers           models from cheapest/weakest to strongest; step difficulty N starts at tiers[N-1]
+#   reviewer        model judging each diff, or "brain" to hand diffs back to the planning model
+#   max_parallel    concurrent steps
+#   request_options extra JSON merged into every request body (OpenRouter routing lives here)
+
+default_privacy = "medium"
+
+# low: free models, providers may train on your prompts. Needs "free model training" enabled in
+# OpenRouter privacy settings. Free tiers are rate limited (50 req/day, 1000 with $10 of credits),
+# so keep parallelism low and end the tier list with a paid model for escalation.
+[privacy.low]
+provider = "openrouter"
+base_url = "https://openrouter.ai/api/v1"
+api_key_env = "OPENROUTER_API_KEY"
+max_parallel = 2
+tiers = [
+  "openrouter/qwen/qwen3-coder:free",
+  "openrouter/deepseek/deepseek-chat:free",
+  "openrouter/deepseek/deepseek-chat",
+]
+reviewer = "openrouter/deepseek/deepseek-chat"
+
+# medium: paid models, only providers that do not retain or train on prompts, anywhere in the world.
+[privacy.medium]
+provider = "openrouter"
+base_url = "https://openrouter.ai/api/v1"
+api_key_env = "OPENROUTER_API_KEY"
+max_parallel = 4
+tiers = [
+  "openrouter/deepseek/deepseek-chat",
+  "openrouter/qwen/qwen3-coder",
+  "openrouter/anthropic/claude-sonnet-4.5",
+]
+reviewer = "openrouter/deepseek/deepseek-chat"
+request_options = { provider = { data_collection = "deny" } }
+
+# high: EU data residency through eu.openrouter.ai (OpenRouter Business plan, +8% on credits).
+# Fewer models and higher prices for open-weight ones; check eu.openrouter.ai/api/v1/models.
+[privacy.high]
+provider = "openrouter"
+base_url = "https://eu.openrouter.ai/api/v1"
+api_key_env = "OPENROUTER_API_KEY"
+max_parallel = 4
+tiers = [
+  "openrouter/mistralai/ministral-8b",
+  "openrouter/mistralai/codestral-2508",
+  "openrouter/anthropic/claude-sonnet-4.5",
+]
+reviewer = "openrouter/mistralai/codestral-2508"
+
+# Other providers work the same way, as long as OpenCode knows them. Examples:
+#
+# [privacy.zen]                      # OpenCode Zen, OpenCode's own gateway
+# provider = "opencode"
+# base_url = "https://opencode.ai/zen/v1"
+# api_key_env = "OPENCODE_API_KEY"
+# tiers = ["opencode/grok-code", "opencode/claude-sonnet-4"]
+# reviewer = "opencode/grok-code"
+#
+# [privacy.vercel]                   # Vercel AI Gateway, no markup on provider prices
+# provider = "vercel"
+# base_url = "https://ai-gateway.vercel.sh/v1"
+# api_key_env = "AI_GATEWAY_API_KEY"
+# tiers = ["vercel/deepseek/deepseek-v3", "vercel/anthropic/claude-sonnet-4.5"]
+# reviewer = "vercel/deepseek/deepseek-v3"
