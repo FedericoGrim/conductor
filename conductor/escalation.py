@@ -13,7 +13,7 @@ BRAIN = "brain"
 
 Attempt = Callable[[Step, int, str, str], Awaitable[AttemptOutput]]
 Judge = Callable[[str, str], Verdict]
-Record = Callable[[Step, dict[str, Any]], None]
+Record = Callable[[Step, dict[str, Any]], object]
 
 
 def build_prompt(goal: str, step: Step, feedback: str | None = None) -> str:
