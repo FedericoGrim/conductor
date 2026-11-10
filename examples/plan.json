@@ -1,0 +1,29 @@
+{
+  "goal": "Add a `greet` CLI that prints a greeting for a given name, with tests.",
+  "steps": [
+    {
+      "id": "greet-core",
+      "title": "Greeting function",
+      "spec": "Create greet/core.py with `def greet(name: str) -> str` returning 'Hello, <name>!'. Strip whitespace from the name and raise ValueError when it is empty. Add tests in tests/test_core.py covering the happy path, whitespace stripping and the empty-name error.",
+      "files": ["greet/__init__.py", "greet/core.py", "tests/test_core.py"],
+      "difficulty": 1,
+      "depends_on": []
+    },
+    {
+      "id": "greet-cli",
+      "title": "Command line entry point",
+      "spec": "Create greet/cli.py exposing `main(argv)` using argparse with one positional `name` argument; it prints greet(name) and returns 0, or prints the ValueError message to stderr and returns 2. Add tests in tests/test_cli.py using capsys.",
+      "files": ["greet/cli.py", "tests/test_cli.py"],
+      "difficulty": 2,
+      "depends_on": ["greet-core"]
+    },
+    {
+      "id": "readme",
+      "title": "Usage documentation",
+      "spec": "Write a README.md section 'Usage' showing how to run the CLI and what it prints.",
+      "files": ["README.md"],
+      "difficulty": 1,
+      "depends_on": []
+    }
+  ]
+}
