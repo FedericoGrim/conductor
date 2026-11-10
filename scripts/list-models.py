@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import urllib.error
 import urllib.request
 from typing import Any
 
@@ -18,9 +19,13 @@ ENDPOINTS = {
 
 
 def fetch(url: str) -> list[dict[str, Any]]:
-    with urllib.request.urlopen(url, timeout=60) as response:
-        data: list[dict[str, Any]] = json.loads(response.read())["data"]
-        return data
+    request = urllib.request.Request(url, headers={"User-Agent": "conductor-list-models"})
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            data: list[dict[str, Any]] = json.loads(response.read())["data"]
+            return data
+    except urllib.error.HTTPError as error:
+        raise SystemExit(f"error: {url} answered HTTP {error.code}") from error
 
 
 def per_million(price: str | None) -> float:
@@ -34,6 +39,8 @@ def candidates(models: list[dict[str, Any]], privacy: str) -> list[dict[str, Any
             continue
         prompt = per_million(model.get("pricing", {}).get("prompt"))
         completion = per_million(model.get("pricing", {}).get("completion"))
+        if prompt < 0 or completion < 0:
+            continue
         free = prompt == 0 and completion == 0
         if (privacy == "low") != free:
             continue
