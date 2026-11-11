@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import subprocess
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -36,16 +37,20 @@ def remove_worktree(repo: Path, path: Path) -> None:
     git(repo, "worktree", "remove", "--force", str(path))
 
 
-def write_opencode_config(worktree: Path, config: dict[str, Any]) -> None:
-    (worktree / OPENCODE_CONFIG_NAME).write_text(json.dumps(config, indent=2) + "\n")
-    common_dir = Path(git(worktree, "rev-parse", "--git-common-dir").strip())
+def exclude_from_git(repo: Path, pattern: str) -> None:
+    common_dir = Path(git(repo, "rev-parse", "--git-common-dir").strip())
     if not common_dir.is_absolute():
-        common_dir = worktree / common_dir
+        common_dir = repo / common_dir
     exclude = common_dir / "info" / "exclude"
     exclude.parent.mkdir(parents=True, exist_ok=True)
     existing = exclude.read_text() if exclude.exists() else ""
-    if OPENCODE_CONFIG_NAME not in existing.splitlines():
-        exclude.write_text(existing.rstrip("\n") + f"\n{OPENCODE_CONFIG_NAME}\n")
+    if pattern not in existing.splitlines():
+        exclude.write_text(existing.rstrip("\n") + f"\n{pattern}\n")
+
+
+def write_opencode_config(worktree: Path, config: dict[str, Any]) -> None:
+    (worktree / OPENCODE_CONFIG_NAME).write_text(json.dumps(config, indent=2) + "\n")
+    exclude_from_git(worktree, OPENCODE_CONFIG_NAME)
 
 
 def build_command(model: str, prompt: str, extra_args: list[str]) -> list[str]:
@@ -101,9 +106,11 @@ def diff_against(worktree: Path, base: str) -> str:
 
 
 async def subprocess_runner(cmd: list[str], cwd: Path) -> tuple[int, str, str]:
+    # OpenCode resolves its project root from $PWD, not from the process cwd.
     process = await asyncio.create_subprocess_exec(
         *cmd,
         cwd=cwd,
+        env={**os.environ, "PWD": str(cwd)},
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
