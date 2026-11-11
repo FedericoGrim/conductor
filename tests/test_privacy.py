@@ -1,14 +1,11 @@
-from conductor.config import Profile
 from conductor.privacy import api_model_id, opencode_config
+from tests.factories import make_profile
 
-PROFILE = Profile(
-    name="medium",
-    provider="openrouter",
+PROFILE = make_profile(
     base_url="https://eu.openrouter.ai/api/v1",
     api_key_env="OPENROUTER_API_KEY",
     tiers=("openrouter/deepseek/v4", "openrouter/anthropic/sonnet"),
     reviewer="openrouter/deepseek/v4",
-    max_parallel=4,
     request_options={"provider": {"data_collection": "deny"}},
 )
 
@@ -34,5 +31,28 @@ def test_opencode_config_never_contains_the_api_key(monkeypatch: object) -> None
 
 
 def test_api_model_id_strips_the_opencode_provider_prefix() -> None:
-    assert api_model_id(PROFILE, "openrouter/deepseek/v4") == "deepseek/v4"
-    assert api_model_id(PROFILE, "deepseek/v4") == "deepseek/v4"
+    assert api_model_id("openrouter", "openrouter/deepseek/v4") == "deepseek/v4"
+    assert api_model_id("openrouter", "deepseek/v4") == "deepseek/v4"
+
+
+def test_opencode_config_carries_every_provider_with_its_own_models() -> None:
+    from conductor.config import Profile, Provider
+
+    profile = Profile(
+        "medium",
+        {
+            "openrouter": Provider("openrouter", "https://openrouter.ai/api/v1", "A"),
+            "scaleway": Provider("scaleway", "https://api.scaleway.ai/v1", "B"),
+        },
+        ("openrouter/deepseek/v4", "scaleway/glm-5.3"),
+        "scaleway/glm-5.3",
+    )
+    config = opencode_config(profile)
+    assert config["provider"]["openrouter"] == {
+        "options": {"baseURL": "https://openrouter.ai/api/v1"},
+        "models": {"deepseek/v4": {"options": {}}},
+    }
+    assert config["provider"]["scaleway"] == {
+        "options": {"baseURL": "https://api.scaleway.ai/v1"},
+        "models": {"glm-5.3": {"options": {}}},
+    }

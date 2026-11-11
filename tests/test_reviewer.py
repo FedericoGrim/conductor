@@ -3,14 +3,11 @@ from typing import Any
 
 import pytest
 
-from conductor.config import Profile
 from conductor.credentials import store_key
 from conductor.reviewer import ReviewerError, Verdict, review
+from tests.factories import make_profile
 
-PROFILE = Profile(
-    name="medium",
-    provider="openrouter",
-    base_url="https://openrouter.ai/api/v1",
+PROFILE = make_profile(
     api_key_env="TEST_REVIEW_KEY",
     tiers=("openrouter/a/b",),
     reviewer="openrouter/deepseek/flash",
@@ -96,3 +93,29 @@ def test_a_stored_key_is_used_when_the_environment_has_none(
 
     assert review(PROFILE, spec="s", diff="+x", post=fake_post).ok is True
     assert captured["headers"]["Authorization"] == "Bearer sk-stored"
+
+
+def test_the_reviewer_uses_the_provider_of_its_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    from conductor.config import Profile, Provider
+
+    profile = Profile(
+        "medium",
+        {
+            "openrouter": Provider("openrouter", "https://openrouter.ai/api/v1", "K1"),
+            "scaleway": Provider("scaleway", "https://api.scaleway.ai/v1", "K2"),
+        },
+        ("openrouter/a",),
+        "scaleway/glm-5.3",
+    )
+    monkeypatch.setenv("K1", "sk-one")
+    monkeypatch.setenv("K2", "sk-two")
+    captured: dict[str, Any] = {}
+
+    def fake_post(url: str, headers: dict[str, str], body: dict[str, Any]) -> dict[str, Any]:
+        captured.update(url=url, headers=headers, body=body)
+        return completion(json.dumps({"ok": True, "reason": "fine"}))
+
+    review(profile, spec="s", diff="+x", post=fake_post)
+    assert captured["url"] == "https://api.scaleway.ai/v1/chat/completions"
+    assert captured["headers"]["Authorization"] == "Bearer sk-two"
+    assert captured["body"]["model"] == "glm-5.3"

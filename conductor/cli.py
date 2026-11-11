@@ -105,7 +105,9 @@ def run(args: argparse.Namespace) -> int:
     results = asyncio.run(execute_plan(repo, plan, profile, log, args.opencode_arg))
     log.finish(results)
     try:
-        billing.record_run(project_root(repo), profile.provider, log.directory.name, log.run)
+        billing.record_run(
+            project_root(repo), ",".join(profile.providers), log.directory.name, log.run
+        )
     except OSError as error:
         print(f"warning: could not record the run in the ledger: {error}", file=sys.stderr)
     summary = {

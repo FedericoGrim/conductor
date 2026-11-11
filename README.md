@@ -6,11 +6,11 @@ Conductor takes a `plan.json` produced by a planning model (Claude in Claude Cod
 
 ## How a run works
 
-1. The brain writes `plan.json`: steps with a spec, the files to touch, a difficulty from 1 (trivial) to N, and dependencies.
+1. The brain writes `plan.json`: steps with a spec, the files to touch, a difficulty from 1 (trivial) to 5 (hard), and dependencies.
 2. `conductor run plan.json --privacy medium` picks the profile from `conductor.toml`.
-3. Every step whose dependencies are approved starts, up to `max_parallel` at once, in its own worktree branched from the current branch. The step runs `opencode run --format json --auto` on `tiers[difficulty - 1]`.
+3. Every step whose dependencies are approved starts, up to `max_parallel` at once, in its own worktree branched from the current branch. The step runs `opencode run --format json --auto` on the model of its difficulty level, `tiers[difficulty - 1]`.
 4. The reviewer model receives the spec and the diff and answers `{"ok": bool, "reason": str}`.
-5. Rejected: the step restarts on the next tier with the reason in the prompt. Rejected on the strongest tier: `failed`, and its dependents are `skipped`.
+5. Rejected: the step restarts on the next difficulty level with the reason in the prompt, possibly on a different provider. Rejected on level 5: `failed`, and its dependents are `skipped`.
 6. Approved: the branch is merged into the current branch; a conflict is reported as `conflict` and the branch is kept for the brain.
 7. `.conductor/runs/<timestamp>/run.json` summarises the run; `step-<id>/attempt-<n>.json` holds the prompt, the full OpenCode event transcript, the diff and the reviewer's verdict of every attempt.
 
@@ -46,12 +46,15 @@ Other providers are listed with "no balance API known". Amounts are never conver
 
 ## Setup
 
-`conductor setup` is a terminal UI for `conductor.toml`, meant to be reopened whenever a provider changes its catalog or prices:
+`conductor setup` is a terminal UI for `conductor.toml`, meant to be reopened whenever a provider changes its catalog or prices. Conductor ships three complete profiles (`low`, `medium`, `high`), so the UI opens on something that already works: you change a model, not the structure.
 
-- profiles per privacy level: add, delete, choose the default;
-- per profile: provider (OpenRouter, OpenRouter EU, Vercel AI Gateway, Scaleway, OpenCode Zen, DeepSeek, or hand-written), parallelism, reviewer (a tier or `brain`);
-- tiers: pick models from the provider's own catalog, filter them by typing, or add an id by hand; move them up and down, delete them;
+- profiles per privacy level: the three built-in ones plus any you add, with one marked as default;
+- per profile: **five difficulty levels**, one model each, and the reviewer (one of those models or `brain`);
+- providers: OpenRouter, OpenRouter EU, Vercel AI Gateway, Scaleway, OpenCode Zen, DeepSeek, or one typed by hand, each with its own `base_url` and key variable. A profile may use several of them, so level 1 can run on OpenRouter, level 3 on Scaleway and level 5 on Vercel;
+- models: picked from the providers' own catalogs, filtered by typing, or an id typed by hand;
 - API keys: type one and it is stored, masked, in `~/.local/share/conductor/auth.json` (mode `600`).
+
+A model id is `<provider>/<model>`, and the provider is the one declared in the same profile, which is how a rejected step can escalate onto another provider. `conductor.toml.example` shows the format.
 
 Keys are read from the environment first and from that file second. Saving rewrites the file and keeps the previous one as `conductor.toml.bak`; comments written by hand are lost, which is why the generated file carries a warning. The UI needs an interactive terminal; `--config` chooses another file.
 
@@ -61,7 +64,7 @@ Keys are read from the environment first and from that file second. Saving rewri
 npm i -g @opencode/cli@latest
 opencode auth login            # the provider used in your profiles, e.g. OpenRouter
 pipx install /path/to/conductor
-conductor setup               # writes ~/.config/conductor/conductor.toml
+conductor setup               # edit the built-in profiles, writes ~/.config/conductor/conductor.toml
 ```
 
 Refresh the model lists from the command line with `python scripts/list-models.py --privacy medium`, or inside `conductor setup`.
@@ -85,7 +88,7 @@ Both tell the brain to write `plan.json`, call `conductor run`, read `run.json`,
 }
 ```
 
-Check it with `conductor validate plan.json`. Parallel steps must not touch the same files, or they will conflict at merge time.
+`difficulty` is 1 to 5 and picks the level of the chosen profile. Check it with `conductor validate plan.json`. Parallel steps must not touch the same files, or they will conflict at merge time.
 
 ## Development
 

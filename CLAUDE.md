@@ -10,9 +10,10 @@ CLI that executes a `plan.json` written by a "brain" model (Claude in Claude Cod
 
 ## Architecture
 Simple layering, no tactical DDD: a small tool with little business logic.
-- `conductor/plan.py` — `Plan`, `Step` models and validation (unique ids, known `depends_on`, no cycles, difficulty in range).
-- `conductor/config.py` — `conductor.toml`: privacy profiles, each with tiers (cheapest first), reviewer, `max_parallel`.
-- `conductor/privacy.py` — a profile → the `opencode.json` written in each worktree and the reviewer request options.
+- `conductor/plan.py` — `Plan`, `Step` models and validation (unique ids, known `depends_on`, no cycles, difficulty between 1 and `DIFFICULTY_LEVELS`).
+- `conductor/config.py` — `conductor.toml`: privacy profiles, each with five difficulty levels (one model each, cheapest first), one or more providers, reviewer, `max_parallel`. A model id is `<provider>/<model>`.
+- `conductor/defaults.py` — the built-in `low`/`medium`/`high` profiles (five levels each) and `DIFFICULTY_LEVELS`.
+- `conductor/privacy.py` — a profile → the `opencode.json` written in each worktree (one entry per provider) and the reviewer request options.
 - `conductor/scheduler.py` — asyncio DAG scheduler bounded by `max_parallel`.
 - `conductor/worker.py` — worktree creation, `opencode run --format json`, diff capture.
 - `conductor/reviewer.py` — direct OpenAI-compatible chat call, returns `{ok, reason}`.
@@ -20,8 +21,8 @@ Simple layering, no tactical DDD: a small tool with little business logic.
 - `conductor/log.py` — `.conductor/runs/<ts>/run.json` and `step-<id>/attempt-N.json`, with cost totals per step, model and run.
 - `conductor/merge.py` — merge approved worktree branches; conflicts are reported, not resolved.
 - `conductor/catalog.py` — provider model lists (`/models`), prices per million tokens, filtering and search.
-- `conductor/setup_state.py` — editable profile/tier model for the setup UI and its validation.
-- `conductor/setup_tui.py` — `curses` screens, keys and rendering of `conductor setup`.
+- `conductor/setup_state.py` — editable profiles, providers, five difficulty levels and validation for the setup UI.
+- `conductor/setup_tui.py` — `curses` screens, keys and rendering of `conductor setup`, starting from `defaults.py` when no file exists.
 - `conductor/credentials.py` — API keys from the environment first, then `auth.json`.
 - `conductor/billing.py` — provider balances (chosen by the profile's `base_url` host), the cross-project spend ledger and its totals.
 - `conductor/cli.py` — `conductor run plan.json --privacy low|medium|high`, `conductor validate plan.json`, `conductor billing [project|projects]`, `conductor setup`.
@@ -44,7 +45,8 @@ Rule: no module imports OpenCode or provider specifics except `worker.py`, `revi
 ## Domain glossary
 - **Brain** — the planning model; writes `plan.json`, reviews failures, resolves conflicts.
 - **Step** — one unit of the plan: id, spec, files, difficulty, depends_on.
-- **Tier** — index into a profile's model list; 0 is the cheapest/weakest.
+- **Difficulty level** — 1 (trivial) to 5 (hard); a step picks one and escalation goes up. Also called a tier in `tiers`.
+- **Profile** — one privacy level: five difficulty levels, the reviewer, and one or more providers.
 - **Privacy level** — `low` (free models, data may be used for training), `medium` (paid, no-training providers), `high` (EU data residency).
 - **Attempt** — one execution of a step on one model; a step has 1..N attempts.
 - **Reviewer** — the model that approves or rejects an attempt's diff.
@@ -66,7 +68,8 @@ Rule: no module imports OpenCode or provider specifics except `worker.py`, `revi
 - `conductor validate` still accepts `examples/plan.json`.
 - `conductor.toml.example` stays in sync with `config.py`.
 - Tests never touch the real ledger or key file: `tests/conftest.py` points `XDG_DATA_HOME` at a temporary directory.
-- `conductor setup` keeps `conductor.toml.example` loadable and writes a file that `Config.load` reads back unchanged.
+- `conductor.toml.example` stays equal to `defaults.default_config()` (tests compare them).
+- `conductor setup` writes a file that `Config.load` reads back unchanged.
 
 ## Decisions
 See [docs/decisions.md](docs/decisions.md).

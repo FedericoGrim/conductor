@@ -48,7 +48,8 @@ def parse_model(entry: dict[str, Any]) -> CatalogModel | None:
     prompt = price_per_million(pricing.get("prompt", pricing.get("input")))
     completion = price_per_million(pricing.get("completion", pricing.get("output")))
     is_language_model = entry.get("type", "language") == "language"
-    if not is_language_model or prompt < 0 or completion < 0:
+    is_batch_only = str(entry.get("id", "")).endswith(":batch")
+    if not is_language_model or is_batch_only or prompt < 0 or completion < 0:
         return None
     return CatalogModel(
         id=str(entry["id"]),

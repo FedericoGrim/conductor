@@ -18,10 +18,18 @@ from conductor.billing import (
 )
 from conductor.config import Profile
 from conductor.credentials import store_key
+from tests.factories import make_profile
 
 
 def profile(name: str, base_url: str, api_key_env: str = "TEST_BILLING_KEY") -> Profile:
-    return Profile(name, "provider", base_url, api_key_env, ("provider/m",), "provider/r")
+    return make_profile(
+        name=name,
+        provider="provider",
+        base_url=base_url,
+        api_key_env=api_key_env,
+        tiers=("provider/m",),
+        reviewer="provider/r",
+    )
 
 
 OPENROUTER = profile("medium", "https://openrouter.ai/api/v1")
@@ -281,3 +289,31 @@ def test_project_runs_lists_every_run_oldest_first(tmp_path: Path) -> None:
 
 def test_project_runs_is_empty_for_a_project_never_run(tmp_path: Path) -> None:
     assert project_runs(tmp_path) == []
+
+
+def test_every_provider_of_a_profile_is_reported() -> None:
+    from conductor.config import Profile, Provider
+
+    profile = Profile(
+        "medium",
+        {
+            "openrouter": Provider(
+                "openrouter", "https://openrouter.ai/api/v1", "TEST_BILLING_KEY"
+            ),
+            "vercel": Provider("vercel", "https://ai-gateway.vercel.sh/v1", "TEST_BILLING_KEY"),
+        },
+        ("openrouter/a", "vercel/b"),
+        "openrouter/a",
+    )
+    api = FakeApi(
+        {
+            "https://openrouter.ai/api/v1/credits": {
+                "data": {"total_credits": 10, "total_usage": 4}
+            },
+            "https://ai-gateway.vercel.sh/v1/credits": {"balance": "2", "total_used": "1"},
+        }
+    )
+    assert [balance.account for balance in balances([profile], api)] == [
+        "openrouter.ai",
+        "ai-gateway.vercel.sh",
+    ]
