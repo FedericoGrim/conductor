@@ -46,7 +46,7 @@ Other providers are listed with "no balance API known". Amounts are never conver
 
 ## Setup
 
-`conductor setup` is a terminal UI for `conductor.toml`, meant to be reopened whenever a provider changes its catalog or prices. Conductor ships three complete profiles (`low`, `medium`, `high`), so the UI opens on something that already works: you change a model, not the structure.
+`conductor setup` is a terminal UI for `conductor.toml`, meant to be reopened whenever a provider changes its catalog or prices. Conductor ships three complete profiles (`low`, `medium`, `high`), so the UI opens on something that already works: you change a model, not the structure. The shipped ladders pick the strongest model per dollar at each difficulty level (SWE-bench Verified and Pro, plus measured cost per task); the reasoning is in decision 008.
 
 - profiles per privacy level: the three built-in ones plus any you add, with one marked as default;
 - per profile: **five difficulty levels**, one model each, and the reviewer (one of those models or `brain`);
@@ -71,10 +71,16 @@ Refresh the model lists from the command line with `python scripts/list-models.p
 
 ## Use from a brain
 
-- **Claude Code**: copy `integrations/claude-code/conductor/` to `~/.claude/skills/conductor/`.
-- **OpenCode**: copy `integrations/opencode/conductor.md` to `~/.config/opencode/command/conductor.md`.
+- **Claude Code**: copy `integrations/claude-code/conductor/` to `~/.claude/skills/conductor/`. The skill declares itself for multi-step changes, so it can load without being named; it stays out of one-line fixes and exploratory work.
+- **OpenCode**: copy `integrations/opencode/conductor.md` to `~/.config/opencode/command/conductor.md`. A command is always explicit: invoke it with `/conductor`.
 
 Both tell the brain to write `plan.json`, call `conductor run`, read `run.json`, and deal with `failed`, `conflict` and `needs_brain_review` steps (set `reviewer = "brain"` in a profile to review diffs yourself instead of paying a reviewer model).
+
+No skill can force the agent to delegate. To make it reliable, add a line to the repository's instructions (for example `CLAUDE.md`):
+
+```markdown
+Multi-step changes (two or more steps, or several files) go through the `conductor` skill: write `plan.json`, run `conductor run`, then review `run.json`. Keep one-line fixes local.
+```
 
 ## Plan format
 
