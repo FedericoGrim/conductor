@@ -85,7 +85,9 @@ def scaleway_balance(account: str, profile: Profile, api_key: str, get: Get) -> 
     values = [item["value"] for item in consumptions.get("consumptions", [])]
     return Balance(
         account,
-        used=sum(value.get("units", 0) + value.get("nanos", 0) / 1e9 for value in values),
+        used=sum(
+            float(value.get("units", 0)) + float(value.get("nanos", 0)) / 1e9 for value in values
+        ),
         currency=values[0]["currency_code"] if values else "EUR",
         note="pay as you go; consumption of the current month",
     )
@@ -126,12 +128,16 @@ def balances(profiles: Iterable[Profile], get: Get | None = None) -> list[Balanc
     seen: set[tuple[str, str]] = set()
     report: list[Balance] = []
     for profile in profiles:
-        host = urllib.parse.urlsplit(profile.base_url).hostname or profile.base_url
+        url = urllib.parse.urlsplit(profile.base_url)
+        host = url.hostname or profile.base_url
         known = balance_reader(host)
         account = (known[0] if known else host, profile.api_key_env)
         if account in seen:
             continue
         seen.add(account)
+        if url.scheme != "https":
+            report.append(Balance(host, note="base_url is not https"))
+            continue
         report.append(account_balance(profile, host, known[1] if known else None, get))
     return report
 
