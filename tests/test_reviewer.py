@@ -4,6 +4,7 @@ from typing import Any
 import pytest
 
 from conductor.config import Profile
+from conductor.credentials import store_key
 from conductor.reviewer import ReviewerError, Verdict, review
 
 PROFILE = Profile(
@@ -80,3 +81,18 @@ def test_verdict_cost_comes_from_the_usage_reported_by_the_provider() -> None:
 def test_verdict_cost_is_unknown_when_the_provider_does_not_report_it() -> None:
     assert Verdict(True, "ok", "{}", usage={"total_tokens": 9}).cost is None
     assert Verdict(True, "ok", "{}", usage={"cost": "n/a"}).cost is None
+
+
+def test_a_stored_key_is_used_when_the_environment_has_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("TEST_REVIEW_KEY", raising=False)
+    store_key("TEST_REVIEW_KEY", "sk-stored")
+    captured: dict[str, Any] = {}
+
+    def fake_post(url: str, headers: dict[str, str], body: dict[str, Any]) -> dict[str, Any]:
+        captured.update(headers=headers)
+        return completion(json.dumps({"ok": True, "reason": "fine"}))
+
+    assert review(PROFILE, spec="s", diff="+x", post=fake_post).ok is True
+    assert captured["headers"]["Authorization"] == "Bearer sk-stored"
