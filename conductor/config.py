@@ -59,6 +59,9 @@ class Config:
             raise ConfigError("no [privacy.<level>] profiles defined")
         return cls(default_privacy=str(data.get("default_privacy", "medium")), profiles=profiles)
 
+    def dump(self) -> str:
+        raise NotImplementedError
+
     def profile(self, name: str | None) -> Profile:
         chosen = name or self.default_privacy
         if chosen not in self.profiles:
