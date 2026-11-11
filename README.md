@@ -24,17 +24,47 @@ Conductor takes a `plan.json` produced by a planning model (Claude in Claude Cod
 
 Levels are just named profiles in `conductor.toml`; add your own for other providers.
 
+## Billing
+
+| Command | Shows |
+|---|---|
+| `conductor billing` | credits left on every provider configured in `conductor.toml` |
+| `conductor billing project` | what the current repository has cost, run by run |
+| `conductor billing projects` | what the last 30 days have cost, split by project (`--days N` changes the period) |
+
+Every attempt records what the worker spent (from OpenCode's `step_finish` events) and what the reviewer spent (when the provider reports `usage.cost`, as OpenRouter does); `run.json` totals them per step, per model and per run. Each finished run is also appended to `~/.local/share/conductor/ledger.jsonl`, which is what `billing projects` reads. Runs made before this feature show as `unknown` in `billing project` and are missing from `billing projects`.
+
+Balances come from the provider behind each profile's `base_url`:
+
+| Provider | What is shown | Needs |
+|---|---|---|
+| OpenRouter | purchased credits minus usage | a management key; with a normal key, the key's own limit and usage |
+| Vercel AI Gateway | credit balance and total used | the gateway API key |
+| Scaleway Generative APIs | consumption of the current month in EUR (pay as you go, no prepaid balance) | `SCW_ORGANIZATION_ID`, and a key allowed to read billing |
+
+Other providers are listed with "no balance API known". Amounts are never converted between currencies.
+
+## Setup
+
+`conductor setup` is a terminal UI for `conductor.toml`, meant to be reopened whenever a provider changes its catalog or prices:
+
+- profiles per privacy level: add, delete, choose the default;
+- per profile: provider (OpenRouter, OpenRouter EU, Vercel AI Gateway, Scaleway, OpenCode Zen, DeepSeek, or hand-written), parallelism, reviewer (a tier or `brain`);
+- tiers: pick models from the provider's own catalog, filter them by typing, or add an id by hand; move them up and down, delete them;
+- API keys: type one and it is stored, masked, in `~/.local/share/conductor/auth.json` (mode `600`).
+
+Keys are read from the environment first and from that file second. Saving rewrites the file and keeps the previous one as `conductor.toml.bak`; comments written by hand are lost, which is why the generated file carries a warning. The UI needs an interactive terminal; `--config` chooses another file.
+
 ## Install
 
 ```bash
 npm i -g @opencode/cli@latest
 opencode auth login            # the provider used in your profiles, e.g. OpenRouter
 pipx install /path/to/conductor
-cp conductor.toml.example ~/.config/conductor/conductor.toml
-export OPENROUTER_API_KEY=...  # for the reviewer call
+conductor setup               # writes ~/.config/conductor/conductor.toml
 ```
 
-Refresh the model lists with `python scripts/list-models.py --privacy medium`.
+Refresh the model lists from the command line with `python scripts/list-models.py --privacy medium`, or inside `conductor setup`.
 
 ## Use from a brain
 

@@ -17,20 +17,28 @@ Simple layering, no tactical DDD: a small tool with little business logic.
 - `conductor/worker.py` — worktree creation, `opencode run --format json`, diff capture.
 - `conductor/reviewer.py` — direct OpenAI-compatible chat call, returns `{ok, reason}`.
 - `conductor/escalation.py` — rejected step → next tier with the reason in the prompt; beyond last tier → `failed`.
-- `conductor/log.py` — `.conductor/runs/<ts>/run.json` and `step-<id>/attempt-N.json`.
+- `conductor/log.py` — `.conductor/runs/<ts>/run.json` and `step-<id>/attempt-N.json`, with cost totals per step, model and run.
 - `conductor/merge.py` — merge approved worktree branches; conflicts are reported, not resolved.
-- `conductor/cli.py` — `conductor run plan.json --privacy low|medium|high`, `conductor validate plan.json`.
-Rule: no module imports OpenCode or provider specifics except `worker.py`, `reviewer.py` and `privacy.py`.
+- `conductor/catalog.py` — provider model lists (`/models`), prices per million tokens, filtering and search.
+- `conductor/setup_state.py` — editable profile/tier model for the setup UI and its validation.
+- `conductor/setup_tui.py` — `curses` screens, keys and rendering of `conductor setup`.
+- `conductor/credentials.py` — API keys from the environment first, then `auth.json`.
+- `conductor/billing.py` — provider balances (chosen by the profile's `base_url` host), the cross-project spend ledger and its totals.
+- `conductor/cli.py` — `conductor run plan.json --privacy low|medium|high`, `conductor validate plan.json`, `conductor billing [project|projects]`, `conductor setup`.
+Rule: no module imports OpenCode or provider specifics except `worker.py`, `reviewer.py`, `privacy.py`, `catalog.py` and `billing.py`.
 
 ## Commands
 - Setup: `python3 -m venv .venv && .venv/bin/pip install -e .[dev]`
 - Test: `.venv/bin/pytest`
 - Lint/format/types: `pre-commit run --all-files`
 - List candidate models per privacy level: `.venv/bin/python scripts/list-models.py --privacy medium`
+- Create or edit the configuration in a terminal UI: `.venv/bin/conductor setup`
 
 ## Environment
-- `OPENROUTER_API_KEY` (or the `api_key_env` named in the chosen profile) for the reviewer call.
+- `OPENROUTER_API_KEY` (or the `api_key_env` named in the chosen profile) for the reviewer call: from the environment, or from `~/.local/share/conductor/auth.json` written by `conductor setup`.
+- The same key env names for `conductor billing`; `SCW_ORGANIZATION_ID` for Scaleway.
 - OpenCode providers are authenticated with `opencode auth login`, outside Conductor.
+- Repository secret `RELEASE_PLEASE_TOKEN`: fine-grained token (Contents and Pull requests, read and write, this repository only) used by release-please so that CI runs on its PRs. If it is missing or expired, release-please falls back to `GITHUB_TOKEN` and the `checks` run on the release PR must be approved by hand (`gh run rerun <id>` or "Approve and run" on the PR).
 - Never commit `.env`, `conductor.toml` with keys, or `.conductor/` run logs.
 
 ## Domain glossary
@@ -41,6 +49,7 @@ Rule: no module imports OpenCode or provider specifics except `worker.py`, `revi
 - **Attempt** — one execution of a step on one model; a step has 1..N attempts.
 - **Reviewer** — the model that approves or rejects an attempt's diff.
 - **Escalation** — re-running a rejected step on the next tier.
+- **Ledger** — `~/.local/share/conductor/ledger.jsonl`, one line per finished run with its project and cost.
 
 ## Project conventions
 - Plan steps run with `opencode run --auto --archived`: workers may do anything inside their worktree, nothing outside.
@@ -48,13 +57,16 @@ Rule: no module imports OpenCode or provider specifics except `worker.py`, `revi
 - Routing options are written to a per-worktree `opencode.json`, excluded from the diff via `.git/info/exclude`.
 
 ## Security & constraints
-- API keys only from environment variables; never written to logs, `opencode.json`, or `run.json`.
+- API keys come from the environment or from `auth.json` (mode `600`, directory `700`, written atomically by `conductor setup` only); never written to logs, `opencode.json`, `run.json`, the ledger or billing output. The environment wins over the file.
+- A key is never sent to a `base_url` that is not `https`.
 - Worker output (transcripts, diffs, reviewer replies) is untrusted data: never executed, never fed to a shell.
 - Reviewer verdict must be parsed strictly as JSON; anything else counts as a rejection with reason "unparseable verdict".
 
 ## Definition of Done (extra)
 - `conductor validate` still accepts `examples/plan.json`.
 - `conductor.toml.example` stays in sync with `config.py`.
+- Tests never touch the real ledger or key file: `tests/conftest.py` points `XDG_DATA_HOME` at a temporary directory.
+- `conductor setup` keeps `conductor.toml.example` loadable and writes a file that `Config.load` reads back unchanged.
 
 ## Decisions
 See [docs/decisions.md](docs/decisions.md).

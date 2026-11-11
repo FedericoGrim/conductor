@@ -62,6 +62,7 @@ async def run_step(
             "stderr": output.stderr,
             "diff": output.diff,
             "review": None,
+            "cost": {"worker": output.cost, "reviewer": None},
         }
         result.attempts.append(entry)
         if output.exit_code != 0:
@@ -84,6 +85,7 @@ async def run_step(
             "raw": verdict.raw,
             "usage": verdict.usage,
         }
+        entry["cost"]["reviewer"] = verdict.cost
         record(step, entry)
         if verdict.ok:
             result.status = APPROVED

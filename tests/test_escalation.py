@@ -18,8 +18,8 @@ PROFILE = Profile(
 STEP = Step("s1", "Parser", "write a parser", ("parser.py",), 2, ())
 
 
-def output(diff: str = "+code", exit_code: int = 0) -> AttemptOutput:
-    return AttemptOutput(exit_code=exit_code, session_id="ses", events=[], diff=diff)
+def output(diff: str = "+code", exit_code: int = 0, cost: float = 0.0) -> AttemptOutput:
+    return AttemptOutput(exit_code=exit_code, session_id="ses", events=[], diff=diff, cost=cost)
 
 
 def run(verdicts: list[Verdict], outputs: list[AttemptOutput] | None = None) -> Any:
@@ -70,6 +70,21 @@ def test_empty_diff_counts_as_rejection() -> None:
     assert result.status == "approved"
     assert len(calls) == 2
     assert recorded[0]["review"]["reason"] == "no changes produced"
+
+
+def test_each_attempt_records_worker_and_reviewer_cost() -> None:
+    verdicts = [
+        Verdict(False, "weak", "{}", usage={"cost": 0.001}),
+        Verdict(True, "ok", "{}", usage={"total_tokens": 5}),
+    ]
+    _, _, recorded = run(verdicts, outputs=[output(cost=0.01), output(cost=0.2)])
+    assert recorded[0]["cost"] == {"worker": 0.01, "reviewer": 0.001}
+    assert recorded[1]["cost"] == {"worker": 0.2, "reviewer": None}
+
+
+def test_a_failed_attempt_still_records_what_the_worker_spent() -> None:
+    _, _, recorded = run([], outputs=[output(exit_code=3, cost=0.07)])
+    assert recorded[0]["cost"] == {"worker": 0.07, "reviewer": None}
 
 
 def test_opencode_failure_does_not_retry() -> None:

@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from conductor import credentials
 from conductor.config import Profile
 from conductor.privacy import api_model_id
 
@@ -34,6 +34,11 @@ class Verdict:
     raw: str
     usage: dict[str, Any] = field(default_factory=dict)
 
+    @property
+    def cost(self) -> float | None:
+        reported = self.usage.get("cost")
+        return float(reported) if isinstance(reported, int | float) else None
+
 
 def http_post(url: str, headers: dict[str, str], body: dict[str, Any]) -> dict[str, Any]:
     request = urllib.request.Request(
@@ -59,9 +64,11 @@ def parse_verdict(content: str) -> tuple[bool, str] | None:
 
 def review(profile: Profile, spec: str, diff: str, post: Post | None = None) -> Verdict:
     post = post or http_post
-    api_key = os.environ.get(profile.api_key_env)
+    api_key = credentials.api_key(profile.api_key_env)
     if not api_key:
-        raise ReviewerError(f"environment variable {profile.api_key_env} is not set")
+        raise ReviewerError(
+            f"no API key: set {profile.api_key_env} or store it with `conductor setup`"
+        )
     body = {
         **profile.request_options,
         "model": api_model_id(profile, profile.reviewer),

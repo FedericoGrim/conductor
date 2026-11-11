@@ -14,6 +14,20 @@ def now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
 
 
+def cost_by_model(attempts: list[dict[str, Any]]) -> dict[str, float]:
+    totals: dict[str, float] = {}
+    for attempt in attempts:
+        cost = attempt.get("cost") or {}
+        review = attempt.get("review") or {}
+        for model, amount in (
+            (attempt.get("model"), cost.get("worker")),
+            (review.get("model"), cost.get("reviewer")),
+        ):
+            if model and amount:
+                totals[model] = totals.get(model, 0.0) + amount
+    return totals
+
+
 @dataclass
 class RunLog:
     directory: Path
@@ -55,14 +69,21 @@ class RunLog:
         return path
 
     def finish(self, results: dict[str, StepResult]) -> None:
+        run_totals: dict[str, float] = {}
         for step_id, result in results.items():
             count = len(result.attempts)
+            step_totals = cost_by_model(result.attempts)
+            for model, amount in step_totals.items():
+                run_totals[model] = run_totals.get(model, 0.0) + amount
             self.run["steps"][step_id] = {
                 "status": result.status,
                 "detail": result.detail,
                 "attempts": count,
                 "models": [a.get("model") for a in result.attempts],
                 "last_attempt": f"step-{step_id}/attempt-{count}.json" if count else None,
+                "cost": sum(step_totals.values()),
             }
+        self.run["cost"] = sum(run_totals.values())
+        self.run["cost_by_model"] = run_totals
         self.run["finished_at"] = now()
         self.write_run()

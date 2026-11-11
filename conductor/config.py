@@ -1,13 +1,35 @@
 from __future__ import annotations
 
+import json
+import re
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+BARE_KEY = re.compile(r"[A-Za-z0-9_-]+")
+DUMP_HEADER = "# Written by `conductor setup`. Comments added by hand are lost on the next save."
+
 
 class ConfigError(ValueError):
     pass
+
+
+def toml_key(key: str) -> str:
+    return key if BARE_KEY.fullmatch(key) else json.dumps(key)
+
+
+def toml_value(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int | float):
+        return repr(value)
+    if isinstance(value, dict):
+        items = ", ".join(f"{toml_key(str(k))} = {toml_value(v)}" for k, v in value.items())
+        return f"{{ {items} }}" if items else "{}"
+    if isinstance(value, list | tuple):
+        return "[" + ", ".join(toml_value(item) for item in value) + "]"
+    return json.dumps(str(value))
 
 
 @dataclass(frozen=True)
@@ -40,6 +62,22 @@ class Profile:
         except KeyError as error:
             raise ConfigError(f"privacy.{name}: missing key {error}") from error
 
+    def dump(self) -> str:
+        lines = [
+            f"[privacy.{toml_key(self.name)}]",
+            f"provider = {toml_value(self.provider)}",
+            f"base_url = {toml_value(self.base_url)}",
+            f"api_key_env = {toml_value(self.api_key_env)}",
+            f"max_parallel = {toml_value(self.max_parallel)}",
+            "tiers = [",
+            *(f"  {toml_value(tier)}," for tier in self.tiers),
+            "]",
+            f"reviewer = {toml_value(self.reviewer)}",
+        ]
+        if self.request_options:
+            lines.append(f"request_options = {toml_value(self.request_options)}")
+        return "\n".join(lines) + "\n"
+
     def model_for_tier(self, tier: int) -> str | None:
         return self.tiers[tier] if 0 <= tier < len(self.tiers) else None
 
@@ -58,6 +96,10 @@ class Config:
         if not profiles:
             raise ConfigError("no [privacy.<level>] profiles defined")
         return cls(default_privacy=str(data.get("default_privacy", "medium")), profiles=profiles)
+
+    def dump(self) -> str:
+        head = f"{DUMP_HEADER}\ndefault_privacy = {toml_value(self.default_privacy)}\n"
+        return "\n".join([head, *(profile.dump() for profile in self.profiles.values())])
 
     def profile(self, name: str | None) -> Profile:
         chosen = name or self.default_privacy
