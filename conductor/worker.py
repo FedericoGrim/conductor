@@ -22,6 +22,7 @@ class AttemptOutput:
     diff: str
     stderr: str = ""
     command: list[str] = field(default_factory=list)
+    cost: float = 0.0
 
 
 def git(cwd: Path, *args: str) -> str:
@@ -81,6 +82,10 @@ def parse_events(stdout: str) -> tuple[list[dict[str, Any]], str | None]:
         events.append(event)
         session_id = session_id or event.get("sessionID")
     return events, session_id
+
+
+def events_cost(events: list[dict[str, Any]]) -> float:
+    raise NotImplementedError
 
 
 def commit_work(worktree: Path, message: str) -> bool:

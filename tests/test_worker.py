@@ -2,12 +2,16 @@ import asyncio
 import json
 import subprocess
 from pathlib import Path
+from typing import Any
+
+import pytest
 
 from conductor.worker import (
     build_command,
     commit_work,
     create_worktree,
     diff_against,
+    events_cost,
     exclude_from_git,
     parse_events,
     run_attempt,
@@ -84,6 +88,25 @@ def test_exclude_from_git_adds_pattern_once(tmp_path: Path) -> None:
     assert (repo / ".git" / "info" / "exclude").read_text().count(".conductor/") == 1
 
 
+def step_finish(cost: object) -> dict[str, Any]:
+    return {"type": "step_finish", "sessionID": "ses_1", "part": {"cost": cost}}
+
+
+def test_events_cost_sums_the_cost_of_every_finished_step() -> None:
+    events = [
+        {"type": "step_start", "sessionID": "ses_1", "part": {}},
+        step_finish(0.0125),
+        {"type": "text", "sessionID": "ses_1", "part": {"text": "done"}},
+        step_finish(0.004),
+    ]
+    assert events_cost(events) == pytest.approx(0.0165)
+
+
+def test_events_cost_ignores_events_without_a_numeric_cost() -> None:
+    events = [step_finish(None), step_finish("free"), {"type": "step_finish"}, step_finish(0.5)]
+    assert events_cost(events) == 0.5
+
+
 def test_run_attempt_uses_injected_runner(tmp_path: Path) -> None:
     repo = init_repo(tmp_path)
     worktree = tmp_path / "wt"
@@ -94,7 +117,8 @@ def test_run_attempt_uses_injected_runner(tmp_path: Path) -> None:
         seen["cmd"] = cmd
         seen["cwd"] = cwd
         (cwd / "made.txt").write_text("by model\n")
-        return 0, json.dumps({"type": "text", "sessionID": "ses_9"}) + "\n", ""
+        events = [{"type": "text", "sessionID": "ses_9"}, step_finish(0.02)]
+        return 0, "".join(json.dumps(event) + "\n" for event in events), ""
 
     output = asyncio.run(
         run_attempt(
@@ -110,4 +134,5 @@ def test_run_attempt_uses_injected_runner(tmp_path: Path) -> None:
     assert seen["cwd"] == worktree
     assert output.exit_code == 0
     assert output.session_id == "ses_9"
+    assert output.cost == 0.02
     assert "+by model" in output.diff
