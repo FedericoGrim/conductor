@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.1](https://github.com/FedericoGrim/conductor/compare/conductor-v0.3.0...conductor-v0.3.1) (2026-11-11)
+
+
+### Documentation
+
+* **integrations:** make the conductor skill declare itself for multi-step work ([61e66d6](https://github.com/FedericoGrim/conductor/commit/61e66d6ba8e2daad87ffea36325caee09c400321))
+* **integrations:** make the conductor skill declare itself for multi-step work ([48efbf2](https://github.com/FedericoGrim/conductor/commit/48efbf2b5fb5643cc22f42b1ee308c9f184c64ab))
+
 ## [0.3.0](https://github.com/FedericoGrim/conductor/compare/conductor-v0.2.0...conductor-v0.3.0) (2026-11-11)
 
 
