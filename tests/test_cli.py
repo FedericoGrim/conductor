@@ -93,6 +93,7 @@ def test_run_executes_reviews_and_merges(
         "attempts": 2,
         "models": ["openrouter/cheap", "openrouter/strong"],
         "last_attempt": "step-a/attempt-2.json",
+        "cost": 0.0,
     }
     assert run["steps"]["b"]["attempts"] == 1
     assert (runs[0] / "step-a" / "attempt-1.json").exists()
