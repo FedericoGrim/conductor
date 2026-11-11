@@ -17,6 +17,7 @@ from conductor.scheduler import APPROVED, CONFLICT, StepResult, run_plan
 from conductor.worker import (
     AttemptOutput,
     create_worktree,
+    exclude_from_git,
     git,
     remove_worktree,
     run_attempt,
@@ -93,6 +94,7 @@ def run(args: argparse.Namespace) -> int:
     config = Config.load(find_config(args.config))
     profile = config.profile(args.privacy)
     plan = Plan.load(args.plan)
+    exclude_from_git(repo, ".conductor/")
     if git(repo, "status", "--porcelain").strip():
         print("error: repository has uncommitted changes; commit or stash them first")
         return 2
