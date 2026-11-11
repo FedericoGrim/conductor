@@ -8,7 +8,7 @@ import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from conductor import billing, reviewer
+from conductor import billing, reviewer, setup_tui
 from conductor.config import Config, ConfigError, Profile
 from conductor.escalation import run_step
 from conductor.log import RunLog
@@ -176,6 +176,14 @@ def show_projects_spend(args: argparse.Namespace) -> int:
     return 0
 
 
+def setup_config(args: argparse.Namespace) -> int:
+    path = args.config or next(
+        (candidate for candidate in DEFAULT_CONFIG_PATHS if candidate.exists()),
+        DEFAULT_CONFIG_PATHS[1],
+    )
+    return setup_tui.run(path)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="conductor")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -196,6 +204,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="extra argument passed to every `opencode run` (repeatable)",
     )
     execute.set_defaults(handler=run)
+
+    setup = commands.add_parser("setup", help="create or edit conductor.toml in a terminal UI")
+    setup.add_argument("--config", type=Path, help="path to conductor.toml")
+    setup.set_defaults(handler=setup_config)
 
     balance = commands.add_parser("billing", help="credits left on every configured provider")
     balance.add_argument("--config", type=Path, help="path to conductor.toml")

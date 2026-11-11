@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import shutil
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -8,6 +9,7 @@ from typing import Any
 
 from conductor import credentials
 from conductor.catalog import CatalogError, CatalogModel, fetch_models, select_models
+from conductor.config import Config
 from conductor.setup_state import KNOWN_PROVIDERS, KnownProvider, SetupError, SetupState
 
 PROFILES = "profiles"
@@ -299,3 +301,64 @@ def render(view: Editor) -> list[str]:
         rows.extend(["", view.message])
     rows.append(HINTS[view.screen])
     return rows
+
+
+def translate(key: int) -> str | None:
+    import curses
+
+    special = {
+        curses.KEY_UP: "up",
+        curses.KEY_DOWN: "down",
+        curses.KEY_BACKSPACE: "backspace",
+        8: "backspace",
+        127: "backspace",
+        10: "enter",
+        13: "enter",
+        27: "esc",
+    }
+    if key in special:
+        return special[key]
+    if 32 <= key < 127:
+        return chr(key)
+    return None
+
+
+def draw(screen: Any, view: Editor) -> None:
+    import curses
+
+    height, width = screen.getmaxyx()
+    screen.erase()
+    for row, line in enumerate(render(view)[: height - 1]):
+        with contextlib.suppress(curses.error):
+            screen.addstr(row, 0, line[: width - 1])
+    screen.refresh()
+
+
+def loop(screen: Any, view: Editor) -> None:
+    import curses
+
+    curses.curs_set(0)
+    screen.keypad(True)
+    while True:
+        draw(screen, view)
+        key = screen.getch()
+        if key == curses.KEY_RESIZE:
+            continue
+        translated = translate(key)
+        if translated is not None and view.handle_key(translated):
+            return
+
+
+def run(path: Path) -> int:
+    import curses
+    import sys
+
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        print("error: `conductor setup` needs an interactive terminal")
+        return 2
+    if path.exists():
+        view = Editor(SetupState.from_config(Config.load(path)), path=str(path))
+    else:
+        view = Editor(SetupState([], "medium"), path=str(path))
+    curses.wrapper(loop, view)
+    return 0 if view.saved else 1
