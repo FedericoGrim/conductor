@@ -15,7 +15,7 @@ def opencode_config(profile: Profile) -> dict[str, Any]:
     for model in profile.tiers:
         provider = profile.provider_for(model)
         models[provider.name][api_model_id(provider.name, model)] = {
-            "options": dict(provider.request_options)
+            "options": profile.options_for(model)
         }
     return {
         "$schema": "https://opencode.ai/config.json",

@@ -56,3 +56,29 @@ def test_opencode_config_carries_every_provider_with_its_own_models() -> None:
         "options": {"baseURL": "https://api.scaleway.ai/v1"},
         "models": {"glm-5.3": {"options": {}}},
     }
+
+
+def test_model_options_are_merged_over_the_provider_options() -> None:
+    from conductor.config import Profile, Provider
+
+    profile = Profile(
+        "medium",
+        {
+            "openrouter": Provider(
+                "openrouter",
+                "https://openrouter.ai/api/v1",
+                "K",
+                {"provider": {"data_collection": "deny"}},
+                {
+                    "deepseek/v4": {"provider": {"order": ["relace"], "allow_fallbacks": True}},
+                },
+            )
+        },
+        ("openrouter/deepseek/v4", "openrouter/other/model"),
+        "openrouter/deepseek/v4",
+    )
+    provider = opencode_config(profile)["provider"]["openrouter"]
+    assert provider["models"]["deepseek/v4"]["options"] == {
+        "provider": {"data_collection": "deny", "order": ["relace"], "allow_fallbacks": True}
+    }
+    assert provider["models"]["other/model"]["options"] == {"provider": {"data_collection": "deny"}}
