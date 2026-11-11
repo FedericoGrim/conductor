@@ -9,6 +9,7 @@ import pytest
 
 from conductor import billing, cli, reviewer
 from conductor.billing import read_ledger, record_run
+from conductor.config import Config
 from conductor.worker import commit_work, git
 
 FAKE_OPENCODE = """#!/bin/sh
@@ -266,3 +267,74 @@ def test_a_ledger_that_cannot_be_written_does_not_fail_the_run(
 
     assert cli.main(["run", str(plan), "--config", str(config), "--repo", str(repo)]) == 0
     assert "warning: could not record the run in the ledger" in capsys.readouterr().err
+
+
+def test_config_path_prints_the_configuration_in_use(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config = tmp_path / "conductor.toml"
+    config.write_text(CONFIG)
+    assert cli.main(["config", "path", "--config", str(config)]) == 0
+    assert capsys.readouterr().out.strip() == str(config)
+
+
+def test_config_export_and_import_round_trip_through_the_cli(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    source = tmp_path / "conductor.toml"
+    source.write_text(CONFIG)
+    exported = tmp_path / "my-settings.toml"
+    assert cli.main(["config", "export", str(exported), "--config", str(source)]) == 0
+    assert "my-settings.toml" in capsys.readouterr().out
+    assert "schema" in exported.read_text()
+
+    target = tmp_path / "other.toml"
+    assert cli.main(["config", "import", str(exported), "--config", str(target)]) == 0
+    out = capsys.readouterr().out
+    assert "medium" in out
+    assert Config.load(target).profile("medium").tiers[0] == "openrouter/cheap"
+
+    assert cli.main(["config", "import", str(exported), "--config", str(target)]) == 0
+    assert "backup" in capsys.readouterr().out
+
+
+def test_config_import_reports_missing_keys(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.delenv("TEST_CLI_KEY", raising=False)
+    source = tmp_path / "conductor.toml"
+    source.write_text(CONFIG)
+    exported = tmp_path / "settings.toml"
+    assert cli.main(["config", "export", str(exported), "--config", str(source)]) == 0
+    capsys.readouterr()
+    assert (
+        cli.main(["config", "import", str(exported), "--config", str(tmp_path / "out.toml")]) == 0
+    )
+    assert "TEST_CLI_KEY" in capsys.readouterr().out
+
+
+def test_config_export_requires_an_existing_configuration(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert (
+        cli.main(
+            [
+                "config",
+                "export",
+                str(tmp_path / "s.toml"),
+                "--config",
+                str(tmp_path / "missing.toml"),
+            ]
+        )
+        == 2
+    )
+    assert "no conductor.toml" in capsys.readouterr().err
+
+
+def test_config_import_refuses_a_broken_file(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    broken = tmp_path / "broken.toml"
+    broken.write_text("not = [valid")
+    assert cli.main(["config", "import", str(broken), "--config", str(tmp_path / "out.toml")]) == 2
+    assert "cannot read" in capsys.readouterr().err
