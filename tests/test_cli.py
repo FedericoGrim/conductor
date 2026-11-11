@@ -295,7 +295,7 @@ def test_config_export_and_import_round_trip_through_the_cli(
     assert Config.load(target).profile("medium").tiers[0] == "openrouter/cheap"
 
     assert cli.main(["config", "import", str(exported), "--config", str(target)]) == 0
-    assert "backup" in capsys.readouterr().out
+    assert "previous file kept" in capsys.readouterr().out
 
 
 def test_config_import_reports_missing_keys(
