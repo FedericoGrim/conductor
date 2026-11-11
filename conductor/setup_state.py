@@ -44,6 +44,7 @@ class ProviderDraft:
     base_url: str
     api_key_env: str
     request_options: dict[str, Any] = field(default_factory=dict)
+    model_options: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     @classmethod
     def from_provider(cls, provider: Provider) -> ProviderDraft:
@@ -52,10 +53,17 @@ class ProviderDraft:
             provider.base_url,
             provider.api_key_env,
             dict(provider.request_options),
+            {model: dict(options) for model, options in provider.model_options.items()},
         )
 
     def to_provider(self) -> Provider:
-        return Provider(self.name, self.base_url, self.api_key_env, dict(self.request_options))
+        return Provider(
+            self.name,
+            self.base_url,
+            self.api_key_env,
+            dict(self.request_options),
+            {model: dict(options) for model, options in self.model_options.items()},
+        )
 
 
 @dataclass

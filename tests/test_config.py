@@ -1,8 +1,9 @@
+import tomllib
 from pathlib import Path
 
 import pytest
 
-from conductor.config import Config, ConfigError, Profile, Provider
+from conductor.config import Config, ConfigError, Profile, Provider, merge_options
 
 TOML = """
 default_privacy = "medium"
@@ -162,3 +163,54 @@ def test_the_example_configuration_is_the_built_in_default() -> None:
 
     example = Path(__file__).parent.parent / "conductor.toml.example"
     assert Config.load(example) == default_config()
+
+
+MULTI_PROVIDER = """
+default_privacy = "medium"
+[privacy.medium]
+tiers = ["openrouter/a", "openrouter/b"]
+reviewer = "openrouter/a"
+
+[privacy.medium.providers.openrouter]
+base_url = "https://openrouter.ai/api/v1"
+api_key_env = "OPENROUTER_API_KEY"
+request_options = { provider = { data_collection = "deny" } }
+
+[privacy.medium.providers.openrouter.models."b"]
+request_options = { provider = { order = ["relace"], allow_fallbacks = true } }
+"""
+
+
+def test_reads_per_model_request_options() -> None:
+    provider = Profile.from_dict(
+        "medium", tomllib.loads(MULTI_PROVIDER)["privacy"]["medium"]
+    ).providers["openrouter"]
+    assert provider.model_options == {
+        "b": {"provider": {"order": ["relace"], "allow_fallbacks": True}}
+    }
+
+
+def test_dump_round_trips_per_model_options(tmp_path: Path) -> None:
+    profile = Profile.from_dict("medium", tomllib.loads(MULTI_PROVIDER)["privacy"]["medium"])
+    config = Config("medium", {"medium": profile})
+    written = tmp_path / "conductor.toml"
+    written.write_text(config.dump())
+    assert Config.load(written) == config
+    assert ".providers.openrouter.models.b]" in written.read_text()
+
+
+def test_rejects_options_for_a_model_the_profile_does_not_use() -> None:
+    data = tomllib.loads(MULTI_PROVIDER)["privacy"]["medium"]
+    data["providers"]["openrouter"]["models"] = {"ghost": {"request_options": {"sort": "price"}}}
+    with pytest.raises(ConfigError, match="unknown model"):
+        Profile.from_dict("medium", data)
+
+
+def test_merge_options_is_recursive_and_the_override_wins() -> None:
+    assert merge_options(
+        {"provider": {"data_collection": "deny", "allow_fallbacks": True}, "temperature": 0},
+        {"provider": {"order": ["relace"]}},
+    ) == {
+        "provider": {"data_collection": "deny", "allow_fallbacks": True, "order": ["relace"]},
+        "temperature": 0,
+    }
