@@ -97,6 +97,7 @@ def test_run_executes_reviews_and_merges(
     assert run["steps"]["b"]["attempts"] == 1
     assert (runs[0] / "step-a" / "attempt-1.json").exists()
     assert "conductor: merge" in git(repo, "log", "--oneline")
+    assert git(repo, "status", "--porcelain") == ""
     assert git(repo, "worktree", "list").count("\n") == 1
 
 

@@ -8,8 +8,10 @@ from conductor.worker import (
     commit_work,
     create_worktree,
     diff_against,
+    exclude_from_git,
     parse_events,
     run_attempt,
+    subprocess_runner,
     write_opencode_config,
 )
 
@@ -67,6 +69,19 @@ def test_worktree_config_commit_and_diff(tmp_path: Path) -> None:
     assert "+x = 1" in diff
     assert "opencode.json" not in diff
     assert "opencode.json" in (repo / ".git" / "info" / "exclude").read_text()
+
+
+def test_subprocess_runner_sets_pwd_to_the_working_directory(tmp_path: Path) -> None:
+    code, stdout, _ = asyncio.run(subprocess_runner(["sh", "-c", "echo $PWD"], tmp_path))
+    assert code == 0
+    assert stdout.strip() == str(tmp_path)
+
+
+def test_exclude_from_git_adds_pattern_once(tmp_path: Path) -> None:
+    repo = init_repo(tmp_path)
+    exclude_from_git(repo, ".conductor/")
+    exclude_from_git(repo, ".conductor/")
+    assert (repo / ".git" / "info" / "exclude").read_text().count(".conductor/") == 1
 
 
 def test_run_attempt_uses_injected_runner(tmp_path: Path) -> None:
