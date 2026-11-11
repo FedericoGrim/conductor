@@ -99,7 +99,10 @@ class Profile:
 
     @classmethod
     def from_dict(cls, name: str, data: dict[str, Any]) -> Profile:
-        providers = cls.parse_providers(name, data)
+        try:
+            providers = cls.parse_providers(name, data)
+        except KeyError as error:
+            raise ConfigError(f"privacy.{name}: missing key {error}") from error
         tiers = data.get("tiers")
         if not isinstance(tiers, list) or not tiers:
             raise ConfigError(f"privacy.{name}: tiers must be a non-empty list")
@@ -190,14 +193,17 @@ class Config:
     profiles: dict[str, Profile]
 
     @classmethod
-    def load(cls, path: Path) -> Config:
-        data = tomllib.loads(path.read_text())
+    def from_data(cls, data: dict[str, Any]) -> Config:
         profiles = {
             name: Profile.from_dict(name, body) for name, body in data.get("privacy", {}).items()
         }
         if not profiles:
             raise ConfigError("no [privacy.<level>] profiles defined")
         return cls(default_privacy=str(data.get("default_privacy", "medium")), profiles=profiles)
+
+    @classmethod
+    def load(cls, path: Path) -> Config:
+        return cls.from_data(tomllib.loads(path.read_text()))
 
     def dump(self) -> str:
         head = f"{DUMP_HEADER}\ndefault_privacy = {toml_value(self.default_privacy)}\n"
