@@ -18,6 +18,7 @@ NAME = "name"
 EDITOR = "editor"
 CATALOG = "catalog"
 KEY = "key"
+MODEL = "model"
 
 REVIEWERS = "brain"
 
@@ -25,17 +26,20 @@ HINTS = {
     PROFILES: "a add  d delete  p default  enter edit  s save  q quit",
     PROVIDER: "enter choose  esc back",
     NAME: "enter confirm  esc back",
-    EDITOR: "a add tier  d remove  J/K move  r reviewer  m/M parallel  k key  esc back",
+    EDITOR: "a add tier  t type id  d remove  J/K move  r reviewer  m/M parallel  k key  esc back",
     CATALOG: "type to search  enter add tier  esc back",
     KEY: "enter save key  esc cancel",
+    MODEL: "enter confirm  esc back",
 }
 
 TITLES = {
     PROFILES: "Conductor setup — privacy profiles",
     PROVIDER: "Conductor setup — choose a provider",
     NAME: "Conductor setup — name of the new profile",
+    EDITOR: "Conductor setup — edit a profile",
     CATALOG: "Conductor setup — models of this provider",
     KEY: "Conductor setup — API key",
+    MODEL: "Conductor setup — model id, typed by hand",
 }
 
 Store = Callable[[str, str], None]
@@ -147,6 +151,9 @@ class Editor:
         elif key == "k":
             self.screen = KEY
             self.text = ""
+        elif key == "t":
+            self.screen = MODEL
+            self.text = ""
         return False
 
     def cycle_reviewer(self, profile: Any) -> None:
@@ -194,8 +201,10 @@ class Editor:
             self.message = str(error)
         self.model_cursor = 0
 
-    def add_selected_model(self) -> None:
-        model = self.models[self.model_cursor].id
+    def add_model(self, model: str) -> None:
+        provider = self.state.draft().provider
+        if provider and not model.startswith(f"{provider}/"):
+            model = f"{provider}/{model}"
         try:
             profile = self.state.add_tier(model)
         except SetupError as error:
@@ -205,6 +214,18 @@ class Editor:
         self.tier_cursor = len(profile.tiers) - 1
         self.tier_offset = max(len(profile.tiers) - 1, 0)
         self.message = f"added {model}"
+
+    def add_selected_model(self) -> None:
+        self.add_model(self.models[self.model_cursor].id)
+
+    def model_key(self, key: str) -> bool:
+        if key == "esc":
+            self.screen = EDITOR
+        elif key == "enter":
+            self.add_model(self.text.strip())
+        else:
+            self.typed(key)
+        return False
 
     def key_key(self, key: str) -> bool:
         if key == "esc":
@@ -292,9 +313,11 @@ def render(view: Editor) -> list[str]:
         for index, model in enumerate(view.models):
             marker = ">" if index == view.model_cursor else " "
             rows.append(
-                f"{marker} {model.id:52} {model.prompt_price:7.3f} {model.completion_price:7.3f}"
+                f"{marker} {model.id:52} {model.prompt_price:8.4f} {model.completion_price:8.4f}"
                 f" {model.context:8}"
             )
+    elif view.screen == MODEL:
+        rows.append(f"model id: {view.text}")
     elif view.screen == KEY:
         rows.append(f"{view.state.draft().api_key_env}: {'*' * len(view.text)}")
     if view.message:

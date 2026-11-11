@@ -223,3 +223,30 @@ def test_quit_without_saving_leaves_the_file_alone(tmp_path: Path) -> None:
     view.handle_key("esc")
     assert view.handle_key("q") is True
     assert (tmp_path / "conductor.toml").read_text() == CONFIG
+
+
+def test_a_model_without_the_provider_prefix_gets_it_when_added(tmp_path: Path) -> None:
+    bare = [CatalogModel("deepseek/flash", 0.3, 1.2, 128000, True)]
+    view = editor(tmp_path, lambda url: bare)
+    view.handle_key("enter")
+    view.handle_key("a")
+    view.handle_key("enter")
+    assert view.state.draft().tiers == ["openrouter/deepseek/flash"]
+    view.handle_key("a")
+    view.handle_key("enter")
+    assert view.state.draft().tiers == ["openrouter/deepseek/flash"]
+    assert "already a tier" in view.message
+
+
+def test_t_types_a_tier_id_by_hand_for_providers_without_a_catalog(tmp_path: Path) -> None:
+    view = editor(tmp_path, lambda url: [])
+    view.handle_key("enter")
+    view.handle_key("t")
+    type_text(view, "scaleway/glm-5.3")
+    view.handle_key("enter")
+    assert view.screen == EDITOR
+    assert view.state.draft().tiers == [FLASH.id, "openrouter/scaleway/glm-5.3"]
+    view.handle_key("t")
+    type_text(view, "scaleway/glm-5.3")
+    view.handle_key("enter")
+    assert "already a tier" in view.message
