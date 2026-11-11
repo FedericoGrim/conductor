@@ -8,7 +8,7 @@ import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from conductor import billing, reviewer, setup_tui
+from conductor import billing, reviewer, settings, setup_tui
 from conductor.config import Config, ConfigError, Profile
 from conductor.escalation import run_step
 from conductor.log import RunLog
@@ -178,12 +178,50 @@ def show_projects_spend(args: argparse.Namespace) -> int:
     return 0
 
 
-def setup_config(args: argparse.Namespace) -> int:
-    path = args.config or next(
+def config_path(explicit: Path | None) -> Path:
+    return explicit or next(
         (candidate for candidate in DEFAULT_CONFIG_PATHS if candidate.exists()),
         DEFAULT_CONFIG_PATHS[1],
     )
-    return setup_tui.run(path)
+
+
+def setup_config(args: argparse.Namespace) -> int:
+    return setup_tui.run(config_path(args.config))
+
+
+def show_config_path(args: argparse.Namespace) -> int:
+    print(config_path(args.config))
+    return 0
+
+
+def export_config(args: argparse.Namespace) -> int:
+    source = find_config(args.config)
+    target = args.file or Path("conductor-settings.toml")
+    settings.export_settings(Config.load(source), target, version())
+    print(f"exported {source} to {target}")
+    return 0
+
+
+def version() -> str:
+    from importlib.metadata import PackageNotFoundError
+    from importlib.metadata import version as package_version
+
+    try:
+        return package_version("conductor")
+    except PackageNotFoundError:
+        return "unknown"
+
+
+def import_config(args: argparse.Namespace) -> int:
+    result = settings.import_settings(args.file, config_path(args.config))
+    print(f"imported profiles {', '.join(result.profiles)} into {result.path}")
+    if result.backup:
+        print(f"previous file kept as {result.backup}")
+    if result.missing_keys:
+        print("missing API keys (export the variable or run `conductor setup`):")
+        for name in result.missing_keys:
+            print(f"  {name}")
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -211,6 +249,23 @@ def build_parser() -> argparse.ArgumentParser:
     setup.add_argument("--config", type=Path, help="path to conductor.toml")
     setup.set_defaults(handler=setup_config)
 
+    config = commands.add_parser("config", help="inspect, export and import the settings")
+    actions = config.add_subparsers(dest="action", required=True)
+
+    path = actions.add_parser("path", help="print the configuration file in use")
+    path.add_argument("--config", type=Path, help="path to conductor.toml")
+    path.set_defaults(handler=show_config_path)
+
+    export = actions.add_parser("export", help="write the settings to a file")
+    export.add_argument("file", nargs="?", type=Path, help="target file")
+    export.add_argument("--config", type=Path, help="path to conductor.toml")
+    export.set_defaults(handler=export_config)
+
+    load = actions.add_parser("import", help="read the settings from a file")
+    load.add_argument("file", type=Path, help="file written by `config export`")
+    load.add_argument("--config", type=Path, help="path to conductor.toml")
+    load.set_defaults(handler=import_config)
+
     balance = commands.add_parser("billing", help="credits left on every configured provider")
     balance.add_argument("--config", type=Path, help="path to conductor.toml")
     balance.set_defaults(handler=show_balances)
@@ -231,7 +286,13 @@ def main(argv: list[str] | None = None) -> int:
     try:
         code: int = args.handler(args)
         return code
-    except (PlanError, ConfigError, reviewer.ReviewerError, NotARepositoryError) as error:
+    except (
+        PlanError,
+        ConfigError,
+        reviewer.ReviewerError,
+        NotARepositoryError,
+        settings.SettingsError,
+    ) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
 
