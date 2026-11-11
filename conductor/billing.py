@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from conductor import credentials
-from conductor.config import Profile
+from conductor.config import Profile, Provider
 
 Get = Callable[[str, dict[str, str]], dict[str, Any]]
 
@@ -35,7 +35,7 @@ class Balance:
     note: str = ""
 
 
-BalanceReader = Callable[[str, Profile, str, Get], Balance]
+BalanceReader = Callable[[str, Provider, str, Get], Balance]
 
 
 def http_get(url: str, headers: dict[str, str]) -> dict[str, Any]:
@@ -48,8 +48,8 @@ def http_get(url: str, headers: dict[str, str]) -> dict[str, Any]:
         raise BillingError(error.code) from error
 
 
-def openrouter_balance(account: str, profile: Profile, api_key: str, get: Get) -> Balance:
-    base_url = profile.base_url.rstrip("/")
+def openrouter_balance(account: str, provider: Provider, api_key: str, get: Get) -> Balance:
+    base_url = provider.base_url.rstrip("/")
     headers = {"Authorization": f"Bearer {api_key}"}
     try:
         credits = get(f"{base_url}/credits", headers)["data"]
@@ -71,13 +71,13 @@ def openrouter_balance(account: str, profile: Profile, api_key: str, get: Get) -
     )
 
 
-def vercel_balance(account: str, profile: Profile, api_key: str, get: Get) -> Balance:
-    url = f"{profile.base_url.rstrip('/')}/credits"
+def vercel_balance(account: str, provider: Provider, api_key: str, get: Get) -> Balance:
+    url = f"{provider.base_url.rstrip('/')}/credits"
     credits = get(url, {"Authorization": f"Bearer {api_key}"})
     return Balance(account, remaining=float(credits["balance"]), used=float(credits["total_used"]))
 
 
-def scaleway_balance(account: str, profile: Profile, api_key: str, get: Get) -> Balance:
+def scaleway_balance(account: str, provider: Provider, api_key: str, get: Get) -> Balance:
     organization = os.environ.get(SCALEWAY_ORGANIZATION_ENV)
     if not organization:
         return Balance(account, note=f"environment variable {SCALEWAY_ORGANIZATION_ENV} is not set")
@@ -108,14 +108,16 @@ def balance_reader(host: str) -> tuple[str, BalanceReader] | None:
     return None
 
 
-def account_balance(profile: Profile, host: str, reader: BalanceReader | None, get: Get) -> Balance:
+def account_balance(
+    provider: Provider, host: str, reader: BalanceReader | None, get: Get
+) -> Balance:
     if reader is None:
         return Balance(host, note="no balance API known for this provider")
-    api_key = credentials.api_key(profile.api_key_env)
+    api_key = credentials.api_key(provider.api_key_env)
     if not api_key:
-        return Balance(host, note=f"no API key: {profile.api_key_env} is not set or stored")
+        return Balance(host, note=f"no API key: {provider.api_key_env} is not set or stored")
     try:
-        return reader(host, profile, api_key, get)
+        return reader(host, provider, api_key, get)
     except BillingError as error:
         return Balance(host, note=str(error))
     except OSError:
@@ -129,17 +131,18 @@ def balances(profiles: Iterable[Profile], get: Get | None = None) -> list[Balanc
     seen: set[tuple[str, str]] = set()
     report: list[Balance] = []
     for profile in profiles:
-        url = urllib.parse.urlsplit(profile.base_url)
-        host = url.hostname or profile.base_url
-        known = balance_reader(host)
-        account = (known[0] if known else host, profile.api_key_env)
-        if account in seen:
-            continue
-        seen.add(account)
-        if url.scheme != "https":
-            report.append(Balance(host, note="base_url is not https"))
-            continue
-        report.append(account_balance(profile, host, known[1] if known else None, get))
+        for provider in profile.providers.values():
+            url = urllib.parse.urlsplit(provider.base_url)
+            host = url.hostname or provider.base_url
+            known = balance_reader(host)
+            account = (known[0] if known else host, provider.api_key_env)
+            if account in seen:
+                continue
+            seen.add(account)
+            if url.scheme != "https":
+                report.append(Balance(host, note="base_url is not https"))
+                continue
+            report.append(account_balance(provider, host, known[1] if known else None, get))
     return report
 
 

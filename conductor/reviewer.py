@@ -64,14 +64,15 @@ def parse_verdict(content: str) -> tuple[bool, str] | None:
 
 def review(profile: Profile, spec: str, diff: str, post: Post | None = None) -> Verdict:
     post = post or http_post
-    api_key = credentials.api_key(profile.api_key_env)
+    provider = profile.provider_for(profile.reviewer)
+    api_key = credentials.api_key(provider.api_key_env)
     if not api_key:
         raise ReviewerError(
-            f"no API key: set {profile.api_key_env} or store it with `conductor setup`"
+            f"no API key: set {provider.api_key_env} or store it with `conductor setup`"
         )
     body = {
-        **profile.request_options,
-        "model": api_model_id(profile, profile.reviewer),
+        **provider.request_options,
+        "model": api_model_id(provider.name, profile.reviewer),
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
             {
@@ -81,7 +82,7 @@ def review(profile: Profile, spec: str, diff: str, post: Post | None = None) -> 
         ],
     }
     response = post(
-        f"{profile.base_url.rstrip('/')}/chat/completions",
+        f"{provider.base_url.rstrip('/')}/chat/completions",
         {"Authorization": f"Bearer {api_key}"},
         body,
     )

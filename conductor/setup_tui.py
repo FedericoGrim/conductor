@@ -10,36 +10,57 @@ from typing import Any
 from conductor import credentials
 from conductor.catalog import CatalogError, CatalogModel, fetch_models, select_models
 from conductor.config import Config
-from conductor.setup_state import KNOWN_PROVIDERS, KnownProvider, SetupError, SetupState
+from conductor.defaults import DIFFICULTY_LEVELS
+from conductor.setup_state import (
+    KNOWN_PROVIDERS,
+    KnownProvider,
+    SetupError,
+    SetupState,
+)
 
 PROFILES = "profiles"
 PROVIDER = "provider"
 NAME = "name"
 EDITOR = "editor"
+PROVIDERS = "providers"
+PROVIDERADD = "provideradd"
+BASED = "based"
+KEYENV = "keyenv"
 CATALOG = "catalog"
-KEY = "key"
 MODEL = "model"
+KEYPROVIDER = "keyprovider"
+KEY = "key"
 
-REVIEWERS = "brain"
+BRAIN = "brain"
 
 HINTS = {
     PROFILES: "a add  d delete  p default  enter edit  s save  q quit",
     PROVIDER: "enter choose  esc back",
     NAME: "enter confirm  esc back",
-    EDITOR: "a add tier  t type id  d remove  J/K move  r reviewer  m/M parallel  k key  esc back",
-    CATALOG: "type to search  enter add tier  esc back",
-    KEY: "enter save key  esc cancel",
+    EDITOR: "a model  t type  d clear  P providers  k key  r reviewer  m/M parallel  esc back",
+    PROVIDERS: "a add  d delete  b base_url  e key variable  esc back",
+    PROVIDERADD: "enter add  esc back",
+    BASED: "enter confirm  esc back",
+    KEYENV: "enter confirm  esc back",
+    CATALOG: "type to search  enter set  esc back",
     MODEL: "enter confirm  esc back",
+    KEYPROVIDER: "enter choose  esc back",
+    KEY: "enter store key  esc cancel",
 }
 
 TITLES = {
     PROFILES: "Conductor setup — privacy profiles",
-    PROVIDER: "Conductor setup — choose a provider",
+    PROVIDER: "Conductor setup — provider of the new profile",
     NAME: "Conductor setup — name of the new profile",
-    EDITOR: "Conductor setup — edit a profile",
-    CATALOG: "Conductor setup — models of this provider",
-    KEY: "Conductor setup — API key",
+    EDITOR: "Conductor setup — difficulty levels",
+    PROVIDERS: "Conductor setup — providers of this profile",
+    PROVIDERADD: "Conductor setup — add a provider",
+    BASED: "Conductor setup — base_url",
+    KEYENV: "Conductor setup — variable holding the key",
+    CATALOG: "Conductor setup — models of this profile",
     MODEL: "Conductor setup — model id, typed by hand",
+    KEYPROVIDER: "Conductor setup — provider of the key",
+    KEY: "Conductor setup — API key",
 }
 
 Store = Callable[[str, str], None]
@@ -49,16 +70,19 @@ Catalog = Callable[[str], list[CatalogModel]]
 @dataclass
 class Editor:
     state: SetupState
+    path: str
     catalog: Catalog = fetch_models
     store: Store = credentials.store_key
     screen: str = PROFILES
+    slot_cursor: int = 0
+    profile_cursor: int = 0
     provider_cursor: int = 0
-    tier_cursor: int = 0
-    tier_offset: int = 0
     model_cursor: int = 0
     text: str = ""
     message: str = ""
     models: list[CatalogModel] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
+    target: str = ""
     saved: bool = False
 
     def handle_key(self, key: str) -> bool:
@@ -73,26 +97,31 @@ class Editor:
             self.state.select(self.state.selected - 1)
         elif key == "enter" and self.state.selected_profile() is not None:
             self.screen = EDITOR
-            self.tier_cursor = 0
-            self.tier_offset = 0
+            self.slot_cursor = 0
         elif key == "a":
             self.screen = PROVIDER
-            self.provider_cursor = 0
+            self.profile_cursor = 0
         elif key == "d" and self.state.selected_profile() is not None:
-            self.state.remove_profile(self.state.draft().name)
+            self.apply(lambda: self.state.remove_profile(self.state.draft().name))
         elif key == "p" and self.state.selected_profile() is not None:
-            self.state.set_default_privacy(self.state.draft().name)
+            self.apply(lambda: self.state.set_default_privacy(self.state.draft().name))
         elif key == "s":
             return self.save()
         elif key == "q":
             return True
         return False
 
+    def apply(self, action: Callable[[], Any]) -> None:
+        try:
+            action()
+        except SetupError as error:
+            self.message = str(error)
+
     def provider_key(self, key: str) -> bool:
         if key in ("down", "j"):
-            self.provider_cursor = min(self.provider_cursor + 1, len(KNOWN_PROVIDERS) - 1)
+            self.profile_cursor = min(self.profile_cursor + 1, len(KNOWN_PROVIDERS) - 1)
         elif key in ("up", "k"):
-            self.provider_cursor = max(self.provider_cursor - 1, 0)
+            self.profile_cursor = max(self.profile_cursor - 1, 0)
         elif key == "enter":
             self.screen = NAME
             self.text = ""
@@ -106,6 +135,16 @@ class Editor:
         elif len(key) == 1 and key.isprintable():
             self.text += key
 
+    def create_profile(self) -> None:
+        known: KnownProvider = KNOWN_PROVIDERS[self.profile_cursor]
+        try:
+            self.state.add_profile(self.text, known)
+        except SetupError as error:
+            self.message = str(error)
+            return
+        self.screen = EDITOR
+        self.slot_cursor = 0
+
     def name_key(self, key: str) -> bool:
         if key == "esc":
             self.screen = PROVIDER
@@ -115,49 +154,40 @@ class Editor:
             self.typed(key)
         return False
 
-    def create_profile(self) -> None:
-        known: KnownProvider = KNOWN_PROVIDERS[self.provider_cursor]
-        try:
-            self.state.add_profile(self.text, known)
-        except SetupError as error:
-            self.message = str(error)
-            return
-        self.screen = EDITOR
-        self.tier_cursor = 0
-        self.tier_offset = 0
-
     def editor_key(self, key: str) -> bool:
         profile = self.state.draft()
         if key == "esc":
             self.screen = PROFILES
+        elif key in ("down", "J"):
+            self.slot_cursor = min(self.slot_cursor + 1, DIFFICULTY_LEVELS - 1)
+        elif key in ("up", "K"):
+            self.slot_cursor = max(self.slot_cursor - 1, 0)
         elif key == "a":
             self.open_catalog()
-        elif key == "d" and profile.tiers:
-            self.state.remove_tier(self.tier_cursor)
-            self.tier_cursor = min(self.tier_cursor, len(profile.tiers) - 1)
-            self.tier_offset = min(self.tier_offset, max(len(profile.tiers) - 1, 0))
-        elif key in ("J", "down") and profile.tiers:
-            self.state.move_tier(self.tier_cursor, 1)
-            self.tier_cursor = min(self.tier_cursor + 1, len(profile.tiers) - 1)
-        elif key in ("K", "up") and profile.tiers:
-            self.state.move_tier(self.tier_cursor, -1)
-            self.tier_cursor = max(self.tier_cursor - 1, 0)
+        elif key == "t":
+            self.screen = MODEL
+            self.text = ""
+        elif key == "d":
+            self.apply(lambda: self.state.clear_tier(self.level))
+        elif key == "P":
+            self.screen = PROVIDERS
+            self.provider_cursor = 0
+        elif key == "k":
+            self.ask_for_key()
         elif key == "r":
             self.cycle_reviewer(profile)
         elif key == "m":
             profile.max_parallel += 1
         elif key == "M":
             profile.max_parallel = max(1, profile.max_parallel - 1)
-        elif key == "k":
-            self.screen = KEY
-            self.text = ""
-        elif key == "t":
-            self.screen = MODEL
-            self.text = ""
         return False
 
+    @property
+    def level(self) -> int:
+        return self.slot_cursor + 1
+
     def cycle_reviewer(self, profile: Any) -> None:
-        choices = [*profile.tiers, REVIEWERS]
+        choices = [*profile.filled(), BRAIN]
         try:
             index = choices.index(profile.reviewer)
         except ValueError:
@@ -165,15 +195,40 @@ class Editor:
         profile.reviewer = choices[(index + 1) % len(choices)]
 
     def open_catalog(self) -> None:
-        profile = self.state.draft()
         self.screen = CATALOG
         self.query = ""
         self.model_cursor = 0
+        self.load_catalog()
+
+    def load_catalog(self) -> None:
+        profile = self.state.draft()
         self.models = []
-        try:
-            self.models = select_models(self.catalog(profile.base_url))
-        except CatalogError as error:
-            self.message = str(error)
+        self.notes = []
+        broken: list[str] = []
+        for name, provider in profile.providers.items():
+            try:
+                fetched = self.catalog(provider.base_url)
+            except CatalogError as error:
+                broken.append(f"{name}: {error}")
+                continue
+            self.models.extend(
+                CatalogModel(
+                    f"{name}/{model.id}",
+                    model.prompt_price,
+                    model.completion_price,
+                    model.context,
+                    model.supports_tools,
+                )
+                for model in fetched
+            )
+        if broken:
+            self.message = "; ".join(broken)
+        self.filter_models()
+
+    def filter_models(self) -> None:
+        self.models = select_models(self.models, search=self.query)
+        self.model_cursor = 0
+        self.notes = [model.id for model in self.models[3:4]]
 
     def catalog_key(self, key: str) -> bool:
         if key == "esc":
@@ -183,7 +238,9 @@ class Editor:
         elif key in ("up", "k"):
             self.model_cursor = max(self.model_cursor - 1, 0)
         elif key == "enter" and self.models:
-            self.add_selected_model()
+            self.apply(lambda: self.state.set_tier(self.level, self.models[self.model_cursor].id))
+            if not self.message:
+                self.screen = EDITOR
         elif key == "backspace":
             self.query = self.query[:-1]
             self.filter_models()
@@ -192,49 +249,111 @@ class Editor:
             self.filter_models()
         return False
 
-    def filter_models(self) -> None:
-        profile = self.state.draft()
-        try:
-            self.models = select_models(self.catalog(profile.base_url), search=self.query)
-        except CatalogError as error:
-            self.models = []
-            self.message = str(error)
-        self.model_cursor = 0
-
-    def add_model(self, model: str) -> None:
-        provider = self.state.draft().provider
-        if provider and not model.startswith(f"{provider}/"):
-            model = f"{provider}/{model}"
-        try:
-            profile = self.state.add_tier(model)
-        except SetupError as error:
-            self.message = str(error)
-            return
-        self.screen = EDITOR
-        self.tier_cursor = len(profile.tiers) - 1
-        self.tier_offset = max(len(profile.tiers) - 1, 0)
-        self.message = f"added {model}"
-
-    def add_selected_model(self) -> None:
-        self.add_model(self.models[self.model_cursor].id)
-
     def model_key(self, key: str) -> bool:
         if key == "esc":
             self.screen = EDITOR
         elif key == "enter":
-            self.add_model(self.text.strip())
+            self.apply(lambda: self.state.set_tier(self.level, self.text.strip()))
+            if not self.message:
+                self.screen = EDITOR
         else:
             self.typed(key)
+        return False
+
+    def providers_key(self, key: str) -> bool:
+        profile = self.state.draft()
+        names = list(profile.providers)
+        if key == "esc":
+            self.screen = EDITOR
+        elif key in ("down", "j"):
+            self.provider_cursor = min(self.provider_cursor + 1, max(len(names) - 1, 0))
+        elif key in ("up", "k"):
+            self.provider_cursor = max(self.provider_cursor - 1, 0)
+        elif key == "a":
+            self.screen = PROVIDERADD
+            self.profile_cursor = 0
+        elif key in ("d", "b", "e") and names:
+            name = names[self.provider_cursor]
+            if key == "d":
+                self.apply(lambda: self.state.remove_provider(name))
+            else:
+                self.target = name
+                self.text = ""
+                self.screen = BASED if key == "b" else KEYENV
+        return False
+
+    def provideradd_key(self, key: str) -> bool:
+        if key == "esc":
+            self.screen = PROVIDERS
+        elif key in ("down", "j"):
+            self.profile_cursor = min(self.profile_cursor + 1, len(KNOWN_PROVIDERS) - 1)
+        elif key in ("up", "k"):
+            self.profile_cursor = max(self.profile_cursor - 1, 0)
+        elif key == "enter":
+            known = KNOWN_PROVIDERS[self.profile_cursor]
+            self.apply(lambda: self.state.add_provider(known))
+            if not self.message:
+                self.screen = PROVIDERS
+                self.provider_cursor = len(self.state.draft().providers) - 1
+        return False
+
+    def based_key(self, key: str) -> bool:
+        if key == "esc":
+            self.screen = PROVIDERS
+        elif key == "enter":
+            self.apply(lambda: self.state.set_base_url(self.target, self.text.strip()))
+            if not self.message:
+                self.screen = PROVIDERS
+        else:
+            self.typed(key)
+        return False
+
+    def keyenv_key(self, key: str) -> bool:
+        if key == "esc":
+            self.screen = PROVIDERS
+        elif key == "enter":
+            self.apply(lambda: self.state.set_api_key_env(self.target, self.text.strip()))
+            if not self.message:
+                self.screen = PROVIDERS
+        else:
+            self.typed(key)
+        return False
+
+    def ask_for_key(self) -> None:
+        names = list(self.state.draft().providers)
+        if not names:
+            self.message = "add a provider first"
+        elif len(names) == 1:
+            self.open_key(names[0])
+        else:
+            self.screen = KEYPROVIDER
+            self.provider_cursor = 0
+
+    def open_key(self, provider: str) -> None:
+        self.target = provider
+        self.text = ""
+        self.screen = KEY
+
+    def keyprovider_key(self, key: str) -> bool:
+        names = list(self.state.draft().providers)
+        if key == "esc":
+            self.screen = EDITOR
+        elif key in ("down", "j"):
+            self.provider_cursor = min(self.provider_cursor + 1, max(len(names) - 1, 0))
+        elif key in ("up", "k"):
+            self.provider_cursor = max(self.provider_cursor - 1, 0)
+        elif key == "enter" and names:
+            self.open_key(names[self.provider_cursor])
         return False
 
     def key_key(self, key: str) -> bool:
         if key == "esc":
             self.screen = EDITOR
         elif key == "enter":
-            name = self.state.draft().api_key_env
-            self.store(name, self.text)
+            provider = self.state.provider(self.target)
+            self.store(provider.api_key_env, self.text)
             self.screen = EDITOR
-            self.message = f"key stored in {credentials.credentials_path()}"
+            self.message = f"key of {provider.name} stored in {credentials.credentials_path()}"
         else:
             self.typed(key)
         return False
@@ -248,11 +367,6 @@ class Editor:
         self.saved = True
         self.message = "saved"
         return True
-
-    path: str = ""
-
-    def key_status(self, profile: Any) -> str:
-        return "stored" if credentials.api_key(profile.api_key_env) else "missing"
 
 
 def save_config(path: Path, state: SetupState) -> Path | None:
@@ -272,19 +386,29 @@ def profile_rows(state: SetupState) -> list[str]:
     for index, profile in enumerate(state.profiles):
         marker = ">" if index == state.selected else " "
         default = ", default" if profile.name == state.default_privacy else ""
-        count = len(profile.tiers)
-        rows.append(f"{marker} {profile.name}  ({count} tiers{default})")
+        rows.append(
+            f"{marker} {profile.name}  ({len(profile.filled())}/{DIFFICULTY_LEVELS}{default})"
+        )
+    return rows
+
+
+def difficulty_rows(view: Editor) -> list[str]:
+    profile = view.state.draft()
+    rows = []
+    for level, model in enumerate(profile.tiers, start=1):
+        marker = ">" if level == view.level else " "
+        rows.append(f"{marker} {level}. {model or '(no model yet)'}")
     return rows
 
 
 def render(view: Editor) -> list[str]:
-    rows = [TITLES.get(view.screen, "Conductor setup")]
+    rows = [TITLES[view.screen]]
     if view.screen == PROFILES:
         rows.extend(profile_rows(view.state))
-    elif view.screen == PROVIDER:
+    elif view.screen in (PROVIDER, PROVIDERADD):
         for index, known in enumerate(KNOWN_PROVIDERS):
-            marker = ">" if index == view.provider_cursor else " "
-            rows.append(f"{marker} {known.label}  {known.base_url or 'manual'}")
+            marker = ">" if index == view.profile_cursor else " "
+            rows.append(f"{marker} {known.label}  {known.base_url}")
     elif view.screen == NAME:
         rows.append(f"new profile name: {view.text}")
     elif view.screen == EDITOR and view.state.selected_profile() is not None:
@@ -293,33 +417,46 @@ def render(view: Editor) -> list[str]:
             [
                 f"profile   {profile.name}"
                 + ("  (default)" if profile.name == view.state.default_privacy else ""),
-                f"provider  {profile.provider or '(not set yet)'}  {profile.base_url}",
-                f"key       {profile.api_key_env}: {view.key_status(profile)}",
+                f"providers {', '.join(profile.providers) or '(none)'}",
                 f"parallel  {profile.max_parallel}",
                 f"reviewer  {profile.reviewer or '(not set)'}",
                 "",
-                "tiers, cheapest first:",
+                "difficulty, easiest first:",
+                *difficulty_rows(view),
             ]
         )
-        for index, tier in enumerate(profile.tiers):
-            marker = ">" if index == view.tier_cursor else " "
-            rows.append(f"{marker} {index + 1}. {tier}")
-        if not profile.tiers:
-            rows.append("  (no tiers yet: press a)")
+    elif view.screen == PROVIDERS and view.state.selected_profile() is not None:
+        names = list(view.state.draft().providers)
+        for index, name in enumerate(names):
+            marker = ">" if index == view.provider_cursor else " "
+            provider = view.state.draft().providers[name]
+            rows.append(f"{marker} {name:12} {provider.base_url}")
+            rows.append(f"  {'':12} {provider.api_key_env}")
+        if not names:
+            rows.append("(no providers yet: press a)")
+    elif view.screen in (BASED, KEYENV):
+        current = view.state.draft().providers.get(view.target)
+        label = "base_url" if view.screen == BASED else "api_key_env"
+        current_value = "" if current is None else getattr(current, label)
+        rows.append(f"{view.target}: {label} = {view.text or current_value}")
     elif view.screen == CATALOG:
         rows.append(f"search: {view.query}")
         if not view.models:
-            rows.append("  (no model matches, or the provider could not be read)")
+            rows.append("  (no model matches, or the providers could not be read)")
         for index, model in enumerate(view.models):
             marker = ">" if index == view.model_cursor else " "
             rows.append(
-                f"{marker} {model.id:52} {model.prompt_price:8.4f} {model.completion_price:8.4f}"
-                f" {model.context:8}"
+                f"{marker} {model.id:52} {model.prompt_price:8.4f} "
+                f"{model.completion_price:8.4f} {model.context:8}"
             )
     elif view.screen == MODEL:
-        rows.append(f"model id: {view.text}")
+        rows.append(f"model id for difficulty {view.level}: {view.text}")
+    elif view.screen == KEYPROVIDER and view.state.selected_profile() is not None:
+        for index, name in enumerate(view.state.draft().providers):
+            marker = ">" if index == view.provider_cursor else " "
+            rows.append(f"{marker} {name}")
     elif view.screen == KEY:
-        rows.append(f"{view.state.draft().api_key_env}: {'*' * len(view.text)}")
+        rows.append(f"{view.target}: {'*' * len(view.text)}")
     if view.message:
         rows.extend(["", view.message])
     rows.append(HINTS[view.screen])
@@ -379,9 +516,7 @@ def run(path: Path) -> int:
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         print("error: `conductor setup` needs an interactive terminal")
         return 2
-    if path.exists():
-        view = Editor(SetupState.from_config(Config.load(path)), path=str(path))
-    else:
-        view = Editor(SetupState([], "medium"), path=str(path))
+    state = SetupState.from_config(Config.load(path)) if path.exists() else SetupState.defaults()
+    view = Editor(state, path=str(path))
     curses.wrapper(loop, view)
     return 0 if view.saved else 1

@@ -7,6 +7,8 @@ from graphlib import CycleError, TopologicalSorter
 from pathlib import Path
 from typing import Any
 
+DIFFICULTY_LEVELS = 5
+
 
 class PlanError(ValueError):
     pass
@@ -33,8 +35,10 @@ class Step:
         )
         if not step.spec.strip():
             raise PlanError(f"step '{step.id}' has an empty spec")
-        if step.difficulty < 1:
-            raise PlanError(f"step '{step.id}': difficulty must be >= 1")
+        if not 1 <= step.difficulty <= DIFFICULTY_LEVELS:
+            raise PlanError(
+                f"step '{step.id}': difficulty must be between 1 and {DIFFICULTY_LEVELS}"
+            )
         return step
 
 

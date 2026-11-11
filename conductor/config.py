@@ -32,54 +32,117 @@ def toml_value(value: Any) -> str:
     return json.dumps(str(value))
 
 
+def provider_of(model: str) -> str:
+    return model.split("/", 1)[0] if "/" in model else ""
+
+
 @dataclass(frozen=True)
-class Profile:
+class Provider:
     name: str
-    provider: str
     base_url: str
     api_key_env: str
-    tiers: tuple[str, ...]
-    reviewer: str
-    max_parallel: int = 4
     request_options: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
+    def from_dict(cls, name: str, data: dict[str, Any]) -> Provider:
+        try:
+            return cls(
+                name=name,
+                base_url=str(data["base_url"]),
+                api_key_env=str(data["api_key_env"]),
+                request_options=dict(data.get("request_options", {})),
+            )
+        except KeyError as error:
+            raise ConfigError(f"privacy.*.providers.{name}: missing key {error}") from error
+
+    def dump(self) -> list[str]:
+        lines = [
+            f"base_url = {toml_value(self.base_url)}",
+            f"api_key_env = {toml_value(self.api_key_env)}",
+        ]
+        if self.request_options:
+            lines.append(f"request_options = {toml_value(self.request_options)}")
+        return lines
+
+
+@dataclass(frozen=True)
+class Profile:
+    name: str
+    providers: dict[str, Provider]
+    tiers: tuple[str, ...]
+    reviewer: str
+    max_parallel: int = 4
+
+    @classmethod
     def from_dict(cls, name: str, data: dict[str, Any]) -> Profile:
+        providers = cls.parse_providers(name, data)
         tiers = data.get("tiers")
         if not isinstance(tiers, list) or not tiers:
             raise ConfigError(f"privacy.{name}: tiers must be a non-empty list")
         try:
-            return cls(
+            profile = cls(
                 name=name,
-                provider=str(data["provider"]),
-                base_url=str(data["base_url"]),
-                api_key_env=str(data["api_key_env"]),
+                providers=providers,
                 tiers=tuple(str(t) for t in tiers),
                 reviewer=str(data["reviewer"]),
                 max_parallel=int(data.get("max_parallel", 4)),
-                request_options=dict(data.get("request_options", {})),
             )
         except KeyError as error:
             raise ConfigError(f"privacy.{name}: missing key {error}") from error
+        profile.validate()
+        return profile
+
+    @staticmethod
+    def parse_providers(name: str, data: dict[str, Any]) -> dict[str, Provider]:
+        declared = data.get("providers")
+        if declared is None:
+            return {
+                str(data["provider"]): Provider(
+                    name=str(data["provider"]),
+                    base_url=str(data["base_url"]),
+                    api_key_env=str(data["api_key_env"]),
+                    request_options=dict(data.get("request_options", {})),
+                )
+            }
+        if not isinstance(declared, dict) or not declared:
+            raise ConfigError(f"privacy.{name}: providers must not be empty")
+        return {
+            str(provider_name): Provider.from_dict(str(provider_name), body)
+            for provider_name, body in declared.items()
+        }
+
+    def validate(self) -> None:
+        for model in (*self.tiers, self.reviewer):
+            if self.reviewer == "brain" and model == "brain":
+                continue
+            if provider_of(model) not in self.providers:
+                raise ConfigError(
+                    f"privacy.{self.name}: '{model}' does not name one of the providers "
+                    f"({', '.join(self.providers)})"
+                )
+
+    def provider_for(self, model: str) -> Provider:
+        provider = self.providers.get(provider_of(model))
+        if provider is None:
+            raise ConfigError(f"privacy.{self.name}: no provider for '{model}'")
+        return provider
+
+    def model_for_tier(self, tier: int) -> str | None:
+        return self.tiers[tier] if 0 <= tier < len(self.tiers) else None
 
     def dump(self) -> str:
         lines = [
             f"[privacy.{toml_key(self.name)}]",
-            f"provider = {toml_value(self.provider)}",
-            f"base_url = {toml_value(self.base_url)}",
-            f"api_key_env = {toml_value(self.api_key_env)}",
             f"max_parallel = {toml_value(self.max_parallel)}",
             "tiers = [",
             *(f"  {toml_value(tier)}," for tier in self.tiers),
             "]",
             f"reviewer = {toml_value(self.reviewer)}",
         ]
-        if self.request_options:
-            lines.append(f"request_options = {toml_value(self.request_options)}")
+        for name, provider in self.providers.items():
+            lines.extend(["", f"[privacy.{toml_key(self.name)}.providers.{toml_key(name)}]"])
+            lines.extend(provider.dump())
         return "\n".join(lines) + "\n"
-
-    def model_for_tier(self, tier: int) -> str | None:
-        return self.tiers[tier] if 0 <= tier < len(self.tiers) else None
 
 
 @dataclass(frozen=True)

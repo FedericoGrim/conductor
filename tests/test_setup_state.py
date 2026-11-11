@@ -2,37 +2,24 @@ from pathlib import Path
 
 import pytest
 
-from conductor.config import Config, Profile
+from conductor.config import Config
+from conductor.defaults import DIFFICULTY_LEVELS
 from conductor.setup_state import (
     KNOWN_PROVIDERS,
     KnownProvider,
-    ProfileDraft,
+    ProviderDraft,
     SetupError,
     SetupState,
 )
+from tests.factories import make_profile
+
+TIERS = tuple(f"openrouter/m{level}" for level in range(1, 6))
 
 CONFIG = Config(
     "medium",
     {
-        "low": Profile(
-            "low",
-            "openrouter",
-            "https://openrouter.ai/api/v1",
-            "OPENROUTER_API_KEY",
-            ("openrouter/a:free", "openrouter/b"),
-            "openrouter/a:free",
-            2,
-        ),
-        "medium": Profile(
-            "medium",
-            "openrouter",
-            "https://openrouter.ai/api/v1",
-            "OPENROUTER_API_KEY",
-            ("openrouter/b", "openrouter/c"),
-            "openrouter/c",
-            4,
-            {"provider": {"data_collection": "deny"}},
-        ),
+        "low": make_profile(name="low", tiers=TIERS, reviewer="openrouter/m5", max_parallel=2),
+        "medium": make_profile(name="medium", tiers=TIERS, reviewer="openrouter/m4"),
     },
 )
 
@@ -41,40 +28,41 @@ def state() -> SetupState:
     return SetupState.from_config(CONFIG)
 
 
-def test_known_providers_cover_the_gateways_conductor_supports() -> None:
-    labels = {known.label: known for known in KNOWN_PROVIDERS}
-    assert set(labels) == {
-        "OpenRouter",
-        "OpenRouter (EU)",
-        "Vercel AI Gateway",
-        "Scaleway (EU)",
-        "OpenCode Zen",
-        "DeepSeek",
-        "Other (fill in by hand)",
-    }
-    assert labels["OpenRouter (EU)"].provider == "openrouter"
-    assert labels["OpenRouter (EU)"].base_url.startswith("https://eu.openrouter.ai")
-    assert all(known.api_key_env.isupper() for known in labels.values())
-    assert all(
-        known.base_url == "" or known.base_url.startswith("https://") for known in labels.values()
+def scaleway() -> KnownProvider:
+    return KnownProvider(
+        "Scaleway (EU)", "scaleway", "https://api.scaleway.ai/v1", "SCALEWAY_API_KEY"
     )
 
 
-def test_from_config_keeps_order_values_and_selection() -> None:
-    model = state()
-    assert [profile.name for profile in model.profiles] == ["low", "medium"]
-    assert model.default_privacy == "medium"
-    assert model.selected == 0
-    assert model.selected_profile() == ProfileDraft(
-        "low",
+def test_known_providers_are_all_https_and_have_a_key_variable() -> None:
+    assert [known.name for known in KNOWN_PROVIDERS] == [
         "openrouter",
-        "https://openrouter.ai/api/v1",
-        "OPENROUTER_API_KEY",
-        2,
-        ["openrouter/a:free", "openrouter/b"],
-        "openrouter/a:free",
-        {},
+        "openrouter",
+        "vercel",
+        "scaleway",
+        "opencode",
+        "deepseek",
+    ]
+    assert all(known.base_url.startswith("https://") for known in KNOWN_PROVIDERS)
+    assert all(known.api_key_env.isupper() for known in KNOWN_PROVIDERS)
+
+
+def test_defaults_carry_three_profiles_with_five_filled_levels() -> None:
+    model = SetupState.defaults()
+    assert [profile.name for profile in model.profiles] == ["low", "medium", "high"]
+    assert all(len(profile.filled()) == DIFFICULTY_LEVELS for profile in model.profiles)
+    assert model.problems() == []
+    assert model.default_privacy == "medium"
+
+
+def test_from_config_pads_missing_levels_and_keeps_providers() -> None:
+    short = SetupState.from_config(
+        Config("low", {"low": make_profile(name="low", tiers=("openrouter/a",))})
     )
+    draft = short.draft()
+    assert draft.tiers == ["openrouter/a", "", "", "", ""]
+    assert list(draft.providers) == ["openrouter"]
+    assert draft.providers["openrouter"].base_url == "https://openrouter.ai/api/v1"
 
 
 def test_to_config_round_trips_through_dump_and_load(tmp_path: Path) -> None:
@@ -93,27 +81,23 @@ def test_select_clamps_to_the_available_profiles() -> None:
     assert model.selected == 0
 
 
-def test_add_profile_appends_it_and_selects_it() -> None:
+def test_add_profile_starts_with_the_chosen_provider_and_empty_levels() -> None:
     model = state()
-    known = KnownProvider(
-        "Scaleway (EU)", "scaleway", "https://api.scaleway.ai/v1", "SCALEWAY_API_KEY"
-    )
-    profile = model.add_profile("high", known)
-    assert profile.tiers == []
+    profile = model.add_profile("high", scaleway())
+    assert list(profile.providers) == ["scaleway"]
+    assert profile.tiers == [""] * DIFFICULTY_LEVELS
     assert profile.reviewer == ""
-    assert profile.request_options == {}
     assert model.profiles[-1] is profile
     assert model.selected == 2
 
 
 def test_add_profile_refuses_duplicates_and_bad_names() -> None:
     model = state()
-    known = KNOWN_PROVIDERS[0]
     with pytest.raises(SetupError, match="already exists"):
-        model.add_profile("low", known)
+        model.add_profile("low", scaleway())
     for name in ("", "with space", "UPPER", "dot.name"):
         with pytest.raises(SetupError, match="lower-case"):
-            model.add_profile(name, known)
+            model.add_profile(name, scaleway())
 
 
 def test_remove_profile_keeps_the_selection_inside_the_list() -> None:
@@ -126,38 +110,75 @@ def test_remove_profile_keeps_the_selection_inside_the_list() -> None:
         model.remove_profile("medium")
 
 
-def test_tiers_can_be_added_removed_and_reordered() -> None:
+def test_providers_can_be_added_and_removed() -> None:
     model = state()
-    model.select(1)
-    model.add_tier("openrouter/d")
-    assert model.draft().tiers[-1] == "openrouter/d"
-    model.move_tier(2, -1)
-    assert model.draft().tiers == ["openrouter/b", "openrouter/d", "openrouter/c"]
-    model.move_tier(0, -1)
-    assert model.draft().tiers == ["openrouter/b", "openrouter/d", "openrouter/c"]
-    model.remove_tier(1)
-    assert model.draft().tiers == ["openrouter/b", "openrouter/c"]
-    model.profiles.clear()
-    with pytest.raises(SetupError, match="no profile selected"):
-        model.add_tier("openrouter/e")
+    provider = model.add_provider(scaleway())
+    assert isinstance(provider, ProviderDraft)
+    assert list(model.draft().providers) == ["openrouter", "scaleway"]
+    with pytest.raises(SetupError, match="already exists"):
+        model.add_provider(scaleway())
+    model.remove_provider("scaleway")
+    assert list(model.draft().providers) == ["openrouter"]
+    with pytest.raises(SetupError, match="unknown provider"):
+        model.remove_provider("scaleway")
 
 
-def test_a_tier_cannot_be_added_twice_and_an_index_must_exist() -> None:
+def test_removing_a_provider_clears_the_levels_that_used_it() -> None:
     model = state()
+    model.add_provider(scaleway())
+    model.set_tier(3, "scaleway/glm-5.3")
+    model.set_reviewer("scaleway/glm-5.3")
+    model.remove_provider("scaleway")
+    assert model.draft().tiers[2] == ""
+    assert model.draft().reviewer == ""
+    assert model.draft().tiers[0] == "openrouter/m1"
+
+
+def test_a_level_needs_a_known_provider_and_a_unique_model() -> None:
+    model = state()
+    with pytest.raises(SetupError, match="add provider 'scaleway' first"):
+        model.set_tier(1, "scaleway/glm-5.3")
     with pytest.raises(SetupError, match="already a tier"):
-        model.add_tier("openrouter/b")
-    with pytest.raises(SetupError, match="no tier"):
-        model.remove_tier(9)
-    with pytest.raises(SetupError, match="no tier"):
-        model.move_tier(9, 1)
+        model.set_tier(1, "openrouter/m2")
+    with pytest.raises(SetupError, match="model must not be empty"):
+        model.set_tier(1, " ")
+    for level in (0, 6):
+        with pytest.raises(SetupError, match="between 1 and 5"):
+            model.set_tier(level, "openrouter/x")
 
 
-def test_set_reviewer_accepts_a_model_or_the_brain() -> None:
+def test_a_level_can_be_filled_and_cleared() -> None:
+    model = state()
+    model.set_tier(3, "openrouter/strong")
+    assert model.draft().tiers[2] == "openrouter/strong"
+    model.clear_tier(3)
+    assert model.draft().tiers[2] == ""
+    with pytest.raises(SetupError, match="between 1 and 5"):
+        model.clear_tier(9)
+
+
+def test_base_url_and_key_variable_are_validated() -> None:
+    model = state()
+    assert model.set_base_url("openrouter", "https://eu.openrouter.ai/api/v1").base_url.startswith(
+        "https://eu"
+    )
+    with pytest.raises(SetupError, match="https"):
+        model.set_base_url("openrouter", "http://insecure")
+    assert model.set_api_key_env("openrouter", "MY_KEY").api_key_env == "MY_KEY"
+    with pytest.raises(SetupError, match="upper-case"):
+        model.set_api_key_env("openrouter", "my-key")
+    with pytest.raises(SetupError, match="unknown provider"):
+        model.set_base_url("nope", "https://x")
+
+
+def test_reviewer_accepts_a_model_with_a_provider_or_the_brain() -> None:
     model = state()
     assert model.set_reviewer("brain").reviewer == "brain"
-    assert model.set_reviewer("openrouter/c").reviewer == "openrouter/c"
+    assert model.set_reviewer("openrouter/m1").reviewer == "openrouter/m1"
     with pytest.raises(SetupError, match="reviewer"):
         model.set_reviewer("  ")
+    with pytest.raises(SetupError, match="no provider"):
+        model.set_reviewer("scaleway/glm-5.3")
 
 
 def test_default_privacy_must_be_a_profile() -> None:
@@ -168,26 +189,21 @@ def test_default_privacy_must_be_a_profile() -> None:
         model.set_default_privacy("high")
 
 
-def test_problems_lists_everything_that_blocks_a_save() -> None:
+def test_problems_lists_every_empty_level_and_missing_piece() -> None:
     assert state().problems() == []
     model = state()
-    model.add_profile("empty", KNOWN_PROVIDERS[0])
-    model.set_default_privacy("low")
+    model.add_profile("empty", scaleway())
     assert model.problems() == [
-        "profiles.empty: tiers must not be empty",
+        "profiles.empty: difficulty 1 has no model",
+        "profiles.empty: difficulty 2 has no model",
+        "profiles.empty: difficulty 3 has no model",
+        "profiles.empty: difficulty 4 has no model",
+        "profiles.empty: difficulty 5 has no model",
         "profiles.empty: reviewer must be set",
     ]
-    model.remove_profile("medium")
-    assert model.problems() == [
-        "profiles.empty: tiers must not be empty",
-        "profiles.empty: reviewer must be set",
-    ]
-    model.set_default_privacy("empty")
-    assert model.problems() == [
-        "profiles.empty: tiers must not be empty",
-        "profiles.empty: reviewer must be set",
-    ]
-    model.remove_profile("empty")
-    model.remove_profile("low")
-    assert model.profiles == []
+    model.select(0)
+    model.clear_tier(2)
+    assert "profiles.low: difficulty 2 has no model" in model.problems()
+    for profile in list(model.profiles):
+        model.remove_profile(profile.name)
     assert model.problems() == ["at least one profile is required"]

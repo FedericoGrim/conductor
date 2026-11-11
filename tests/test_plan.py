@@ -36,9 +36,10 @@ def test_rejects_cycle() -> None:
         Plan.from_dict({"goal": "g", "steps": [step("a", ["b"]), step("b", ["a"])]})
 
 
-def test_rejects_difficulty_below_one() -> None:
-    with pytest.raises(PlanError, match="difficulty must be >= 1"):
-        Plan.from_dict({"goal": "g", "steps": [step("a", difficulty=0)]})
+def test_rejects_difficulty_outside_the_five_levels() -> None:
+    for difficulty in (0, 6):
+        with pytest.raises(PlanError, match="between 1 and 5"):
+            Plan.from_dict({"goal": "g", "steps": [step("a", difficulty=difficulty)]})
 
 
 def test_rejects_empty_spec() -> None:
