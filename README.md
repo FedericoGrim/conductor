@@ -24,6 +24,26 @@ Conductor takes a `plan.json` produced by a planning model (Claude in Claude Cod
 
 Levels are just named profiles in `conductor.toml`; add your own for other providers.
 
+## Billing
+
+| Command | Shows |
+|---|---|
+| `conductor billing` | credits left on every provider configured in `conductor.toml` |
+| `conductor billing project` | what the current repository has cost, run by run |
+| `conductor billing projects` | what the last 30 days have cost, split by project (`--days N` changes the period) |
+
+Every attempt records what the worker spent (from OpenCode's `step_finish` events) and what the reviewer spent (when the provider reports `usage.cost`, as OpenRouter does); `run.json` totals them per step, per model and per run. Each finished run is also appended to `~/.local/share/conductor/ledger.jsonl`, which is what `billing projects` reads. Runs made before this feature show as `unknown` in `billing project` and are missing from `billing projects`.
+
+Balances come from the provider behind each profile's `base_url`:
+
+| Provider | What is shown | Needs |
+|---|---|---|
+| OpenRouter | purchased credits minus usage | a management key; with a normal key, the key's own limit and usage |
+| Vercel AI Gateway | credit balance and total used | the gateway API key |
+| Scaleway Generative APIs | consumption of the current month in EUR (pay as you go, no prepaid balance) | `SCW_ORGANIZATION_ID`, and a key allowed to read billing |
+
+Other providers are listed with "no balance API known". Amounts are never converted between currencies.
+
 ## Install
 
 ```bash
