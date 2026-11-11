@@ -33,6 +33,7 @@ Rule: no module imports OpenCode or provider specifics except `worker.py`, `revi
 - `OPENROUTER_API_KEY` (or the `api_key_env` named in the chosen profile) for the reviewer call.
 - `SCW_ORGANIZATION_ID` only for `conductor billing` on a Scaleway profile.
 - OpenCode providers are authenticated with `opencode auth login`, outside Conductor.
+- Repository secret `RELEASE_PLEASE_TOKEN`: fine-grained token (Contents and Pull requests, read and write, this repository only) used by release-please so that CI runs on its PRs. If it is missing or expired, release-please falls back to `GITHUB_TOKEN` and the `checks` run on the release PR must be approved by hand (`gh run rerun <id>` or "Approve and run" on the PR).
 - Never commit `.env`, `conductor.toml` with keys, or `.conductor/` run logs.
 
 ## Domain glossary
