@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from conductor import credentials
 from conductor.config import Profile
 
 Get = Callable[[str, dict[str, str]], dict[str, Any]]
@@ -110,9 +111,9 @@ def balance_reader(host: str) -> tuple[str, BalanceReader] | None:
 def account_balance(profile: Profile, host: str, reader: BalanceReader | None, get: Get) -> Balance:
     if reader is None:
         return Balance(host, note="no balance API known for this provider")
-    api_key = os.environ.get(profile.api_key_env)
+    api_key = credentials.api_key(profile.api_key_env)
     if not api_key:
-        return Balance(host, note=f"environment variable {profile.api_key_env} is not set")
+        return Balance(host, note=f"no API key: {profile.api_key_env} is not set or stored")
     try:
         return reader(host, profile, api_key, get)
     except BillingError as error:
