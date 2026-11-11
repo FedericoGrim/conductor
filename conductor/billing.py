@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+import urllib.error
+import urllib.parse
+import urllib.request
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime
@@ -11,6 +14,9 @@ from typing import Any
 from conductor.config import Profile
 
 Get = Callable[[str, dict[str, str]], dict[str, Any]]
+
+SCALEWAY_ORGANIZATION_ENV = "SCW_ORGANIZATION_ID"
+SCALEWAY_CONSUMPTIONS_URL = "https://api.scaleway.com/billing/v2beta1/consumptions"
 
 
 class BillingError(RuntimeError):
@@ -28,8 +34,102 @@ class Balance:
     note: str = ""
 
 
+BalanceReader = Callable[[str, Profile, str, Get], Balance]
+
+
+def http_get(url: str, headers: dict[str, str]) -> dict[str, Any]:
+    request = urllib.request.Request(url, headers={**headers, "User-Agent": "conductor-billing"})
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            payload: dict[str, Any] = json.loads(response.read())
+            return payload
+    except urllib.error.HTTPError as error:
+        raise BillingError(error.code) from error
+
+
+def openrouter_balance(account: str, profile: Profile, api_key: str, get: Get) -> Balance:
+    base_url = profile.base_url.rstrip("/")
+    headers = {"Authorization": f"Bearer {api_key}"}
+    try:
+        credits = get(f"{base_url}/credits", headers)["data"]
+    except BillingError as error:
+        if error.status != 403:
+            raise
+    else:
+        used = float(credits["total_usage"])
+        return Balance(account, remaining=float(credits["total_credits"]) - used, used=used)
+    key = get(f"{base_url}/key", headers)["data"]
+    if key.get("limit_remaining") is None:
+        note = "account credits need a management key; usage of this API key"
+        return Balance(account, used=float(key["usage"]), note=note)
+    return Balance(
+        account,
+        remaining=float(key["limit_remaining"]),
+        used=float(key["usage"]),
+        note="limit of this API key",
+    )
+
+
+def vercel_balance(account: str, profile: Profile, api_key: str, get: Get) -> Balance:
+    url = f"{profile.base_url.rstrip('/')}/credits"
+    credits = get(url, {"Authorization": f"Bearer {api_key}"})
+    return Balance(account, remaining=float(credits["balance"]), used=float(credits["total_used"]))
+
+
+def scaleway_balance(account: str, profile: Profile, api_key: str, get: Get) -> Balance:
+    organization = os.environ.get(SCALEWAY_ORGANIZATION_ENV)
+    if not organization:
+        return Balance(account, note=f"environment variable {SCALEWAY_ORGANIZATION_ENV} is not set")
+    query = urllib.parse.urlencode({"organization_id": organization, "page_size": 100})
+    consumptions = get(f"{SCALEWAY_CONSUMPTIONS_URL}?{query}", {"X-Auth-Token": api_key})
+    values = [item["value"] for item in consumptions.get("consumptions", [])]
+    return Balance(
+        account,
+        used=sum(value.get("units", 0) + value.get("nanos", 0) / 1e9 for value in values),
+        currency=values[0]["currency_code"] if values else "EUR",
+        note="pay as you go; consumption of the current month",
+    )
+
+
+BALANCE_READERS: dict[str, BalanceReader] = {
+    "openrouter.ai": openrouter_balance,
+    "ai-gateway.vercel.sh": vercel_balance,
+    "api.scaleway.ai": scaleway_balance,
+}
+
+
+def balance_reader(host: str) -> tuple[str, BalanceReader] | None:
+    for domain, reader in BALANCE_READERS.items():
+        if host == domain or host.endswith("." + domain):
+            return domain, reader
+    return None
+
+
+def account_balance(profile: Profile, host: str, reader: BalanceReader | None, get: Get) -> Balance:
+    if reader is None:
+        return Balance(host, note="no balance API known for this provider")
+    api_key = os.environ.get(profile.api_key_env)
+    if not api_key:
+        return Balance(host, note=f"environment variable {profile.api_key_env} is not set")
+    try:
+        return reader(host, profile, api_key, get)
+    except BillingError as error:
+        return Balance(host, note=str(error))
+
+
 def balances(profiles: Iterable[Profile], get: Get | None = None) -> list[Balance]:
-    raise NotImplementedError
+    get = get or http_get
+    seen: set[tuple[str, str]] = set()
+    report: list[Balance] = []
+    for profile in profiles:
+        host = urllib.parse.urlsplit(profile.base_url).hostname or profile.base_url
+        known = balance_reader(host)
+        account = (known[0] if known else host, profile.api_key_env)
+        if account in seen:
+            continue
+        seen.add(account)
+        report.append(account_balance(profile, host, known[1] if known else None, get))
+    return report
 
 
 @dataclass(frozen=True)
