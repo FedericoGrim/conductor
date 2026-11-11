@@ -24,6 +24,7 @@ Simple layering, no tactical DDD: a small tool with little business logic.
 - `conductor/setup_state.py` — editable profiles, providers, five difficulty levels and validation for the setup UI.
 - `conductor/setup_tui.py` — `curses` screens, keys and rendering of `conductor setup`, starting from `defaults.py` when no file exists.
 - `conductor/credentials.py` — API keys from the environment first, then `auth.json`.
+- `conductor/settings.py` — export and import of the instance settings, with a `[conductor]` metadata table and no keys.
 - `conductor/billing.py` — provider balances (chosen by the profile's `base_url` host), the cross-project spend ledger and its totals.
 - `conductor/cli.py` — `conductor run plan.json --privacy low|medium|high`, `conductor validate plan.json`, `conductor billing [project|projects]`, `conductor setup`.
 Rule: no module imports OpenCode or provider specifics except `worker.py`, `reviewer.py`, `privacy.py`, `catalog.py` and `billing.py`.
@@ -34,6 +35,7 @@ Rule: no module imports OpenCode or provider specifics except `worker.py`, `revi
 - Lint/format/types: `pre-commit run --all-files`
 - List candidate models per privacy level: `.venv/bin/python scripts/list-models.py --privacy medium`
 - Create or edit the configuration in a terminal UI: `.venv/bin/conductor setup`
+- Move the settings between machines: `.venv/bin/conductor config export FILE` / `config import FILE`
 
 ## Environment
 - `OPENROUTER_API_KEY` (or the `api_key_env` named in the chosen profile) for the reviewer call: from the environment, or from `~/.local/share/conductor/auth.json` written by `conductor setup`.
@@ -59,6 +61,7 @@ Rule: no module imports OpenCode or provider specifics except `worker.py`, `revi
 - Routing options are written to a per-worktree `opencode.json`, excluded from the diff via `.git/info/exclude`.
 
 ## Security & constraints
+- Settings export never includes keys, only provider names and the variables that hold them.
 - API keys come from the environment or from `auth.json` (mode `600`, directory `700`, written atomically by `conductor setup` only); never written to logs, `opencode.json`, `run.json`, the ledger or billing output. The environment wins over the file.
 - A key is never sent to a `base_url` that is not `https`.
 - Worker output (transcripts, diffs, reviewer replies) is untrusted data: never executed, never fed to a shell.

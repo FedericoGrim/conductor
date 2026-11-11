@@ -69,6 +69,20 @@ These options are merged over the provider's `request_options` (the model wins) 
 
 Keys are read from the environment first and from that file second. Saving rewrites the file and keeps the previous one as `conductor.toml.bak`; comments written by hand are lost, which is why the generated file carries a warning. The UI needs an interactive terminal; `--config` chooses another file.
 
+## Move the settings to another machine
+
+Settings belong to the installation, not to the repository. Profiles, providers, the five levels, reviewers and per-model routing travel as a file:
+
+```bash
+conductor config export ./conductor-settings.toml   # or with no path: ./conductor-settings.toml
+conductor config import ./conductor-settings.toml   # keeps the previous file as .bak
+conductor config path                               # which file is in use
+```
+
+The exported file carries a `[conductor]` table with `schema`, `version` and `exported_at`, followed by the configuration itself, so it stays readable and diffable. **API keys are never exported**: keys live in `~/.local/share/conductor/auth.json` or in the environment. After an import, Conductor lists the variables that are still missing.
+
+An import replaces the configuration; the previous file is kept next to it with a `.bak` suffix. A file with a newer `schema` is refused instead of being half-read.
+
 ## Install
 
 ```bash
