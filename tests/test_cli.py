@@ -235,3 +235,10 @@ reviewer = "scaleway/m"
     assert lines[1].startswith("api.scaleway.ai")
     assert "environment variable TEST_CLI_MISSING_KEY is not set" in lines[1]
     assert "sk-secret" not in out
+
+
+def test_billing_project_outside_a_repository_is_an_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert cli.main(["billing", "project", "--repo", str(tmp_path)]) == 2
+    assert "not a git repository" in capsys.readouterr().err
