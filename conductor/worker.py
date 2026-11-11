@@ -85,7 +85,13 @@ def parse_events(stdout: str) -> tuple[list[dict[str, Any]], str | None]:
 
 
 def events_cost(events: list[dict[str, Any]]) -> float:
-    raise NotImplementedError
+    total = 0.0
+    for event in events:
+        part = event.get("part")
+        cost = part.get("cost") if isinstance(part, dict) else None
+        if event.get("type") == "step_finish" and isinstance(cost, int | float):
+            total += cost
+    return total
 
 
 def commit_work(worktree: Path, message: str) -> bool:
@@ -144,4 +150,5 @@ async def run_attempt(
         diff=diff_against(worktree, base),
         stderr=stderr,
         command=command,
+        cost=events_cost(events),
     )
