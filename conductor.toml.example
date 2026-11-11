@@ -22,6 +22,17 @@
 #
 #   # then, in [privacy.medium], tiers = ["openrouter/...", "scaleway/glm-5.3", ...]
 #
+# Request options can be narrowed to one model, which is how OpenRouter upstream routing is
+# pinned. The table lives inside the provider and the key is the model id without the provider
+# prefix; it is merged over the provider options, and the model wins. For example, DeepSeek V4.1
+# Flash on Relace costs about 6x less per input token than the default upstream:
+#
+#   [privacy.medium.providers.openrouter.models."deepseek/deepseek-v4.1-flash"]
+#   request_options = { provider = { order = ["relace"], allow_fallbacks = true } }
+#
+# Keep allow_fallbacks on: Conductor does not retry a step when the pinned upstream fails, so
+# pinning with only/allow_fallbacks = false turns an outage into a failed step.
+#
 # `conductor billing` reads the balance of the account behind each base_url (OpenRouter, Vercel
 # AI Gateway, Scaleway Generative APIs) with the key in api_key_env; see "Billing" in the README.
 #

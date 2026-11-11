@@ -119,3 +119,34 @@ def test_the_reviewer_uses_the_provider_of_its_model(monkeypatch: pytest.MonkeyP
     assert captured["url"] == "https://api.scaleway.ai/v1/chat/completions"
     assert captured["headers"]["Authorization"] == "Bearer sk-two"
     assert captured["body"]["model"] == "glm-5.3"
+
+
+def test_the_reviewer_receives_the_options_of_its_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    from conductor.config import Profile, Provider
+
+    profile = Profile(
+        "medium",
+        {
+            "openrouter": Provider(
+                "openrouter",
+                "https://openrouter.ai/api/v1",
+                "K",
+                {"provider": {"data_collection": "deny"}},
+                {"deepseek/flash": {"provider": {"order": ["relace"]}}},
+            )
+        },
+        ("openrouter/a",),
+        "openrouter/deepseek/flash",
+    )
+    monkeypatch.setenv("K", "sk")
+    captured: dict[str, Any] = {}
+
+    def fake_post(url: str, headers: dict[str, str], body: dict[str, Any]) -> dict[str, Any]:
+        captured.update(body=body)
+        return completion(json.dumps({"ok": True, "reason": "fine"}))
+
+    review(profile, spec="s", diff="+x", post=fake_post)
+    assert captured["body"]["provider"] == {
+        "data_collection": "deny",
+        "order": ["relace"],
+    }

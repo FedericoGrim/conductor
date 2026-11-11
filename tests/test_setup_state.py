@@ -7,6 +7,7 @@ from conductor.defaults import DIFFICULTY_LEVELS
 from conductor.setup_state import (
     KNOWN_PROVIDERS,
     KnownProvider,
+    ProfileDraft,
     ProviderDraft,
     SetupError,
     SetupState,
@@ -207,3 +208,17 @@ def test_problems_lists_every_empty_level_and_missing_piece() -> None:
     for profile in list(model.profiles):
         model.remove_profile(profile.name)
     assert model.problems() == ["at least one profile is required"]
+
+
+def test_model_options_survive_a_round_trip_through_the_editor(tmp_path: Path) -> None:
+    provider = ProviderDraft("openrouter", "https://openrouter.ai/api/v1", "K")
+    provider.model_options = {"m1": {"provider": {"order": ["relace"]}}}
+    model = SetupState(
+        [ProfileDraft("medium", {"openrouter": provider}, list(TIERS), "openrouter/m5")], "medium"
+    )
+    written = tmp_path / "conductor.toml"
+    written.write_text(model.to_config().dump())
+    again = SetupState.from_config(Config.load(written))
+    assert again.draft().providers["openrouter"].model_options == {
+        "m1": {"provider": {"order": ["relace"]}}
+    }

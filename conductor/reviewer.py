@@ -71,7 +71,7 @@ def review(profile: Profile, spec: str, diff: str, post: Post | None = None) -> 
             f"no API key: set {provider.api_key_env} or store it with `conductor setup`"
         )
     body = {
-        **provider.request_options,
+        **profile.options_for(profile.reviewer),
         "model": api_model_id(provider.name, profile.reviewer),
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},

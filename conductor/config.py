@@ -32,6 +32,17 @@ def toml_value(value: Any) -> str:
     return json.dumps(str(value))
 
 
+def merge_options(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(base)
+    for key, value in override.items():
+        current = merged.get(key)
+        if isinstance(current, dict) and isinstance(value, dict):
+            merged[key] = merge_options(current, value)
+        else:
+            merged[key] = value
+    return merged
+
+
 def provider_of(model: str) -> str:
     return model.split("/", 1)[0] if "/" in model else ""
 
@@ -42,6 +53,7 @@ class Provider:
     base_url: str
     api_key_env: str
     request_options: dict[str, Any] = field(default_factory=dict)
+    model_options: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, name: str, data: dict[str, Any]) -> Provider:
@@ -51,17 +63,29 @@ class Provider:
                 base_url=str(data["base_url"]),
                 api_key_env=str(data["api_key_env"]),
                 request_options=dict(data.get("request_options", {})),
+                model_options={
+                    str(model): dict(body.get("request_options", {}))
+                    for model, body in data.get("models", {}).items()
+                },
             )
         except KeyError as error:
             raise ConfigError(f"privacy.*.providers.{name}: missing key {error}") from error
 
-    def dump(self) -> list[str]:
+    def dump(self, prefix: str) -> list[str]:
         lines = [
             f"base_url = {toml_value(self.base_url)}",
             f"api_key_env = {toml_value(self.api_key_env)}",
         ]
         if self.request_options:
             lines.append(f"request_options = {toml_value(self.request_options)}")
+        for model, options in self.model_options.items():
+            lines.extend(
+                [
+                    "",
+                    f"[{prefix}.models.{toml_key(model)}]",
+                    f"request_options = {toml_value(options)}",
+                ]
+            )
         return lines
 
 
@@ -111,7 +135,21 @@ class Profile:
             for provider_name, body in declared.items()
         }
 
+    def options_for(self, model: str) -> dict[str, Any]:
+        provider = self.provider_for(model)
+        return merge_options(
+            provider.request_options,
+            provider.model_options.get(model[len(provider.name) + 1 :], {}),
+        )
+
     def validate(self) -> None:
+        for name, provider in self.providers.items():
+            used = {model[len(name) + 1 :] for model in (*self.tiers, self.reviewer)}
+            for model in provider.model_options:
+                if model not in used:
+                    raise ConfigError(
+                        f"privacy.{self.name}: unknown model '{model}' in providers.{name}.models"
+                    )
         for model in (*self.tiers, self.reviewer):
             if self.reviewer == "brain" and model == "brain":
                 continue
@@ -140,8 +178,9 @@ class Profile:
             f"reviewer = {toml_value(self.reviewer)}",
         ]
         for name, provider in self.providers.items():
-            lines.extend(["", f"[privacy.{toml_key(self.name)}.providers.{toml_key(name)}]"])
-            lines.extend(provider.dump())
+            prefix = f"privacy.{toml_key(self.name)}.providers.{toml_key(name)}"
+            lines.extend(["", f"[{prefix}]"])
+            lines.extend(provider.dump(prefix))
         return "\n".join(lines) + "\n"
 
 

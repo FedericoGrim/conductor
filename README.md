@@ -56,6 +56,17 @@ Other providers are listed with "no balance API known". Amounts are never conver
 
 A model id is `<provider>/<model>`, and the provider is the one declared in the same profile, which is how a rejected step can escalate onto another provider. `conductor.toml.example` shows the format.
 
+### Upstream routing on a gateway
+
+OpenRouter picks an upstream provider for each model. To pin one for a single model, add a table inside the provider; the key is the model id without the provider prefix:
+
+```toml
+[privacy.medium.providers.openrouter.models."deepseek/deepseek-v4.1-flash"]
+request_options = { provider = { order = ["relace"], allow_fallbacks = true } }
+```
+
+These options are merged over the provider's `request_options` (the model wins) and apply to both the worker and the reviewer when that model is chosen. The slug comes from `https://openrouter.ai/api/v1/models/<author>/<model>/endpoints` (`relace`, `deepinfra`, `morph`, ...). Prefer `order` with fallbacks over `only` with `allow_fallbacks = false`: Conductor does not retry a step when a model call fails, so a single pinned upstream turning down a request turns into a failed step. Pinning does not bypass `data_collection = "deny"`: if the pinned upstream does not meet the policy, the request is refused.
+
 Keys are read from the environment first and from that file second. Saving rewrites the file and keeps the previous one as `conductor.toml.bak`; comments written by hand are lost, which is why the generated file carries a warning. The UI needs an interactive terminal; `--config` chooses another file.
 
 ## Install
