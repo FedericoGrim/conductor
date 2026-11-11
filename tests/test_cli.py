@@ -242,3 +242,27 @@ def test_billing_project_outside_a_repository_is_an_error(
 ) -> None:
     assert cli.main(["billing", "project", "--repo", str(tmp_path)]) == 2
     assert "not a git repository" in capsys.readouterr().err
+
+
+def test_a_ledger_that_cannot_be_written_does_not_fail_the_run(
+    tmp_path: Path,
+    isolated_data_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    repo = init_repo(tmp_path)
+    install_fake_opencode(tmp_path, monkeypatch)
+    monkeypatch.setenv("TEST_CLI_KEY", "k")
+    config = tmp_path / "conductor.toml"
+    config.write_text(CONFIG)
+    plan = tmp_path / "plan.json"
+    plan.write_text(json.dumps({"goal": "g", "steps": [{"id": "a", "spec": "s"}]}))
+    isolated_data_home.write_text("a file where the data directory should be")
+
+    def approve(url: str, headers: dict[str, str], body: dict[str, Any]) -> dict[str, Any]:
+        return {"choices": [{"message": {"content": '{"ok": true, "reason": "good"}'}}]}
+
+    monkeypatch.setattr(reviewer, "http_post", approve)
+
+    assert cli.main(["run", str(plan), "--config", str(config), "--repo", str(repo)]) == 0
+    assert "warning: could not record the run in the ledger" in capsys.readouterr().err

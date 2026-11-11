@@ -166,6 +166,24 @@ def test_missing_key_unknown_provider_and_http_errors_become_notes(
     assert "sk-secret" not in repr(report)
 
 
+def test_a_key_is_never_sent_to_a_base_url_without_tls() -> None:
+    api = FakeApi({})
+    assert balances([profile("low", "http://openrouter.ai/api/v1")], api) == [
+        Balance("openrouter.ai", note="base_url is not https")
+    ]
+    assert api.calls == []
+
+
+def test_scaleway_amounts_may_arrive_as_strings(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SCW_ORGANIZATION_ID", "org-1")
+
+    def consumptions(url: str, headers: dict[str, str]) -> dict[str, Any]:
+        value = {"currency_code": "EUR", "units": "2", "nanos": 500000000}
+        return {"consumptions": [{"value": value}]}
+
+    assert balances([SCALEWAY], consumptions)[0].used == 2.5
+
+
 def test_an_unexpected_response_becomes_a_note() -> None:
     api = FakeApi({"https://ai-gateway.vercel.sh/v1/credits": {"error": "maintenance"}})
     assert balances([VERCEL], api) == [Balance("ai-gateway.vercel.sh", note="unexpected response")]
