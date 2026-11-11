@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import subprocess
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -112,8 +113,15 @@ def run(args: argparse.Namespace) -> int:
     return 0 if all(r.status == APPROVED for r in results.values()) else 1
 
 
+class NotARepositoryError(ValueError):
+    pass
+
+
 def project_root(directory: Path) -> Path:
-    return Path(git(directory, "rev-parse", "--show-toplevel").strip())
+    try:
+        return Path(git(directory, "rev-parse", "--show-toplevel").strip())
+    except subprocess.CalledProcessError as error:
+        raise NotARepositoryError(f"{directory} is not a git repository") from error
 
 
 def money(amount: float, currency: str = "USD") -> str:
@@ -206,7 +214,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         code: int = args.handler(args)
         return code
-    except (PlanError, ConfigError, reviewer.ReviewerError) as error:
+    except (PlanError, ConfigError, reviewer.ReviewerError, NotARepositoryError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
 
