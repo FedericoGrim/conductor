@@ -1,6 +1,6 @@
 # Copy to conductor.toml (project root) or ~/.config/conductor/conductor.toml.
-# Model ids are examples: refresh them with `python scripts/list-models.py --privacy <level>`
-# and check that every model supports tool calling, or OpenCode cannot edit files with it.
+# Model ids and prices checked on 2026-11-10; refresh with `python scripts/list-models.py --privacy <level>`.
+# Every listed model supports tool calling (required, or OpenCode cannot edit files with it).
 #
 # Each [privacy.<level>] is a profile:
 #   provider        OpenCode provider id (`opencode auth login` must know it)
@@ -22,11 +22,11 @@ base_url = "https://openrouter.ai/api/v1"
 api_key_env = "OPENROUTER_API_KEY"
 max_parallel = 2
 tiers = [
-  "openrouter/qwen/qwen3-coder:free",
-  "openrouter/deepseek/deepseek-chat:free",
-  "openrouter/deepseek/deepseek-chat",
+  "openrouter/google/gemma-4-26b-a4b-it:free",
+  "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
+  "openrouter/deepseek/deepseek-v4-flash",
 ]
-reviewer = "openrouter/deepseek/deepseek-chat"
+reviewer = "openrouter/deepseek/deepseek-v4-flash"
 
 # medium: paid models, only providers that do not retain or train on prompts, anywhere in the world.
 [privacy.medium]
@@ -35,11 +35,11 @@ base_url = "https://openrouter.ai/api/v1"
 api_key_env = "OPENROUTER_API_KEY"
 max_parallel = 4
 tiers = [
-  "openrouter/deepseek/deepseek-chat",
-  "openrouter/qwen/qwen3-coder",
-  "openrouter/anthropic/claude-sonnet-4.5",
+  "openrouter/deepseek/deepseek-v4-flash",
+  "openrouter/deepseek/deepseek-v4.1-flash",
+  "openrouter/anthropic/claude-sonnet-5.5",
 ]
-reviewer = "openrouter/deepseek/deepseek-chat"
+reviewer = "openrouter/deepseek/deepseek-v4.1-flash"
 request_options = { provider = { data_collection = "deny" } }
 
 # high: EU data residency through eu.openrouter.ai (OpenRouter Business plan, +8% on credits).
@@ -50,11 +50,11 @@ base_url = "https://eu.openrouter.ai/api/v1"
 api_key_env = "OPENROUTER_API_KEY"
 max_parallel = 4
 tiers = [
-  "openrouter/mistralai/ministral-8b",
-  "openrouter/mistralai/codestral-2508",
-  "openrouter/anthropic/claude-sonnet-4.5",
+  "openrouter/deepseek/deepseek-v4-flash-0731",
+  "openrouter/mistralai/devstral-2512",
+  "openrouter/anthropic/claude-sonnet-5.5",
 ]
-reviewer = "openrouter/mistralai/codestral-2508"
+reviewer = "openrouter/anthropic/claude-haiku-5.5"
 
 # Other providers work the same way, as long as OpenCode knows them. Examples:
 #
