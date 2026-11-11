@@ -51,6 +51,24 @@ def test_parse_models_reads_the_vercel_gateway_shape_and_skips_non_language_mode
     ]
 
 
+def test_parse_models_skips_batch_only_variants() -> None:
+    payload = {
+        "data": [
+            {
+                "id": "deepseek/flash:batch",
+                "pricing": {"prompt": "0.0001", "completion": "0.0002"},
+                "supported_parameters": ["tools"],
+            },
+            {
+                "id": "deepseek/flash",
+                "pricing": {"prompt": "0.0003", "completion": "0.0012"},
+                "supported_parameters": ["tools"],
+            },
+        ]
+    }
+    assert [model.id for model in parse_models(payload)] == ["deepseek/flash"]
+
+
 def test_parse_models_rejects_a_payload_without_a_model_list() -> None:
     with pytest.raises(CatalogError, match="unexpected response"):
         parse_models({"error": "maintenance"})

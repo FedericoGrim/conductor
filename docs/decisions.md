@@ -43,3 +43,19 @@ Significant decisions for this project. Newest at the bottom. Entries are never 
 - **Decision:** `conductor setup` stores keys in `$XDG_DATA_HOME/conductor/auth.json` (default `~/.local/share/conductor/`), one JSON object of environment-variable name to key. The file is written atomically with mode `600` inside a `700` directory. `credentials.api_key` returns the environment value first and the stored one second, so an exported variable always wins and nothing changes for existing setups. The reviewer and `conductor billing` read it through that function.
 - **Alternatives:** Keyring (extra dependency, `secret-tool`/DBus not always present); ask for the key on every run (breaks unattended runs); keep environment-only and let the UI just print which variable to export (no dependency risk, but the setup UI could not leave a working configuration).
 - **Consequences:** A key sits in clear text on disk, protected by file permissions only — the same trade-off `gh` and OpenCode make. Anything able to read the user's home can read it. The file is not in any repository logging path and is never printed.
+
+## 006 — A privacy profile spans several providers, the model id names its provider
+- **Date:** 2026-11-11
+- **Status:** Accepted
+- **Context:** A privacy level is about how a task's data may be handled, not about one vendor. Pinning one provider per level forced duplicating levels to mix a cheap model with a stronger one from elsewhere, and escalation could not leave the provider that rejected.
+- **Decision:** `Profile.providers` is a map from provider name to `base_url`, `api_key_env` and `request_options`. Tier and reviewer ids are `<provider>/<model>`, and that prefix selects the provider. `privacy.opencode_config` writes one entry per provider with the models that profile uses. The old flat form (`provider`, `base_url`, `api_key_env` on the profile) is still read as a single-provider profile.
+- **Alternatives:** One profile per provider with a global privacy level on top (two axes to configure, more files, harder UI); routing by price at runtime (no reproducible runs, cost surprises).
+- **Consequences:** A typo in the prefix is a configuration error caught at load. Every provider still needs its own credentials in OpenCode (`opencode auth login`) and, for the reviewer and billing, in `auth.json` or the environment.
+
+## 007 — Five fixed difficulty levels and built-in profiles
+- **Date:** 2026-11-11
+- **Status:** Accepted
+- **Context:** The setup UI asked the user to invent the shape of a profile. The number of tiers was implicit and changed behaviour of escalation; an empty configuration meant nothing ran at all.
+- **Decision:** `DIFFICULTY_LEVELS = 5` in `plan.py` and `defaults.py`. Every profile has exactly five levels, each with a model; the setup UI refuses to save with an empty level. `defaults.py` ships `low`, `medium` and `high` complete, `conductor setup` starts from them when no file exists, and `conductor.toml.example` is generated from them. `conductor run` still requires a file, so nothing is spent on defaults nobody chose.
+- **Alternatives:** Free-length tier lists padded with the strongest model (ambiguous escalation); starting the UI from an empty configuration (forces understanding the file format before the first run).
+- **Consequences:** Plans with difficulty above 5 are rejected. Adding a level means changing one constant and the tests around it; profiles written before this decision keep working but need the missing levels filled before `validate` accepts a high difficulty.

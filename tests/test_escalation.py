@@ -1,20 +1,13 @@
 import asyncio
 from typing import Any
 
-from conductor.config import Profile
 from conductor.escalation import build_prompt, run_step
 from conductor.plan import Step
 from conductor.reviewer import Verdict
 from conductor.worker import AttemptOutput
+from tests.factories import make_profile
 
-PROFILE = Profile(
-    name="medium",
-    provider="openrouter",
-    base_url="u",
-    api_key_env="K",
-    tiers=("openrouter/t0", "openrouter/t1", "openrouter/t2"),
-    reviewer="openrouter/r",
-)
+PROFILE = make_profile(api_key_env="K")
 STEP = Step("s1", "Parser", "write a parser", ("parser.py",), 2, ())
 
 
@@ -95,7 +88,7 @@ def test_opencode_failure_does_not_retry() -> None:
 
 
 def test_brain_reviewer_hands_the_diff_back_without_judging() -> None:
-    profile = Profile("low", "openrouter", "u", "K", ("openrouter/t0",), reviewer="brain")
+    profile = make_profile(name="low", api_key_env="K", tiers=("openrouter/t0",), reviewer="brain")
 
     async def attempt(step: Step, number: int, model: str, prompt: str) -> AttemptOutput:
         return output()
