@@ -115,6 +115,10 @@ def account_balance(profile: Profile, host: str, reader: BalanceReader | None, g
         return reader(host, profile, api_key, get)
     except BillingError as error:
         return Balance(host, note=str(error))
+    except OSError:
+        return Balance(host, note="provider unreachable")
+    except (KeyError, TypeError, ValueError):
+        return Balance(host, note="unexpected response")
 
 
 def balances(profiles: Iterable[Profile], get: Get | None = None) -> list[Balance]:
