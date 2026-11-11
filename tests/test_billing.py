@@ -166,6 +166,20 @@ def test_missing_key_unknown_provider_and_http_errors_become_notes(
     assert "sk-secret" not in repr(report)
 
 
+def test_an_unexpected_response_becomes_a_note() -> None:
+    api = FakeApi({"https://ai-gateway.vercel.sh/v1/credits": {"error": "maintenance"}})
+    assert balances([VERCEL], api) == [Balance("ai-gateway.vercel.sh", note="unexpected response")]
+
+
+def test_an_unreachable_provider_becomes_a_note() -> None:
+    def unreachable(url: str, headers: dict[str, str]) -> dict[str, Any]:
+        raise OSError("name resolution failed")
+
+    assert balances([VERCEL], unreachable) == [
+        Balance("ai-gateway.vercel.sh", note="provider unreachable")
+    ]
+
+
 def finished_run(cost: float, finished_at: str = "2026-11-11T10:00:00+00:00") -> dict[str, Any]:
     return {"finished_at": finished_at, "cost": cost, "cost_by_model": {"openrouter/m": cost}}
 
