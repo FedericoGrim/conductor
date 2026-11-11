@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.4.0](https://github.com/FedericoGrim/conductor/compare/conductor-v0.3.1...conductor-v0.4.0) (2026-11-11)
+
+
+### Features
+
+* **cli:** add config path, export and import commands ([cbbeabe](https://github.com/FedericoGrim/conductor/commit/cbbeabe9d7fea9184e7fa1b886738644c9cef447))
+* **config:** allow request options per model for gateway routing ([f274f5a](https://github.com/FedericoGrim/conductor/commit/f274f5a4051b6eb458b30423b3943ae93fb3cdbe))
+* export and import the settings of an instance ([c04c95e](https://github.com/FedericoGrim/conductor/commit/c04c95e284d81665ae45bc77e42c69b21fdfbda9))
+* request options per model for gateway upstream routing ([673aadf](https://github.com/FedericoGrim/conductor/commit/673aadfeaccb02d0b20b124ae19a11eed66a98e3))
+* **settings:** export and import the settings of an instance ([45d274a](https://github.com/FedericoGrim/conductor/commit/45d274a4c323e291c14f95be93c637c69c03be28))
+
+
+### Documentation
+
+* describe settings export and import, decision 010 ([c26840a](https://github.com/FedericoGrim/conductor/commit/c26840a7745450c19796372015b84c75c73c01bc))
+
 ## [0.3.1](https://github.com/FedericoGrim/conductor/compare/conductor-v0.3.0...conductor-v0.3.1) (2026-11-11)
 
 
