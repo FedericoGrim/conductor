@@ -17,6 +17,7 @@ from conductor.billing import (
     spend_by_project,
 )
 from conductor.config import Profile
+from conductor.credentials import store_key
 
 
 def profile(name: str, base_url: str, api_key_env: str = "TEST_BILLING_KEY") -> Profile:
@@ -159,11 +160,21 @@ def test_missing_key_unknown_provider_and_http_errors_become_notes(
         api,
     )
     assert report == [
-        Balance("openrouter.ai", note="environment variable TEST_MISSING_KEY is not set"),
+        Balance("openrouter.ai", note="no API key: TEST_MISSING_KEY is not set or stored"),
         Balance("llm.example.com", note="no balance API known for this provider"),
         Balance("ai-gateway.vercel.sh", note="HTTP 401"),
     ]
     assert "sk-secret" not in repr(report)
+
+
+def test_a_stored_key_is_used_when_the_environment_has_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("TEST_BILLING_KEY")
+    store_key("TEST_BILLING_KEY", "sk-stored")
+    api = FakeApi({"https://ai-gateway.vercel.sh/v1/credits": {"balance": "1", "total_used": "2"}})
+    assert balances([VERCEL], api) == [Balance("ai-gateway.vercel.sh", remaining=1.0, used=2.0)]
+    assert api.calls[0][1] == {"Authorization": "Bearer sk-stored"}
 
 
 def test_a_key_is_never_sent_to_a_base_url_without_tls() -> None:

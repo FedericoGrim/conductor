@@ -233,7 +233,7 @@ reviewer = "scaleway/m"
         "USD",
     ]
     assert lines[1].startswith("api.scaleway.ai")
-    assert "environment variable TEST_CLI_MISSING_KEY is not set" in lines[1]
+    assert "no API key: TEST_CLI_MISSING_KEY is not set or stored" in lines[1]
     assert "sk-secret" not in out
 
 

@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from conductor.config import Config, ConfigError
+from conductor.config import Config, ConfigError, Profile
 
 TOML = """
 default_privacy = "medium"
@@ -66,3 +66,56 @@ def test_model_for_difficulty_caps_at_strongest_tier(tmp_path: Path) -> None:
     assert profile.model_for_tier(0) == "openrouter/free/model:free"
     assert profile.model_for_tier(1) == "openrouter/cheap/model"
     assert profile.model_for_tier(7) is None
+
+
+def test_dump_round_trips_the_example_configuration(tmp_path: Path) -> None:
+    example = Config.load(Path(__file__).parent.parent / "conductor.toml.example")
+    written = tmp_path / "conductor.toml"
+    written.write_text(example.dump())
+    assert Config.load(written) == example
+
+
+def test_dump_writes_one_tier_per_line_and_omits_empty_request_options() -> None:
+    profile = Profile(
+        name="low",
+        provider="openrouter",
+        base_url="https://openrouter.ai/api/v1",
+        api_key_env="OPENROUTER_API_KEY",
+        tiers=("openrouter/a:free", "openrouter/b"),
+        reviewer="brain",
+        max_parallel=2,
+    )
+    assert (
+        Config("low", {"low": profile}).dump()
+        == """\
+# Written by `conductor setup`. Comments added by hand are lost on the next save.
+default_privacy = "low"
+
+[privacy.low]
+provider = "openrouter"
+base_url = "https://openrouter.ai/api/v1"
+api_key_env = "OPENROUTER_API_KEY"
+max_parallel = 2
+tiers = [
+  "openrouter/a:free",
+  "openrouter/b",
+]
+reviewer = "brain"
+"""
+    )
+
+
+def test_dump_quotes_unusual_names_and_nested_options(tmp_path: Path) -> None:
+    profile = Profile(
+        name="eu only",
+        provider="p",
+        base_url="u",
+        api_key_env="K",
+        tiers=('p/odd "name"',),
+        reviewer="p/r",
+        request_options={"provider": {"only": ["a", "b"], "zdr": True}, "max tokens": 512},
+    )
+    config = Config("eu only", {"eu only": profile})
+    written = tmp_path / "conductor.toml"
+    written.write_text(config.dump())
+    assert Config.load(written) == config
