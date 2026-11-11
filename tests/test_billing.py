@@ -160,7 +160,7 @@ def test_missing_key_unknown_provider_and_http_errors_become_notes(
         api,
     )
     assert report == [
-        Balance("openrouter.ai", note="environment variable TEST_MISSING_KEY is not set"),
+        Balance("openrouter.ai", note="no API key: TEST_MISSING_KEY is not set or stored"),
         Balance("llm.example.com", note="no balance API known for this provider"),
         Balance("ai-gateway.vercel.sh", note="HTTP 401"),
     ]
