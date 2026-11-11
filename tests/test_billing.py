@@ -3,14 +3,167 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from conductor.billing import (
+    Balance,
+    BillingError,
     RunCost,
+    balances,
     ledger_path,
     project_runs,
     read_ledger,
     record_run,
     spend_by_project,
 )
+from conductor.config import Profile
+
+
+def profile(name: str, base_url: str, api_key_env: str = "TEST_BILLING_KEY") -> Profile:
+    return Profile(name, "provider", base_url, api_key_env, ("provider/m",), "provider/r")
+
+
+OPENROUTER = profile("medium", "https://openrouter.ai/api/v1")
+OPENROUTER_EU = profile("high", "https://eu.openrouter.ai/api/v1")
+VERCEL = profile("medium", "https://ai-gateway.vercel.sh/v1")
+SCALEWAY = profile("high", "https://api.scaleway.ai/v1")
+
+
+class FakeApi:
+    def __init__(self, responses: dict[str, dict[str, Any] | BillingError]) -> None:
+        self.responses = responses
+        self.calls: list[tuple[str, dict[str, str]]] = []
+
+    def __call__(self, url: str, headers: dict[str, str]) -> dict[str, Any]:
+        self.calls.append((url, headers))
+        response = self.responses[url]
+        if isinstance(response, BillingError):
+            raise response
+        return response
+
+
+@pytest.fixture(autouse=True)
+def api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TEST_BILLING_KEY", "sk-secret")
+
+
+def test_openrouter_balance_is_purchased_credits_minus_usage() -> None:
+    api = FakeApi(
+        {
+            "https://openrouter.ai/api/v1/credits": {
+                "data": {"total_credits": 100.5, "total_usage": 25.75}
+            }
+        }
+    )
+    assert balances([OPENROUTER], api) == [
+        Balance("openrouter.ai", remaining=74.75, used=25.75, currency="USD")
+    ]
+    assert api.calls[0][1]["Authorization"] == "Bearer sk-secret"
+
+
+def test_openrouter_falls_back_to_the_key_limit_without_a_management_key() -> None:
+    api = FakeApi(
+        {
+            "https://openrouter.ai/api/v1/credits": BillingError(403),
+            "https://openrouter.ai/api/v1/key": {
+                "data": {"limit": 100, "limit_remaining": 74.5, "usage": 25.5}
+            },
+        }
+    )
+    assert balances([OPENROUTER], api) == [
+        Balance("openrouter.ai", remaining=74.5, used=25.5, note="limit of this API key")
+    ]
+
+
+def test_openrouter_key_without_a_limit_reports_usage_only() -> None:
+    api = FakeApi(
+        {
+            "https://openrouter.ai/api/v1/credits": BillingError(403),
+            "https://openrouter.ai/api/v1/key": {
+                "data": {"limit": None, "limit_remaining": None, "usage": 3.0}
+            },
+        }
+    )
+    assert balances([OPENROUTER], api) == [
+        Balance(
+            "openrouter.ai",
+            remaining=None,
+            used=3.0,
+            note="account credits need a management key; usage of this API key",
+        )
+    ]
+
+
+def test_profiles_sharing_an_account_are_reported_once() -> None:
+    api = FakeApi(
+        {"https://openrouter.ai/api/v1/credits": {"data": {"total_credits": 10, "total_usage": 4}}}
+    )
+    assert len(balances([OPENROUTER, OPENROUTER_EU, OPENROUTER], api)) == 1
+    assert len(api.calls) == 1
+
+
+def test_vercel_balance_comes_from_the_credits_endpoint() -> None:
+    api = FakeApi(
+        {"https://ai-gateway.vercel.sh/v1/credits": {"balance": "95.50", "total_used": "4.50"}}
+    )
+    assert balances([VERCEL], api) == [Balance("ai-gateway.vercel.sh", remaining=95.5, used=4.5)]
+
+
+def test_scaleway_reports_the_consumption_of_the_current_month(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SCW_ORGANIZATION_ID", "org-1")
+    url = (
+        "https://api.scaleway.com/billing/v2beta1/consumptions?organization_id=org-1&page_size=100"
+    )
+    api = FakeApi(
+        {
+            url: {
+                "consumptions": [
+                    {"value": {"currency_code": "EUR", "units": 3, "nanos": 500000000}},
+                    {"value": {"currency_code": "EUR", "units": 0, "nanos": 250000000}},
+                ]
+            }
+        }
+    )
+    assert balances([SCALEWAY], api) == [
+        Balance(
+            "api.scaleway.ai",
+            remaining=None,
+            used=3.75,
+            currency="EUR",
+            note="pay as you go; consumption of the current month",
+        )
+    ]
+    assert api.calls[0][1] == {"X-Auth-Token": "sk-secret"}
+
+
+def test_scaleway_needs_the_organization_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("SCW_ORGANIZATION_ID", raising=False)
+    assert balances([SCALEWAY], FakeApi({})) == [
+        Balance("api.scaleway.ai", note="environment variable SCW_ORGANIZATION_ID is not set")
+    ]
+
+
+def test_missing_key_unknown_provider_and_http_errors_become_notes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("TEST_MISSING_KEY", raising=False)
+    api = FakeApi({"https://ai-gateway.vercel.sh/v1/credits": BillingError(401)})
+    report = balances(
+        [
+            profile("low", "https://openrouter.ai/api/v1", api_key_env="TEST_MISSING_KEY"),
+            profile("medium", "https://llm.example.com/v1"),
+            VERCEL,
+        ],
+        api,
+    )
+    assert report == [
+        Balance("openrouter.ai", note="environment variable TEST_MISSING_KEY is not set"),
+        Balance("llm.example.com", note="no balance API known for this provider"),
+        Balance("ai-gateway.vercel.sh", note="HTTP 401"),
+    ]
+    assert "sk-secret" not in repr(report)
 
 
 def finished_run(cost: float, finished_at: str = "2026-11-11T10:00:00+00:00") -> dict[str, Any]:

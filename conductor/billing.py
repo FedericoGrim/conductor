@@ -2,10 +2,34 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+from conductor.config import Profile
+
+Get = Callable[[str, dict[str, str]], dict[str, Any]]
+
+
+class BillingError(RuntimeError):
+    def __init__(self, status: int) -> None:
+        super().__init__(f"HTTP {status}")
+        self.status = status
+
+
+@dataclass(frozen=True)
+class Balance:
+    account: str
+    remaining: float | None = None
+    used: float | None = None
+    currency: str = "USD"
+    note: str = ""
+
+
+def balances(profiles: Iterable[Profile], get: Get | None = None) -> list[Balance]:
+    raise NotImplementedError
 
 
 @dataclass(frozen=True)
