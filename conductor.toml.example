@@ -11,6 +11,9 @@
 #   max_parallel    concurrent steps
 #   request_options extra JSON merged into every request body (OpenRouter routing lives here)
 
+# `conductor billing` reads the balance of the account behind each base_url (OpenRouter, Vercel AI
+# Gateway, Scaleway Generative APIs) with the key in api_key_env; see "Billing" in the README.
+
 default_privacy = "medium"
 
 # low: free models, providers may train on your prompts. Needs "free model training" enabled in

@@ -3,10 +3,12 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import subprocess
 import sys
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from conductor import reviewer
+from conductor import billing, reviewer
 from conductor.config import Config, ConfigError, Profile
 from conductor.escalation import run_step
 from conductor.log import RunLog
@@ -102,12 +104,76 @@ def run(args: argparse.Namespace) -> int:
     print(f"run {log.directory.name}: {len(plan.steps)} steps, privacy {profile.name}")
     results = asyncio.run(execute_plan(repo, plan, profile, log, args.opencode_arg))
     log.finish(results)
+    try:
+        billing.record_run(project_root(repo), profile.provider, log.directory.name, log.run)
+    except OSError as error:
+        print(f"warning: could not record the run in the ledger: {error}", file=sys.stderr)
     summary = {
         step_id: {"status": r.status, "detail": r.detail, "attempts": len(r.attempts)}
         for step_id, r in results.items()
     }
     print(json.dumps({"run": str(log.directory), "steps": summary}, indent=2))
     return 0 if all(r.status == APPROVED for r in results.values()) else 1
+
+
+class NotARepositoryError(ValueError):
+    pass
+
+
+def project_root(directory: Path) -> Path:
+    try:
+        return Path(git(directory, "rev-parse", "--show-toplevel").strip())
+    except subprocess.CalledProcessError as error:
+        raise NotARepositoryError(f"{directory} is not a git repository") from error
+
+
+def money(amount: float, currency: str = "USD") -> str:
+    return f"{amount:.4f} {currency}"
+
+
+def show_balances(args: argparse.Namespace) -> int:
+    config = Config.load(find_config(args.config))
+    for balance in billing.balances(config.profiles.values()):
+        columns = [f"{balance.account:<24}"]
+        if balance.remaining is not None:
+            columns.append(f"remaining {money(balance.remaining, balance.currency)}")
+        if balance.used is not None:
+            columns.append(f"used {money(balance.used, balance.currency)}")
+        if balance.note:
+            columns.append(f"({balance.note})")
+        print("  ".join(columns))
+    return 0
+
+
+def show_project_spend(args: argparse.Namespace) -> int:
+    project = project_root(args.repo.resolve())
+    runs = billing.project_runs(project)
+    print(f"project {project.name} ({project})")
+    if not runs:
+        print("no runs recorded")
+        return 0
+    for run in runs:
+        print(f"{run.run:<24}  {'unknown' if run.cost is None else money(run.cost)}")
+    print(f"{'total':<24}  {money(sum(run.cost or 0.0 for run in runs))}")
+    unknown = sum(run.cost is None for run in runs)
+    if unknown:
+        print(f"{unknown} run{'s' if unknown > 1 else ''} without a recorded cost")
+    return 0
+
+
+def show_projects_spend(args: argparse.Namespace) -> int:
+    since = datetime.now(UTC) - timedelta(days=args.days)
+    spend = billing.spend_by_project(billing.read_ledger(), since)
+    if not spend:
+        print(f"no runs recorded in the last {args.days} days")
+        return 0
+    total = sum(spend.values())
+    print(f"last {args.days} days")
+    for project, cost in sorted(spend.items(), key=lambda item: item[1], reverse=True):
+        share = f"{cost / total:.0%}" if total else "-"
+        print(f"{Path(project).name:<24}  {money(cost)}  {share:>4}  {project}")
+    print(f"{'total':<24}  {money(total)}")
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -130,6 +196,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="extra argument passed to every `opencode run` (repeatable)",
     )
     execute.set_defaults(handler=run)
+
+    balance = commands.add_parser("billing", help="credits left on every configured provider")
+    balance.add_argument("--config", type=Path, help="path to conductor.toml")
+    balance.set_defaults(handler=show_balances)
+    reports = balance.add_subparsers(dest="report")
+
+    project = reports.add_parser("project", help="spend of this repository, run by run")
+    project.add_argument("--repo", type=Path, default=Path("."), help="repository to report on")
+    project.set_defaults(handler=show_project_spend)
+
+    projects = reports.add_parser("projects", help="spend of the last days, split by project")
+    projects.add_argument("--days", type=int, default=30, help="length of the period in days")
+    projects.set_defaults(handler=show_projects_spend)
     return parser
 
 
@@ -138,7 +217,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         code: int = args.handler(args)
         return code
-    except (PlanError, ConfigError, reviewer.ReviewerError) as error:
+    except (PlanError, ConfigError, reviewer.ReviewerError, NotARepositoryError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
 

@@ -34,6 +34,11 @@ class Verdict:
     raw: str
     usage: dict[str, Any] = field(default_factory=dict)
 
+    @property
+    def cost(self) -> float | None:
+        reported = self.usage.get("cost")
+        return float(reported) if isinstance(reported, int | float) else None
+
 
 def http_post(url: str, headers: dict[str, str], body: dict[str, Any]) -> dict[str, Any]:
     request = urllib.request.Request(
