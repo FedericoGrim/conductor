@@ -12,7 +12,7 @@ CLI that executes a `plan.json` written by a "brain" model (Claude in Claude Cod
 Simple layering, no tactical DDD: a small tool with little business logic.
 - `conductor/plan.py` — `Plan`, `Step` models and validation (unique ids, known `depends_on`, no cycles, difficulty between 1 and `DIFFICULTY_LEVELS`).
 - `conductor/config.py` — `conductor.toml`: privacy profiles, each with five difficulty levels (a model or an ordered list with fallbacks, cheapest first), one or more providers, reviewers (a model, a list, or `brain`), `max_parallel`, `retry`. A model id is `<provider>/<model>`.
-- `conductor/defaults.py` — the built-in `low`/`medium`/`high` profiles (five levels each) and `DIFFICULTY_LEVELS`.
+- `conductor/defaults.py` — the built-in `low`/`medium`/`high` profiles (five levels each, with fallbacks on a second provider: DeepSeek, Vercel, Scaleway) and `DIFFICULTY_LEVELS`.
 - `conductor/privacy.py` — a profile → the `opencode.json` written in each worktree (one entry per provider) and the reviewer request options.
 - `conductor/scheduler.py` — asyncio DAG scheduler bounded by `max_parallel`.
 - `conductor/worker.py` — worktree creation, `opencode run --format json` with streamed events (stopped after the retry limit), OpenCode error classification, diff capture.
@@ -27,7 +27,7 @@ Simple layering, no tactical DDD: a small tool with little business logic.
 - `conductor/credentials.py` — API keys from the environment first, then `auth.json`.
 - `conductor/settings.py` — export and import of the instance settings, with a `[conductor]` metadata table and no keys.
 - `conductor/billing.py` — provider balances (chosen by the profile's `base_url` host), the cross-project spend ledger and its totals.
-- `conductor/cli.py` — `conductor run plan.json --privacy low|medium|high`, `conductor validate plan.json`, `conductor billing [project|projects]`, `conductor setup`.
+- `conductor/cli.py` — `conductor run plan.json --privacy low|medium|high`, `conductor validate plan.json [--config]` (warns about levels relying on one provider), `conductor billing [project|projects]`, `conductor setup`.
 Rule: no module imports OpenCode or provider specifics except `worker.py`, `reviewer.py`, `privacy.py`, `catalog.py` and `billing.py`.
 
 ## Commands
@@ -39,7 +39,7 @@ Rule: no module imports OpenCode or provider specifics except `worker.py`, `revi
 - Move the settings between machines: `.venv/bin/conductor config export FILE` / `config import FILE`
 
 ## Environment
-- `OPENROUTER_API_KEY` (or the `api_key_env` named in the chosen profile) for the reviewer call: from the environment, or from `~/.local/share/conductor/auth.json` written by `conductor setup`.
+- `OPENROUTER_API_KEY`, and for the default fallbacks `DEEPSEEK_API_KEY` (low), `AI_GATEWAY_API_KEY` (medium), `SCALEWAY_API_KEY` (high) — or the `api_key_env` named in the chosen profile — for the reviewer call: from the environment, or from `~/.local/share/conductor/auth.json` written by `conductor setup`.
 - The same key env names for `conductor billing`; `SCW_ORGANIZATION_ID` for Scaleway.
 - OpenCode providers are authenticated with `opencode auth login`, outside Conductor.
 - Repository secret `RELEASE_PLEASE_TOKEN`: fine-grained token (Contents and Pull requests, read and write, this repository only) used by release-please so that CI runs on its PRs. If it is missing or expired, release-please falls back to `GITHUB_TOKEN` and the `checks` run on the release PR must be approved by hand (`gh run rerun <id>` or "Approve and run" on the PR).
