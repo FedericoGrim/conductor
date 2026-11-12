@@ -86,17 +86,19 @@ Significant decisions for this project. Newest at the bottom. Entries are never 
 
 ## 011 — Fallback models within a difficulty level
 - **Date:** 2026-11-11
-- **Status:** Proposed
+- **Status:** Accepted (2026-11-12)
 - **Context:** Decision 007 gives every level exactly one model, and CLAUDE.md forbids retrying on model errors other than a reviewer rejection. A single provider outage therefore fails the step and skips its dependents; an HTTP error from the reviewer aborts the run. Decision 009 already lists this as a consequence of pinning upstreams.
 - **Decision:** A level is an ordered list of models; a plain string stays a one-model list. The reviewer is a list too. Errors are classified:
-  - *transient* (429, 5xx, timeout, network): retry the same model up to `retry.transient_attempts` times, waiting `retry.backoff_seconds`, then move to the next model;
+  - *transient* (429, 5xx, network): OpenCode retries these itself, with its own backoff and no limit. Conductor reads the event stream while the worker runs, stops the process once it has seen more than `retry.transient_attempts` `retry` events (default 3, per profile), then moves to the next model. There is no `backoff_seconds`: the wait is OpenCode's;
   - *provider unusable* (401, 402, missing key): move to the next model on a different provider and exclude that provider for the rest of the run;
   - *model unsuitable* (context exceeded, unknown model): move to the next model;
   - *unclassified*: the step fails, as today.
 
-  A level exhausted by errors ends the step as `unavailable`; it never escalates, so an outage cannot move work onto a pricier level. A reviewer rejection still escalates. Fallback models must belong to providers of the same profile, so the profile's data policy holds. Every fallback starts on a fresh worktree. Attempt records list each fallback with its error class, and costs are those of the model that actually ran.
+  Verified on OpenCode 2.2.7 against a fake OpenAI-compatible provider: errors that are not retried end with exit code 1 and an `error` event; retried ones emit `retry` events and never end on their own. The event's `error.type` gives the class: `provider.rate-limit`, `provider.internal` and `provider.transport` are transient; `provider.auth` and `provider.quota` make the provider unusable; `provider.no-route`, and `provider.invalid-request` whose message mentions the context length, make the model unsuitable. Any other type is unclassified.
+
+  A level exhausted by errors ends the step as `unavailable`; it never escalates, so an outage cannot move work onto a pricier level. A reviewer rejection still escalates. Fallback models must belong to providers of the same profile, so the profile's data policy holds. Every fallback starts on a fresh worktree. Attempt records list each fallback with its error class, and costs are those of the model that actually ran. Reviewer errors (HTTP failures and unparseable verdicts) move to the next reviewer without costing the worker a level; when every reviewer has failed, the step becomes `needs_brain_review` instead of aborting the run, and it is never approved.
 - **Alternatives:** Gateway fallbacks only (`allow_fallbacks` covers upstreams of one model, not a gateway outage or a direct provider); escalating on errors (outages turn into cost surprises); retrying any error blindly (hides real failures, burns budget).
-- **Consequences:** Replaces the "one model each" part of 007 and the "do not retry" rule. The configuration stays backward compatible. `conductor setup` edits lists, and the shipped defaults need second models chosen with the rule of 008. `validate` warns when every model of a level sits on one provider. The classification depends on how OpenCode reports errors, which must be verified first; if it cannot be read reliably, the rule degrades to "any error → next model", capped.
+- **Consequences:** Replaces the "one model each" part of 007 and the "do not retry" rule. The configuration stays backward compatible. `conductor setup` edits lists, and the shipped defaults gain a direct provider next to OpenRouter, with second models chosen with the rule of 008, so a gateway outage is covered too (at the price of a second key). `validate` warns when every model of a level sits on one provider. The classification follows OpenCode's error types, which can change between releases: an unknown type is unclassified and fails the step visibly rather than being retried. The worker runner must stream events instead of waiting for the process to end.
 
 ## 012 — Autonomy levels: ask, guided, free
 - **Date:** 2026-11-11
