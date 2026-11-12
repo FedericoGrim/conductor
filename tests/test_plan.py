@@ -81,3 +81,63 @@ def test_rejects_malformed_answers(answers: object) -> None:
     bad["answers"] = answers
     with pytest.raises(PlanError, match="step 'a': answers"):
         Plan.from_dict({"goal": "g", "steps": [bad]})
+
+
+def test_the_plan_declares_rules_a_rules_file_and_default_verify_commands() -> None:
+    plan = Plan.from_dict(
+        {
+            "goal": "g",
+            "rules": ["Totals never go negative"],
+            "rules_file": "docs/rules.md",
+            "verify": ["pytest -q"],
+            "verify_timeout": 120,
+            "steps": [step("a")],
+        }
+    )
+    assert plan.rules == ("Totals never go negative",)
+    assert plan.rules_file == "docs/rules.md"
+    assert plan.verify == ("pytest -q",)
+    assert plan.verify_timeout == 120
+
+
+def test_a_step_inherits_the_plan_verify_unless_it_has_its_own() -> None:
+    own, none, inherits = step("own"), step("none"), step("inherits")
+    own["verify"] = ["pytest -q tests/test_own.py"]
+    none["verify"] = []
+    plan = Plan.from_dict({"goal": "g", "verify": ["pytest -q"], "steps": [own, none, inherits]})
+    assert [plan.verify_for(s) for s in plan.steps] == [
+        ("pytest -q tests/test_own.py",),
+        (),
+        ("pytest -q",),
+    ]
+
+
+def test_the_new_fields_are_optional() -> None:
+    plan = Plan.from_dict({"goal": "g", "steps": [step("a")]})
+    assert (plan.rules, plan.rules_file, plan.verify) == ((), None, ())
+    assert plan.verify_timeout == 600
+    assert plan.verify_for(plan.steps[0]) == ()
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("rules", "one rule", "rules must be a list of non-empty strings"),
+        ("rules", [""], "rules must be a list of non-empty strings"),
+        ("verify", ["ok", 3], "verify must be a list of non-empty strings"),
+        ("rules_file", "/etc/passwd", "rules_file must be a relative path inside the repository"),
+        ("rules_file", "../outside.md", "rules_file must be a relative path inside the repository"),
+        ("verify_timeout", 0, "verify_timeout must be a positive number of seconds"),
+        ("verify_timeout", True, "verify_timeout must be a positive number of seconds"),
+    ],
+)
+def test_rejects_malformed_plan_fields(field: str, value: object, message: str) -> None:
+    with pytest.raises(PlanError, match=message):
+        Plan.from_dict({"goal": "g", field: value, "steps": [step("a")]})
+
+
+def test_rejects_a_malformed_step_verify() -> None:
+    bad = step("a")
+    bad["verify"] = "pytest"
+    with pytest.raises(PlanError, match="step 'a': verify must be a list of non-empty strings"):
+        Plan.from_dict({"goal": "g", "steps": [bad]})

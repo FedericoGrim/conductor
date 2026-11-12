@@ -15,6 +15,7 @@ from conductor.errors import (
 from conductor.escalation import RunState, build_prompt, run_step
 from conductor.plan import Answer, Step
 from conductor.reviewer import Verdict
+from conductor.verify import CheckResult
 from conductor.worker import AttemptOutput
 from tests.factories import make_profile
 
@@ -36,23 +37,33 @@ def run(
     profile: Profile = PROFILE,
     state: RunState | None = None,
     reviewed: list[str] | None = None,
+    checks: list[list[CheckResult]] | None = None,
+    checked: list[int] | None = None,
+    judged_checks: list[list[CheckResult]] | None = None,
 ) -> Any:
     calls: list[tuple[int, str, str]] = []
     recorded: list[dict[str, Any]] = []
     outputs = outputs or [output() for _ in verdicts]
     judged = list(reversed(range(len(verdicts))))
     reviewed = [] if reviewed is None else reviewed
+    judged_checks = [] if judged_checks is None else judged_checks
 
     async def attempt(step: Step, number: int, model: str, prompt: str) -> AttemptOutput:
         calls.append((number, model, prompt))
         return outputs[number - 1]
 
-    def judge(model: str, spec: str, diff: str) -> Verdict:
+    def judge(model: str, spec: str, diff: str, checks: list[CheckResult]) -> Verdict:
         reviewed.append(model)
+        judged_checks.append(checks)
         return verdicts[judged.pop()]
 
     def record(step: Step, data: dict[str, Any]) -> None:
         recorded.append(data)
+
+    async def check(step: Step, number: int) -> list[CheckResult]:
+        if checked is not None:
+            checked.append(number)
+        return checks.pop(0) if checks else []
 
     result = asyncio.run(
         run_step(
@@ -62,6 +73,7 @@ def run(
             judge=judge,
             record=record,
             state=state or RunState(),
+            check=check,
         )
     )
     return result, calls, recorded
@@ -150,7 +162,7 @@ def test_brain_reviewer_hands_the_diff_back_without_judging() -> None:
     async def attempt(step: Step, number: int, model: str, prompt: str) -> AttemptOutput:
         return output()
 
-    def judge(model: str, spec: str, diff: str) -> Verdict:
+    def judge(model: str, spec: str, diff: str, checks: list[CheckResult]) -> Verdict:
         raise AssertionError("brain profile must not call the reviewer")
 
     result = asyncio.run(
@@ -402,7 +414,7 @@ def test_a_step_with_answers_puts_them_in_the_prompt_and_reaches_the_reviewer() 
         calls.append(prompt)
         return output()
 
-    def judge(model: str, spec: str, diff: str) -> Verdict:
+    def judge(model: str, spec: str, diff: str, checks: list[CheckResult]) -> Verdict:
         reviewed.append(model)
         return Verdict(True, "ok", "{}")
 
@@ -420,3 +432,68 @@ def test_the_prompt_asks_for_a_question_instead_of_a_guess() -> None:
     assert "Do not ask questions" not in prompt
     assert "QUESTION:" in prompt
     assert "Answers to your earlier questions" not in prompt
+
+
+PASSED = CheckResult("pytest -q", 0, "3 passed", 1.0)
+FAILED_CHECK = CheckResult("pytest -q", 1, "1 failed: test_total_is_never_negative", 1.0)
+
+
+def test_a_failed_check_rejects_the_attempt_without_calling_the_reviewer() -> None:
+    reviewed: list[str] = []
+    result, calls, recorded = run(
+        [Verdict(True, "ok", "{}")],
+        outputs=[output(), output()],
+        reviewed=reviewed,
+        checks=[[PASSED, FAILED_CHECK], [PASSED]],
+    )
+    assert result.status == "approved"
+    assert [c[1] for c in calls] == ["openrouter/t1", "openrouter/t2"]
+    assert reviewed == ["openrouter/r"]
+    assert recorded[0]["review"] is None
+    assert recorded[0]["verify"][1]["exit_code"] == 1
+    assert "test_total_is_never_negative" in calls[1][2]
+
+
+def test_a_failed_check_on_the_last_level_fails_the_step() -> None:
+    result, _, _ = run([], checks=[[FAILED_CHECK], [FAILED_CHECK]], outputs=[output(), output()])
+    assert result.status == "failed"
+    assert "verification failed: `pytest -q` (exit 1)" in result.detail
+
+
+def test_passing_checks_are_recorded_before_the_review() -> None:
+    _, _, recorded = run([Verdict(True, "ok", "{}")], checks=[[PASSED]])
+    assert recorded[0]["verify"] == [
+        {
+            "command": "pytest -q",
+            "exit_code": 0,
+            "output": "3 passed",
+            "seconds": 1.0,
+            "timed_out": False,
+        }
+    ]
+
+
+def test_the_brain_only_receives_verified_diffs() -> None:
+    profile = make_profile(
+        name="low",
+        api_key_env="K",
+        tiers=("openrouter/t0", "openrouter/t1", "openrouter/t2"),
+        reviewer="brain",
+    )
+    result, calls, _ = run(
+        [], outputs=[output(), output()], profile=profile, checks=[[FAILED_CHECK], [PASSED]]
+    )
+    assert result.status == "needs_brain_review"
+    assert len(calls) == 2
+
+
+def test_a_question_runs_no_checks() -> None:
+    checked: list[int] = []
+    run([], outputs=[asking()], checked=checked)
+    assert checked == []
+
+
+def test_the_reviewer_receives_the_checks_that_passed() -> None:
+    judged_checks: list[list[CheckResult]] = []
+    run([Verdict(True, "ok", "{}")], checks=[[PASSED]], judged_checks=judged_checks)
+    assert judged_checks == [[PASSED]]

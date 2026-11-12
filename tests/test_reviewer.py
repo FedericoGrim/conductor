@@ -15,6 +15,7 @@ from conductor.errors import (
     ModelError,
 )
 from conductor.reviewer import Verdict, review
+from conductor.verify import CheckResult
 from tests.factories import make_profile
 
 PROFILE = make_profile(
@@ -266,3 +267,50 @@ def test_the_review_uses_the_reviewer_it_is_given(monkeypatch: pytest.MonkeyPatc
     review(profile, "scaleway/r2", spec="s", diff="+x", post=fake_post)
     assert captured["url"] == "https://api.scaleway.ai/v1/chat/completions"
     assert captured["body"]["model"] == "r2"
+
+
+def captured_request(monkeypatch: pytest.MonkeyPatch, **context: Any) -> dict[str, Any]:
+    monkeypatch.setenv("TEST_REVIEW_KEY", "k")
+    captured: dict[str, Any] = {}
+
+    def fake_post(url: str, headers: dict[str, str], body: dict[str, Any]) -> dict[str, Any]:
+        captured.update(body=body)
+        return completion('{"ok": true, "reason": "fine"}')
+
+    review(PROFILE, PROFILE.reviewers[0], spec="s", diff="+x", post=fake_post, **context)
+    body: dict[str, Any] = captured["body"]
+    return body
+
+
+def test_the_domain_rules_reach_the_reviewer_as_their_own_section(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    body = captured_request(monkeypatch, rules=("Totals never go negative", "No ORM in domain/"))
+    prompt = body["messages"][-1]["content"]
+    assert "## Domain rules\n- Totals never go negative\n- No ORM in domain/" in prompt
+    assert prompt.index("## Domain rules") < prompt.index("## Diff")
+
+
+def test_the_verification_results_reach_the_reviewer(monkeypatch: pytest.MonkeyPatch) -> None:
+    passed = CheckResult("pytest -q", 0, "x" * 5000 + "12 passed", 3.0)
+    body = captured_request(monkeypatch, checks=[passed])
+    prompt = body["messages"][-1]["content"]
+    assert "## Verification (run by Conductor)\n- `pytest -q`: exit 0" in prompt
+    assert "12 passed" in prompt
+    assert len(prompt) < 2500
+
+
+def test_without_rules_or_checks_the_sections_are_left_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prompt = captured_request(monkeypatch)["messages"][-1]["content"]
+    assert "## Domain rules" not in prompt
+    assert "## Verification" not in prompt
+
+
+def test_the_reviewer_judges_tests_and_domain_rules_explicitly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    system = captured_request(monkeypatch)["messages"][0]["content"]
+    for criterion in ("tests", "domain rules", "JSON only"):
+        assert criterion in system

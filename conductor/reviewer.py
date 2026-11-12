@@ -19,15 +19,23 @@ from conductor.errors import (
     mentions_context_limit,
 )
 from conductor.privacy import api_model_id
+from conductor.verify import CheckResult
 
 Post = Callable[[str, dict[str, str], dict[str, Any]], dict[str, Any]]
 
 SYSTEM_PROMPT = (
-    "You are a strict code reviewer. You receive a task specification and the diff that "
-    "a model produced for it. Decide whether the diff correctly and completely implements "
-    "the specification without introducing obvious bugs or security issues. "
+    "You are a strict code reviewer. You receive a task specification, the diff a model "
+    "produced for it, the domain rules of the project and the verification commands that "
+    "already passed. Approve only if every criterion holds:\n"
+    "1. The diff implements the specification completely.\n"
+    "2. New or changed behaviour comes with tests in the diff that exercise it; documentation "
+    "and configuration need none.\n"
+    "3. The domain rules hold: names, invariants and boundaries.\n"
+    "4. There are no obvious bugs or security issues.\n"
+    "On rejection, name the criterion and what to change. "
     'Answer with JSON only: {"ok": true|false, "reason": "<one or two sentences>"}.'
 )
+CHECK_OUTPUT_LIMIT = 1000
 
 JSON_BLOCK = re.compile(r"\{.*\}", re.DOTALL)
 PROVIDER_UNUSABLE_STATUSES = {401, 402, 403}
@@ -86,7 +94,30 @@ def classify_http_error(error: urllib.error.HTTPError) -> ModelError:
     return ModelError.of(kind, f"http-{error.code}", body or str(error.reason))
 
 
-def review(profile: Profile, model: str, spec: str, diff: str, post: Post | None = None) -> Verdict:
+def review_request(spec: str, diff: str, rules: tuple[str, ...], checks: list[CheckResult]) -> str:
+    sections = [f"## Specification\n{spec}"]
+    if rules:
+        sections.append("## Domain rules\n" + "\n".join(f"- {rule}" for rule in rules))
+    if checks:
+        outcomes = "\n".join(
+            f"- `{check.command}`: exit {check.exit_code}\n"
+            f"```\n{check.output[-CHECK_OUTPUT_LIMIT:].strip()}\n```"
+            for check in checks
+        )
+        sections.append(f"## Verification (run by Conductor)\n{outcomes}")
+    sections.append(f"## Diff\n```diff\n{diff}\n```")
+    return "\n\n".join(sections)
+
+
+def review(
+    profile: Profile,
+    model: str,
+    spec: str,
+    diff: str,
+    post: Post | None = None,
+    rules: tuple[str, ...] = (),
+    checks: list[CheckResult] | None = None,
+) -> Verdict:
     post = post or http_post
     provider = profile.provider_for(model)
     if not provider.is_https:
@@ -111,10 +142,7 @@ def review(profile: Profile, model: str, spec: str, diff: str, post: Post | None
         "model": api_model_id(provider.name, model),
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {
-                "role": "user",
-                "content": f"## Specification\n{spec}\n\n## Diff\n```diff\n{diff}\n```",
-            },
+            {"role": "user", "content": review_request(spec, diff, rules, checks or [])},
         ],
     }
     try:

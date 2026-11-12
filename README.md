@@ -9,13 +9,14 @@ Conductor takes a `plan.json` produced by a planning model (Claude in Claude Cod
 1. The brain writes `plan.json`: steps with a spec, the files to touch, a difficulty from 1 (trivial) to 5 (hard), and dependencies.
 2. `conductor run plan.json --privacy medium` picks the profile from `conductor.toml`.
 3. Every step whose dependencies are approved starts, up to `max_parallel` at once, in its own worktree branched from the current branch. The step runs `opencode run --format json --auto` on the first model of its difficulty level, `tiers[difficulty - 1]`. A level may list fallback models after the first one.
-4. The reviewer model receives the spec and the diff and answers `{"ok": bool, "reason": str}`. `reviewer` may also list fallbacks.
-5. Rejected: the step restarts on the first usable model of the next difficulty level with the reason in the prompt, possibly on a different provider. Rejected on level 5: `failed`, and its dependents are `skipped`.
+4. Verification: the step's `verify` commands (from the plan) run in the worktree with `sh -c`, `$CONDUCTOR_REPO` pointing at the main repository. The first failure rejects the attempt with the command's output as the reason, without calling the reviewer.
+5. The reviewer model receives the spec, the plan's domain rules, the verification results and the diff, and approves only if the spec is complete, new behaviour has tests in the diff, the domain rules hold and there is no obvious bug; it answers `{"ok": bool, "reason": str}`. `reviewer` may also list fallbacks.
+6. Rejected: the step restarts on the first usable model of the next difficulty level with the reason in the prompt, possibly on a different provider. Rejected on level 5: `failed`, and its dependents are `skipped`.
    - Model or provider error: the step never escalates on an error. OpenCode retries rate limits, server and network errors by itself; after `retry.transient_attempts` of those retries (default 3, per profile) Conductor stops the worker. A transient error or an unsuitable model (context exceeded, unknown model) moves to the next model of the same level, on a fresh worktree; an unusable provider (bad key, no credit) is also excluded for the rest of the run. When no model of the level is left, the step is `unavailable`; an unclassified error ends it as `failed` at once. Each fallback is its own attempt, with the classified error in its `error`.
    - Reviewer error: an HTTP or network failure, a missing key or an unparseable verdict moves to the next reviewer without costing the worker a level, and an unusable reviewer provider is excluded for the run (separately from the workers, whose keys live in OpenCode). The failed reviewers are listed in the attempt's `review_fallbacks`. When every reviewer fails, the diff goes to the brain as `needs_brain_review`, with the error in `review.error`; the run goes on and the step is never approved.
-6. Question: when the spec leaves open a decision with different consequences, the worker stops before changing files and ends its reply with a `QUESTION:` block. The step becomes `needs_answer` (not reviewed, not escalated, nothing merged), the question is in `run.json`, and its dependents are `skipped`. The brain answers it, or asks the user, and reruns the step with `answers`.
-7. Approved: the branch is merged into the current branch; a conflict is reported as `conflict` and the branch is kept for the brain.
-8. `.conductor/runs/<timestamp>/run.json` summarises the run; `step-<id>/attempt-<n>.json` holds the prompt, the full OpenCode event transcript, the diff and the reviewer's verdict of every attempt.
+7. Question: when the spec leaves open a decision with different consequences, the worker stops before changing files and ends its reply with a `QUESTION:` block. The step becomes `needs_answer` (not reviewed, not escalated, nothing merged), the question is in `run.json`, and its dependents are `skipped`. The brain answers it, or asks the user, and reruns the step with `answers`.
+8. Approved: the branch is merged into the current branch; a conflict is reported as `conflict` and the branch is kept for the brain.
+9. `.conductor/runs/<timestamp>/run.json` summarises the run; `step-<id>/attempt-<n>.json` holds the prompt, the full OpenCode event transcript, the diff and the reviewer's verdict of every attempt.
 
 ## Privacy levels
 
@@ -115,6 +116,10 @@ Multi-step changes (two or more steps, or several files) go through the `conduct
 ```json
 {
   "goal": "one line",
+  "rules": ["Order totals never go negative"],
+  "rules_file": "docs/domain-rules.md",
+  "verify": ["$CONDUCTOR_REPO/.venv/bin/pytest -q"],
+  "verify_timeout": 600,
   "steps": [
     {"id": "core", "title": "...", "spec": "detailed instructions", "files": ["a.py"], "difficulty": 1, "depends_on": []},
     {"id": "cli", "spec": "...", "difficulty": 2, "depends_on": ["core"],
@@ -123,7 +128,7 @@ Multi-step changes (two or more steps, or several files) go through the `conduct
 }
 ```
 
-`difficulty` is 1 to 5 and picks the level of the chosen profile. `answers` is optional: the brain adds it when it reruns a step that stopped with a question, and the worker receives it in its prompt. Check it with `conductor validate plan.json`; when a `conductor.toml` is found (or given with `--config`), it also warns about levels and reviewers that rely on a single provider. Parallel steps must not touch the same files, or they will conflict at merge time.
+`difficulty` is 1 to 5 and picks the level of the chosen profile. `rules`, `rules_file`, `verify` and `verify_timeout` are optional: `verify` applies to every step unless a step sets its own (`[]` drops it), and `rules_file` is read from the repository when the run starts. `answers` is optional: the brain adds it when it reruns a step that stopped with a question, and the worker receives it in its prompt. Check it with `conductor validate plan.json`; when a `conductor.toml` is found (or given with `--config`), it also warns about levels and reviewers that rely on a single provider. Parallel steps must not touch the same files, or they will conflict at merge time.
 
 ## Development
 
