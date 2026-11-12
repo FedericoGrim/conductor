@@ -144,3 +144,21 @@ def test_prompt_contains_goal_spec_files_and_feedback() -> None:
     prompt = build_prompt("ship v1", STEP, feedback="missing edge case")
     for text in ("ship v1", "Parser", "write a parser", "parser.py", "missing edge case"):
         assert text in prompt
+
+
+def test_a_reviewer_error_hands_the_diff_to_the_brain_without_escalating() -> None:
+    error = ModelError(TRANSIENT, "http-503", "unavailable")
+    result, calls, recorded = run([Verdict(False, "reviewer unavailable", "", error=error)])
+    assert result.status == "needs_brain_review"
+    assert len(calls) == 1
+    assert "unavailable" in result.detail
+    assert recorded[0]["review"]["error"] == {
+        "kind": TRANSIENT,
+        "type": "http-503",
+        "message": "unavailable",
+    }
+
+
+def test_a_reviewer_verdict_records_no_error() -> None:
+    _, _, recorded = run([Verdict(True, "fine", "{}")])
+    assert recorded[0]["review"]["error"] is None

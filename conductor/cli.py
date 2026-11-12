@@ -295,7 +295,6 @@ def main(argv: list[str] | None = None) -> int:
     except (
         PlanError,
         ConfigError,
-        reviewer.ReviewerError,
         NotARepositoryError,
         settings.SettingsError,
     ) as error:

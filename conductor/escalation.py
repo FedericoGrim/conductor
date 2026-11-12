@@ -92,9 +92,14 @@ async def run_step(
             "reason": verdict.reason,
             "raw": verdict.raw,
             "usage": verdict.usage,
+            "error": asdict(verdict.error) if verdict.error else None,
         }
         entry["cost"]["reviewer"] = verdict.cost
         record(step, entry)
+        if verdict.error is not None:
+            result.status = NEEDS_BRAIN_REVIEW
+            result.detail = verdict.reason
+            return result
         if verdict.ok:
             result.status = APPROVED
             result.detail = verdict.reason
