@@ -8,19 +8,24 @@ from typing import Any
 import pytest
 
 from conductor.errors import TRANSIENT
-from conductor.worker import (
+from conductor.harness import (
+    OPENCODE,
     build_command,
+    events_cost,
+    final_text,
+    is_retry,
+    session_id,
+    write_opencode_config,
+)
+from conductor.worker import (
     commit_work,
     create_worktree,
     diff_against,
-    events_cost,
     exclude_from_git,
-    final_text,
     parse_events,
     retry_limit,
     run_attempt,
     subprocess_runner,
-    write_opencode_config,
 )
 
 
@@ -61,9 +66,9 @@ def test_parse_events_keeps_json_lines_and_session_id() -> None:
             json.dumps({"type": "text", "sessionID": "ses_1", "text": "done"}),
         ]
     )
-    events, session_id = parse_events(raw)
+    events = parse_events(raw)
     assert [e["type"] for e in events] == ["step-start", "text"]
-    assert session_id == "ses_1"
+    assert session_id(events) == "ses_1"
 
 
 def test_worktree_config_commit_and_diff(tmp_path: Path) -> None:
@@ -119,14 +124,14 @@ def retry_line(kind: str = "provider.rate-limit") -> str:
 
 
 def test_retry_limit_stops_after_more_retries_than_allowed() -> None:
-    should_stop = retry_limit(2)
+    should_stop = retry_limit(2, is_retry)
     decisions = [should_stop(line) for line in ['{"type":"text"}', retry_line(), retry_line()]]
     assert decisions == [False, False, False]
     assert should_stop(retry_line()) is True
 
 
 def test_retry_limit_ignores_lines_that_are_not_json() -> None:
-    should_stop = retry_limit(0)
+    should_stop = retry_limit(0, is_retry)
     assert should_stop("retry") is False
     assert should_stop(retry_line()) is True
 
@@ -181,6 +186,7 @@ def test_run_attempt_uses_injected_runner(tmp_path: Path) -> None:
             extra_args=[],
             commit_message="conductor: s1 attempt 1",
             transient_attempts=3,
+            harness=OPENCODE,
             runner=fake_runner,
         )
     )
@@ -219,6 +225,7 @@ def test_run_attempt_stops_after_the_retry_limit_and_reports_a_transient_error(
             extra_args=[],
             commit_message="conductor: s1 attempt 1",
             transient_attempts=2,
+            harness=OPENCODE,
             runner=retrying_runner,
         )
     )

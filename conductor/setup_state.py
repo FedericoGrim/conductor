@@ -4,7 +4,14 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from conductor.config import DEFAULT_TRANSIENT_ATTEMPTS, Config, Profile, Provider, provider_of
+from conductor.config import (
+    DEFAULT_HARNESS,
+    DEFAULT_TRANSIENT_ATTEMPTS,
+    Config,
+    Profile,
+    Provider,
+    provider_of,
+)
 from conductor.defaults import DIFFICULTY_LEVELS, default_config
 
 PROFILE_NAME = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
@@ -45,6 +52,7 @@ class ProviderDraft:
     api_key_env: str
     request_options: dict[str, Any] = field(default_factory=dict)
     model_options: dict[str, dict[str, Any]] = field(default_factory=dict)
+    harness: str = DEFAULT_HARNESS
 
     @classmethod
     def from_provider(cls, provider: Provider) -> ProviderDraft:
@@ -54,6 +62,7 @@ class ProviderDraft:
             provider.api_key_env,
             dict(provider.request_options),
             {model: dict(options) for model, options in provider.model_options.items()},
+            provider.harness,
         )
 
     def to_provider(self) -> Provider:
@@ -63,6 +72,7 @@ class ProviderDraft:
             self.api_key_env,
             dict(self.request_options),
             {model: dict(options) for model, options in self.model_options.items()},
+            self.harness,
         )
 
 

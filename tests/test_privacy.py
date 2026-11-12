@@ -127,3 +127,19 @@ def test_vercel_gateway_options_are_unwrapped_for_opencode() -> None:
     gateway = {"gateway": {"disallowPromptTraining": True}}
     assert provider["options"] == {"baseURL": "https://ai-gateway.vercel.sh/v1", **gateway}
     assert provider["models"] == {"openai/gpt-5.6-luna": {"options": gateway}}
+
+
+def test_providers_without_url_are_left_to_the_harness() -> None:
+    from conductor.config import Profile, Provider
+
+    profile = Profile(
+        "medium",
+        {
+            "subscription": Provider("subscription", "", ""),
+            "openrouter": Provider("openrouter", "https://openrouter.ai/api/v1", "K"),
+        },
+        (("subscription/opus", "openrouter/a"),),
+        ("openrouter/a",),
+    )
+    config = opencode_config(profile)
+    assert set(config["provider"]) == {"openrouter"}

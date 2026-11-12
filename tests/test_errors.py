@@ -7,7 +7,7 @@ from conductor.errors import (
     UNCLASSIFIED,
     ModelError,
 )
-from conductor.worker import attempt_error, classify_opencode_error
+from conductor.harness import attempt_error, classify_opencode_error
 
 
 def error_event(kind: str, message: str = "boom", event: str = "error") -> dict[str, object]:

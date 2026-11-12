@@ -303,3 +303,8 @@ def test_the_reviewer_takes_fallbacks_unless_it_is_the_brain() -> None:
     model.set_reviewer("brain")
     with pytest.raises(SetupError, match="brain"):
         model.add_reviewer_fallback("openrouter/m4")
+
+
+def test_drafts_keep_the_harness_of_a_provider() -> None:
+    managed = Provider("subscription", "", "", harness="opencode")
+    assert ProviderDraft.from_provider(managed).to_provider() == managed

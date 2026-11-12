@@ -334,3 +334,57 @@ def test_dump_writes_lists_only_for_levels_with_fallbacks(tmp_path: Path) -> Non
     written = tmp_path / "conductor.toml"
     written.write_text(text)
     assert Config.load(written) == config
+
+
+HARNESS_MANAGED = """
+default_privacy = "medium"
+[privacy.medium]
+tiers = ["openrouter/a", ["subscription/opus", "openrouter/b"]]
+reviewer = "openrouter/a"
+
+[privacy.medium.providers.openrouter]
+base_url = "https://openrouter.ai/api/v1"
+api_key_env = "OPENROUTER_API_KEY"
+
+[privacy.medium.providers.subscription]
+harness = "opencode"
+"""
+
+
+def managed_profile(text: str = HARNESS_MANAGED) -> Profile:
+    return Profile.from_dict("medium", tomllib.loads(text)["privacy"]["medium"])
+
+
+def test_a_provider_managed_by_its_harness_has_no_url_or_key() -> None:
+    provider = managed_profile().providers["subscription"]
+    assert (provider.base_url, provider.api_key_env, provider.harness) == ("", "", "opencode")
+    assert managed_profile().providers["openrouter"].harness == "opencode"
+
+
+def test_base_url_and_api_key_env_come_together() -> None:
+    text = HARNESS_MANAGED.replace('harness = "opencode"', 'api_key_env = "K"')
+    with pytest.raises(ConfigError, match="subscription: set both base_url and api_key_env"):
+        managed_profile(text)
+
+
+def test_an_unknown_harness_is_rejected() -> None:
+    text = HARNESS_MANAGED.replace('harness = "opencode"', 'harness = "emacs"')
+    with pytest.raises(ConfigError, match="subscription: unknown harness 'emacs'"):
+        managed_profile(text)
+
+
+def test_a_provider_without_url_cannot_review() -> None:
+    text = HARNESS_MANAGED.replace('reviewer = "openrouter/a"', 'reviewer = "subscription/opus"')
+    with pytest.raises(ConfigError, match="reviewer 'subscription/opus'.*no base_url"):
+        managed_profile(text)
+
+
+def test_dump_omits_what_a_managed_provider_does_not_have(tmp_path: Path) -> None:
+    config = Config("medium", {"medium": managed_profile()})
+    text = config.dump()
+    section = text[text.index("[privacy.medium.providers.subscription]") :]
+    assert "base_url" not in section
+    assert "harness" not in section
+    written = tmp_path / "conductor.toml"
+    written.write_text(text)
+    assert Config.load(written) == config

@@ -11,6 +11,8 @@ from typing import Any
 BARE_KEY = re.compile(r"[A-Za-z0-9_-]+")
 DEFAULT_TRANSIENT_ATTEMPTS = 3
 BRAIN = "brain"
+DEFAULT_HARNESS = "opencode"
+HARNESS_NAMES = ("opencode",)
 DUMP_HEADER = "# Written by `conductor setup`. Comments added by hand are lost on the next save."
 
 
@@ -72,6 +74,11 @@ class Provider:
     api_key_env: str
     request_options: dict[str, Any] = field(default_factory=dict)
     model_options: dict[str, dict[str, Any]] = field(default_factory=dict)
+    harness: str = DEFAULT_HARNESS
+
+    @property
+    def has_endpoint(self) -> bool:
+        return bool(self.base_url)
 
     @property
     def is_https(self) -> bool:
@@ -79,25 +86,34 @@ class Provider:
 
     @classmethod
     def from_dict(cls, name: str, data: dict[str, Any]) -> Provider:
-        try:
-            return cls(
-                name=name,
-                base_url=str(data["base_url"]),
-                api_key_env=str(data["api_key_env"]),
-                request_options=dict(data.get("request_options", {})),
-                model_options={
-                    str(model): dict(body.get("request_options", {}))
-                    for model, body in data.get("models", {}).items()
-                },
+        where = f"privacy.*.providers.{name}"
+        base_url, api_key_env = str(data.get("base_url", "")), str(data.get("api_key_env", ""))
+        if bool(base_url) != bool(api_key_env):
+            raise ConfigError(f"{where}: set both base_url and api_key_env, or neither")
+        harness = str(data.get("harness", DEFAULT_HARNESS))
+        if harness not in HARNESS_NAMES:
+            raise ConfigError(
+                f"{where}: unknown harness '{harness}' (known: {', '.join(HARNESS_NAMES)})"
             )
-        except KeyError as error:
-            raise ConfigError(f"privacy.*.providers.{name}: missing key {error}") from error
+        return cls(
+            name=name,
+            base_url=base_url,
+            api_key_env=api_key_env,
+            request_options=dict(data.get("request_options", {})),
+            model_options={
+                str(model): dict(body.get("request_options", {}))
+                for model, body in data.get("models", {}).items()
+            },
+            harness=harness,
+        )
 
     def dump(self, prefix: str) -> list[str]:
-        lines = [
-            f"base_url = {toml_value(self.base_url)}",
-            f"api_key_env = {toml_value(self.api_key_env)}",
-        ]
+        lines = []
+        if self.harness != DEFAULT_HARNESS:
+            lines.append(f"harness = {toml_value(self.harness)}")
+        if self.has_endpoint:
+            lines.append(f"base_url = {toml_value(self.base_url)}")
+            lines.append(f"api_key_env = {toml_value(self.api_key_env)}")
         if self.request_options:
             lines.append(f"request_options = {toml_value(self.request_options)}")
         for model, options in self.model_options.items():
@@ -207,6 +223,11 @@ class Profile:
                     f"({', '.join(self.providers)})"
                 )
         for reviewer in () if self.is_brain_review else self.reviewers:
+            if not self.provider_for(reviewer).has_endpoint:
+                raise ConfigError(
+                    f"privacy.{self.name}: the reviewer '{reviewer}' has no base_url to call; "
+                    "use 'brain' or a model of a provider with an endpoint"
+                )
             if not self.provider_for(reviewer).is_https:
                 raise ConfigError(
                     f"privacy.{self.name}: the reviewer '{reviewer}' needs an https base_url, "

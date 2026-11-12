@@ -11,10 +11,10 @@ from pathlib import Path
 from conductor import billing, reviewer, settings, setup_tui
 from conductor.config import Config, ConfigError, Profile
 from conductor.escalation import RunState, run_step
+from conductor.harness import harness_for
 from conductor.log import RunLog
 from conductor.merge import merge_branch
 from conductor.plan import Plan, PlanError, Step
-from conductor.privacy import opencode_config
 from conductor.scheduler import APPROVED, CONFLICT, StepResult, run_plan
 from conductor.verify import CheckResult, run_checks
 from conductor.worker import (
@@ -24,7 +24,6 @@ from conductor.worker import (
     git,
     remove_worktree,
     run_attempt,
-    write_opencode_config,
 )
 
 RULES_FILE_LIMIT = 20_000
@@ -87,7 +86,8 @@ async def execute_plan(
         branch = f"conductor/{run_name}/{step.id}-{number}"
         path = worktrees / f"{step.id}-{number}"
         create_worktree(repo, path, branch, base)
-        write_opencode_config(path, opencode_config(profile))
+        harness = harness_for(profile, model)
+        harness.prepare(path, profile)
         print(f"[{step.id}] attempt {number} on {model}", flush=True)
         return await run_attempt(
             path,
@@ -97,6 +97,7 @@ async def execute_plan(
             extra_args,
             f"conductor: {step.id} attempt {number}",
             transient_attempts=profile.transient_attempts,
+            harness=harness,
         )
 
     def judge(model: str, spec: str, diff: str, checks: list[CheckResult]) -> reviewer.Verdict:
