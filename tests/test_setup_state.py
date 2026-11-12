@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -70,6 +71,12 @@ def test_to_config_round_trips_through_dump_and_load(tmp_path: Path) -> None:
     written = tmp_path / "conductor.toml"
     written.write_text(state().to_config().dump())
     assert Config.load(written) == CONFIG
+
+
+def test_drafts_keep_the_retry_limit_of_a_profile() -> None:
+    profile = replace(make_profile(name="low", tiers=TIERS), transient_attempts=7)
+    draft = ProfileDraft.from_profile(profile)
+    assert draft.to_profile() == profile
 
 
 def test_select_clamps_to_the_available_profiles() -> None:

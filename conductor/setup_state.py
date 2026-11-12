@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from conductor.config import Config, Profile, Provider, provider_of
+from conductor.config import DEFAULT_TRANSIENT_ATTEMPTS, Config, Profile, Provider, provider_of
 from conductor.defaults import DIFFICULTY_LEVELS, default_config
 
 PROFILE_NAME = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
@@ -73,6 +73,7 @@ class ProfileDraft:
     tiers: list[str] = field(default_factory=lambda: [EMPTY_SLOT] * DIFFICULTY_LEVELS)
     reviewer: str = ""
     max_parallel: int = 4
+    transient_attempts: int = DEFAULT_TRANSIENT_ATTEMPTS
 
     @classmethod
     def from_profile(cls, profile: Profile) -> ProfileDraft:
@@ -87,6 +88,7 @@ class ProfileDraft:
             tiers=tiers,
             reviewer=profile.reviewer,
             max_parallel=profile.max_parallel,
+            transient_attempts=profile.transient_attempts,
         )
 
     def to_profile(self) -> Profile:
@@ -96,6 +98,7 @@ class ProfileDraft:
             tiers=tuple(tier for tier in self.tiers if tier != EMPTY_SLOT),
             reviewer=self.reviewer,
             max_parallel=self.max_parallel,
+            transient_attempts=self.transient_attempts,
         )
 
     def filled(self) -> list[str]:

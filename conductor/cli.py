@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from conductor import billing, reviewer, settings, setup_tui
-from conductor.config import DEFAULT_TRANSIENT_ATTEMPTS, Config, ConfigError, Profile
+from conductor.config import Config, ConfigError, Profile
 from conductor.escalation import run_step
 from conductor.log import RunLog
 from conductor.merge import merge_branch
@@ -68,7 +68,7 @@ async def execute_plan(
             prompt,
             extra_args,
             f"conductor: {step.id} attempt {number}",
-            transient_attempts=DEFAULT_TRANSIENT_ATTEMPTS,
+            transient_attempts=profile.transient_attempts,
         )
 
     def judge(spec: str, diff: str) -> reviewer.Verdict:

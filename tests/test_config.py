@@ -214,3 +214,34 @@ def test_merge_options_is_recursive_and_the_override_wins() -> None:
         "provider": {"data_collection": "deny", "allow_fallbacks": True, "order": ["relace"]},
         "temperature": 0,
     }
+
+
+RETRY = MULTI_PROVIDER.replace(
+    'reviewer = "openrouter/a"\n', 'reviewer = "openrouter/a"\nretry = { transient_attempts = 1 }\n'
+)
+
+
+def test_transient_attempts_default_to_three() -> None:
+    profile = Profile.from_dict("medium", tomllib.loads(MULTI_PROVIDER)["privacy"]["medium"])
+    assert profile.transient_attempts == 3
+
+
+def test_reads_the_retry_table() -> None:
+    profile = Profile.from_dict("medium", tomllib.loads(RETRY)["privacy"]["medium"])
+    assert profile.transient_attempts == 1
+
+
+@pytest.mark.parametrize("value", ["-1", '"many"', "true"])
+def test_rejects_transient_attempts_that_are_not_a_count(value: str) -> None:
+    text = RETRY.replace("transient_attempts = 1", f"transient_attempts = {value}")
+    with pytest.raises(ConfigError, match="transient_attempts"):
+        Profile.from_dict("medium", tomllib.loads(text)["privacy"]["medium"])
+
+
+def test_dump_round_trips_the_retry_table(tmp_path: Path) -> None:
+    profile = Profile.from_dict("medium", tomllib.loads(RETRY)["privacy"]["medium"])
+    config = Config("medium", {"medium": profile})
+    written = tmp_path / "conductor.toml"
+    written.write_text(config.dump())
+    assert Config.load(written) == config
+    assert "retry = { transient_attempts = 1 }" in written.read_text()
