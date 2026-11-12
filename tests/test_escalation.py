@@ -497,3 +497,14 @@ def test_the_reviewer_receives_the_checks_that_passed() -> None:
     judged_checks: list[list[CheckResult]] = []
     run([Verdict(True, "ok", "{}")], checks=[[PASSED]], judged_checks=judged_checks)
     assert judged_checks == [[PASSED]]
+
+
+def test_a_subscription_cost_is_recorded_apart_from_the_billed_cost() -> None:
+    subscribed = output(cost=0.0)
+    subscribed.subscription_cost = 0.012
+    _, _, recorded = run([Verdict(True, "ok", "{}")], outputs=[subscribed])
+    assert recorded[0]["cost"] == {
+        "worker": 0.0,
+        "reviewer": None,
+        "subscription": pytest.approx(0.012),
+    }

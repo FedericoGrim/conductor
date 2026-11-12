@@ -229,6 +229,8 @@ class Editor:
         self.notes = []
         broken: list[str] = []
         for name, provider in profile.providers.items():
+            if not provider.base_url:
+                continue
             try:
                 fetched = self.catalog(provider.base_url)
             except CatalogError as error:
@@ -296,9 +298,13 @@ class Editor:
             if key == "d":
                 self.apply(lambda: self.state.remove_provider(name))
             else:
-                self.target = name
-                self.text = ""
-                self.screen = BASED if key == "b" else KEYENV
+                provider = profile.providers[name]
+                if not provider.base_url:
+                    self.message = f"{name} is managed by {provider.harness}: no base_url or key"
+                else:
+                    self.target = name
+                    self.text = ""
+                    self.screen = BASED if key == "b" else KEYENV
         return False
 
     def provideradd_key(self, key: str) -> bool:
@@ -455,8 +461,11 @@ def render(view: Editor) -> list[str]:
         for index, name in enumerate(names):
             marker = ">" if index == view.provider_cursor else " "
             provider = view.state.draft().providers[name]
-            rows.append(f"{marker} {name:12} {provider.base_url}")
-            rows.append(f"  {'':12} {provider.api_key_env}")
+            if provider.base_url:
+                rows.append(f"{marker} {name:12} {provider.base_url}")
+                rows.append(f"  {'':12} {provider.api_key_env}")
+            else:
+                rows.append(f"{marker} {name:12} (managed by {provider.harness})")
         if not names:
             rows.append("(no providers yet: press a)")
     elif view.screen in (BASED, KEYENV):

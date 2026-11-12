@@ -29,6 +29,11 @@ class KnownProvider:
     name: str
     base_url: str
     api_key_env: str
+    harness: str = DEFAULT_HARNESS
+
+    @property
+    def is_managed(self) -> bool:
+        return not self.base_url
 
 
 KNOWN_PROVIDERS: tuple[KnownProvider, ...] = (
@@ -42,6 +47,7 @@ KNOWN_PROVIDERS: tuple[KnownProvider, ...] = (
     KnownProvider("Scaleway (EU)", "scaleway", "https://api.scaleway.ai/v1", "SCALEWAY_API_KEY"),
     KnownProvider("OpenCode Zen", "opencode", "https://opencode.ai/zen/v1", "OPENCODE_API_KEY"),
     KnownProvider("DeepSeek", "deepseek", "https://api.deepseek.com/v1", "DEEPSEEK_API_KEY"),
+    KnownProvider("Claude Code (subscription)", "claude-code", "", "", "claude-code"),
 )
 
 
@@ -173,7 +179,10 @@ class SetupState:
             raise SetupError(f"profile '{name}' already exists")
         profile = ProfileDraft(name)
         profile.providers[provider_name or known.name] = ProviderDraft(
-            provider_name or known.name, known.base_url, known.api_key_env
+            provider_name or known.name,
+            known.base_url,
+            known.api_key_env,
+            harness=known.harness,
         )
         self.profiles.append(profile)
         self.selected = len(self.profiles) - 1
@@ -194,7 +203,9 @@ class SetupState:
             raise SetupError("provider names must be lower-case letters, digits or '-'")
         if provider_name in profile.providers:
             raise SetupError(f"provider '{provider_name}' already exists in {profile.name}")
-        provider = ProviderDraft(provider_name, known.base_url, known.api_key_env)
+        provider = ProviderDraft(
+            provider_name, known.base_url, known.api_key_env, harness=known.harness
+        )
         profile.providers[provider_name] = provider
         return provider
 
@@ -330,6 +341,14 @@ class SetupState:
             ):
                 problems.append(
                     f"profiles.{profile.name}: reviewer '{profile.reviewer}' has no provider"
+                )
+            elif (
+                profile.reviewer != "brain"
+                and not profile.providers[provider_of(profile.reviewer)].base_url
+            ):
+                problems.append(
+                    f"profiles.{profile.name}: reviewer '{profile.reviewer}' has no endpoint; "
+                    "use 'brain' or a model of another provider"
                 )
         if not any(profile.name == self.default_privacy for profile in self.profiles):
             problems.append(f"default_privacy references unknown profile '{self.default_privacy}'")

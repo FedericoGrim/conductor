@@ -15,7 +15,16 @@
 #                   the step ends as "unavailable" (it never escalates on an error)
 #
 # A model id is "<provider>/<model>", and the provider is one of the [..providers.<provider>]
-# tables of the same profile. A profile may use several providers, so escalation can cross them:
+# tables of the same profile. A profile may use several providers, so escalation can cross them.
+#
+# A provider may declare "harness" (default "opencode"). A provider managed by its harness has
+# neither base_url nor api_key_env: it is not written to the worktree opencode.json, is skipped
+# by `conductor billing` and cannot be the reviewer. This runs a level on the Claude subscription
+# through Claude Code:
+#
+#   [privacy.medium.providers.claude-code]
+#   harness = "claude-code"
+#   # then, in [privacy.medium], tiers = ["claude-code/sonnet", "openrouter/..."]
 #
 #   [privacy.medium.providers.openrouter]
 #   base_url = "https://openrouter.ai/api/v1"

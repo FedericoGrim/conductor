@@ -12,7 +12,7 @@ BARE_KEY = re.compile(r"[A-Za-z0-9_-]+")
 DEFAULT_TRANSIENT_ATTEMPTS = 3
 BRAIN = "brain"
 DEFAULT_HARNESS = "opencode"
-HARNESS_NAMES = ("opencode",)
+HARNESS_NAMES = ("opencode", "claude-code")
 DUMP_HEADER = "# Written by `conductor setup`. Comments added by hand are lost on the next save."
 
 

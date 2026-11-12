@@ -36,7 +36,7 @@ def scaleway() -> KnownProvider:
     )
 
 
-def test_known_providers_are_all_https_and_have_a_key_variable() -> None:
+def test_known_providers_are_either_https_with_a_key_or_managed_by_their_harness() -> None:
     assert [known.name for known in KNOWN_PROVIDERS] == [
         "openrouter",
         "openrouter",
@@ -44,9 +44,31 @@ def test_known_providers_are_all_https_and_have_a_key_variable() -> None:
         "scaleway",
         "opencode",
         "deepseek",
+        "claude-code",
     ]
-    assert all(known.base_url.startswith("https://") for known in KNOWN_PROVIDERS)
-    assert all(known.api_key_env.isupper() for known in KNOWN_PROVIDERS)
+    for known in KNOWN_PROVIDERS:
+        if known.is_managed:
+            assert known.base_url == "" and known.api_key_env == ""
+            assert known.harness == "claude-code"
+        else:
+            assert known.base_url.startswith("https://")
+            assert known.api_key_env.isupper()
+            assert known.harness == "opencode"
+
+
+def test_adding_the_claude_code_provider_keeps_it_endpointless() -> None:
+    model = state()
+    provider = model.add_provider(next(k for k in KNOWN_PROVIDERS if k.name == "claude-code"))
+    assert (provider.base_url, provider.api_key_env, provider.harness) == ("", "", "claude-code")
+    model.set_tier(1, "claude-code/sonnet")
+    assert model.to_config().profile("low").tiers[0] == ("claude-code/sonnet",)
+
+
+def test_a_managed_provider_cannot_review() -> None:
+    model = state()
+    model.add_provider(next(k for k in KNOWN_PROVIDERS if k.name == "claude-code"))
+    model.set_reviewer("claude-code/sonnet")
+    assert any("no endpoint" in problem for problem in model.problems())
 
 
 def test_defaults_carry_three_profiles_with_five_filled_levels() -> None:
