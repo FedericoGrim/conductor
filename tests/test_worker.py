@@ -15,6 +15,7 @@ from conductor.worker import (
     diff_against,
     events_cost,
     exclude_from_git,
+    final_text,
     parse_events,
     retry_limit,
     run_attempt,
@@ -188,6 +189,7 @@ def test_run_attempt_uses_injected_runner(tmp_path: Path) -> None:
     assert output.session_id == "ses_9"
     assert output.cost == 0.02
     assert output.error is None
+    assert output.final_text == ""
     assert "+by model" in output.diff
 
 
@@ -224,3 +226,16 @@ def test_run_attempt_stops_after_the_retry_limit_and_reports_a_transient_error(
     assert output.error is not None
     assert output.error.kind == TRANSIENT
     assert output.error.type == "provider.internal"
+
+
+def text_event(text: str) -> dict[str, Any]:
+    return {"type": "text", "sessionID": "ses", "part": {"type": "text", "text": text}}
+
+
+def test_final_text_is_the_last_text_part() -> None:
+    events = [text_event("first"), step_finish(0.1), text_event("last"), step_finish(0.1)]
+    assert final_text(events) == "last"
+
+
+def test_final_text_is_empty_without_text_parts() -> None:
+    assert final_text([step_finish(0.1), {"type": "text", "part": "broken"}]) == ""

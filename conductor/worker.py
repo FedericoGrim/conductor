@@ -21,6 +21,7 @@ from conductor.errors import (
 OPENCODE_CONFIG_NAME = "opencode.json"
 ERROR_EVENT = "error"
 RETRY_EVENT = "retry"
+TEXT_EVENT = "text"
 EVENT_LINE_LIMIT = 64 * 1024 * 1024
 STOP_GRACE_SECONDS = 10
 
@@ -38,6 +39,7 @@ class AttemptOutput:
     command: list[str] = field(default_factory=list)
     cost: float = 0.0
     error: ModelError | None = None
+    final_text: str = ""
 
 
 def git(cwd: Path, *args: str) -> str:
@@ -107,6 +109,14 @@ def events_cost(events: list[dict[str, Any]]) -> float:
         if event.get("type") == "step_finish" and isinstance(cost, int | float):
             total += cost
     return total
+
+
+def final_text(events: list[dict[str, Any]]) -> str:
+    for event in reversed(events):
+        part = event.get("part")
+        if event.get("type") == TEXT_EVENT and isinstance(part, dict):
+            return str(part.get("text", ""))
+    return ""
 
 
 ERROR_KINDS = {
@@ -238,4 +248,5 @@ async def run_attempt(
         command=command,
         cost=events_cost(events),
         error=attempt_error(events, exit_code, stderr),
+        final_text=final_text(events),
     )
