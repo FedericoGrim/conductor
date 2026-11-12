@@ -1,71 +1,87 @@
 from __future__ import annotations
 
-from typing import Any
-
 from conductor.config import Config, Profile, Provider
 
 DIFFICULTY_LEVELS = 5
 
-OPENROUTER = "https://openrouter.ai/api/v1"
-OPENROUTER_EU = "https://eu.openrouter.ai/api/v1"
-NO_TRAINING = {"provider": {"data_collection": "deny"}}
+OPENROUTER = Provider("openrouter", "https://openrouter.ai/api/v1", "OPENROUTER_API_KEY")
+OPENROUTER_NO_TRAINING = Provider(
+    "openrouter",
+    "https://openrouter.ai/api/v1",
+    "OPENROUTER_API_KEY",
+    {"provider": {"data_collection": "deny"}},
+)
+OPENROUTER_EU = Provider("openrouter", "https://eu.openrouter.ai/api/v1", "OPENROUTER_API_KEY")
+DEEPSEEK = Provider("deepseek", "https://api.deepseek.com/v1", "DEEPSEEK_API_KEY")
+VERCEL_NO_TRAINING = Provider(
+    "vercel",
+    "https://ai-gateway.vercel.sh/v1",
+    "AI_GATEWAY_API_KEY",
+    {"providerOptions": {"gateway": {"disallowPromptTraining": True}}},
+)
+SCALEWAY = Provider("scaleway", "https://api.scaleway.ai/v1", "SCALEWAY_API_KEY")
 
 
 def profile(
     name: str,
-    base_url: str,
-    tiers: tuple[str, ...],
-    reviewer: str,
+    providers: tuple[Provider, ...],
+    tiers: tuple[tuple[str, ...], ...],
+    reviewers: tuple[str, ...],
     max_parallel: int,
-    request_options: dict[str, Any],
 ) -> Profile:
-    provider = Provider("openrouter", base_url, "OPENROUTER_API_KEY", dict(request_options))
-    levels = tuple((model,) for model in tiers)
-    return Profile(name, {"openrouter": provider}, levels, (reviewer,), max_parallel)
+    return Profile(
+        name, {provider.name: provider for provider in providers}, tiers, reviewers, max_parallel
+    )
 
 
 DEFAULT_PROFILES: tuple[Profile, ...] = (
     profile(
         "low",
-        OPENROUTER,
+        (OPENROUTER, DEEPSEEK),
         (
-            "openrouter/thinkingmachines/inkling-2-small:free",
-            "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
-            "openrouter/z-ai/glm-5.3-flash",
-            "openrouter/deepseek/deepseek-v4-flash-0731",
-            "openrouter/openai/gpt-5.6-luna",
+            (
+                "openrouter/thinkingmachines/inkling-2-small:free",
+                "openrouter/dots-studio/dots-3-note-preview:free",
+            ),
+            (
+                "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
+                "openrouter/recursive/flint-v1.0:free",
+            ),
+            ("openrouter/z-ai/glm-5.3-flash", "deepseek/deepseek-flash"),
+            ("openrouter/deepseek/deepseek-v4-flash-0731", "deepseek/deepseek-flash"),
+            ("openrouter/openai/gpt-5.6-luna", "deepseek/deepseek-v4-pro"),
         ),
-        "openrouter/z-ai/glm-5.3-flash",
+        ("openrouter/z-ai/glm-5.3-flash", "deepseek/deepseek-flash"),
         2,
-        {},
     ),
     profile(
         "medium",
-        OPENROUTER,
+        (OPENROUTER_NO_TRAINING, VERCEL_NO_TRAINING),
         (
-            "openrouter/deepseek/deepseek-v4-flash-0731",
-            "openrouter/z-ai/glm-5.3-flash",
-            "openrouter/openai/gpt-5.6-luna",
-            "openrouter/z-ai/glm-5.3",
-            "openrouter/deepseek/deepseek-v4-pro-0813",
+            (
+                "openrouter/deepseek/deepseek-v4-flash-0731",
+                "vercel/deepseek/deepseek-v4-flash-0731",
+            ),
+            ("openrouter/z-ai/glm-5.3-flash", "vercel/zai/glm-5.3-flash"),
+            ("openrouter/openai/gpt-5.6-luna", "vercel/openai/gpt-5.6-luna"),
+            ("openrouter/z-ai/glm-5.3", "vercel/zai/glm-5.3"),
+            ("openrouter/deepseek/deepseek-v4-pro-0813", "vercel/deepseek/deepseek-v4-pro"),
         ),
-        "openrouter/openai/gpt-5.6-luna",
+        ("openrouter/openai/gpt-5.6-luna", "vercel/openai/gpt-5.6-luna"),
         4,
-        NO_TRAINING,
     ),
     profile(
         "high",
-        OPENROUTER_EU,
+        (OPENROUTER_EU, SCALEWAY),
         (
-            "openrouter/z-ai/glm-5.3-flash",
-            "openrouter/deepseek/deepseek-v4-flash-0731",
-            "openrouter/openai/gpt-5.6-luna",
-            "openrouter/z-ai/glm-5.3",
-            "openrouter/anthropic/claude-opus-5.5",
+            ("openrouter/z-ai/glm-5.3-flash", "scaleway/deepseek-v4-flash-0731"),
+            ("openrouter/deepseek/deepseek-v4-flash-0731", "scaleway/deepseek-v4-flash-0731"),
+            ("openrouter/openai/gpt-5.6-luna", "scaleway/deepseek-v4.1-flash-1017"),
+            ("openrouter/z-ai/glm-5.3", "scaleway/glm-5.3"),
+            ("openrouter/anthropic/claude-opus-5.5", "scaleway/glm-5.3"),
         ),
-        "openrouter/openai/gpt-5.6-luna",
+        ("openrouter/openai/gpt-5.6-luna", "scaleway/deepseek-v4.1-flash-1017"),
         4,
-        {},
     ),
 )
 
