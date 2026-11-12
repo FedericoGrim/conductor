@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from conductor.log import RunLog
+from conductor.log import RunLog, cost_by_model
 from conductor.plan import Plan, Step
 from conductor.scheduler import StepResult
 
@@ -63,3 +63,20 @@ def test_each_run_gets_its_own_directory(tmp_path: Path) -> None:
     second = RunLog.create(tmp_path, PLAN, privacy="low")
     assert first.directory != second.directory
     assert first.directory.parent == tmp_path / ".conductor" / "runs"
+
+
+def test_cost_by_model_counts_the_reviewers_that_failed() -> None:
+    attempt = {
+        "model": "openrouter/cheap",
+        "cost": {"worker": 0.01, "reviewer": 0.002},
+        "review": {"model": "deepseek/judge"},
+        "review_fallbacks": [
+            {"model": "openrouter/judge", "cost": 0.003},
+            {"model": "openrouter/judge", "cost": None},
+        ],
+    }
+    assert cost_by_model([attempt]) == {
+        "openrouter/cheap": pytest.approx(0.01),
+        "deepseek/judge": pytest.approx(0.002),
+        "openrouter/judge": pytest.approx(0.003),
+    }
