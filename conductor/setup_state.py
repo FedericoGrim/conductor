@@ -66,6 +66,10 @@ class ProviderDraft:
         )
 
 
+def no_fallbacks(levels: int) -> list[list[str]]:
+    return [[] for _ in range(levels)]
+
+
 @dataclass
 class ProfileDraft:
     name: str
@@ -74,11 +78,15 @@ class ProfileDraft:
     reviewer: str = ""
     max_parallel: int = 4
     transient_attempts: int = DEFAULT_TRANSIENT_ATTEMPTS
+    fallbacks: list[list[str]] = field(default_factory=lambda: no_fallbacks(DIFFICULTY_LEVELS))
+    reviewer_fallbacks: list[str] = field(default_factory=list)
 
     @classmethod
     def from_profile(cls, profile: Profile) -> ProfileDraft:
-        tiers = [tier[0] for tier in profile.tiers][:DIFFICULTY_LEVELS]
-        tiers += [EMPTY_SLOT] * (DIFFICULTY_LEVELS - len(tiers))
+        levels = list(profile.tiers)[:DIFFICULTY_LEVELS]
+        missing = DIFFICULTY_LEVELS - len(levels)
+        tiers = [level[0] for level in levels] + [EMPTY_SLOT] * missing
+        fallbacks = [list(level[1:]) for level in levels] + no_fallbacks(missing)
         return cls(
             name=profile.name,
             providers={
@@ -89,14 +97,20 @@ class ProfileDraft:
             reviewer=profile.reviewers[0],
             max_parallel=profile.max_parallel,
             transient_attempts=profile.transient_attempts,
+            fallbacks=fallbacks,
+            reviewer_fallbacks=list(profile.reviewers[1:]),
         )
 
     def to_profile(self) -> Profile:
         return Profile(
             name=self.name,
             providers={name: provider.to_provider() for name, provider in self.providers.items()},
-            tiers=tuple((tier,) for tier in self.tiers if tier != EMPTY_SLOT),
-            reviewers=(self.reviewer,),
+            tiers=tuple(
+                (tier, *fallbacks)
+                for tier, fallbacks in zip(self.tiers, self.fallbacks, strict=True)
+                if tier != EMPTY_SLOT
+            ),
+            reviewers=(self.reviewer, *self.reviewer_fallbacks),
             max_parallel=self.max_parallel,
             transient_attempts=self.transient_attempts,
         )
@@ -184,6 +198,12 @@ class SetupState:
         ]
         if profile.reviewer != "brain" and provider_of(profile.reviewer) == name:
             profile.reviewer = ""
+        profile.fallbacks = [
+            [model for model in level if provider_of(model) != name] for level in profile.fallbacks
+        ]
+        profile.reviewer_fallbacks = [
+            model for model in profile.reviewer_fallbacks if provider_of(model) != name
+        ]
         return profile
 
     def provider(self, name: str) -> ProviderDraft:
@@ -233,6 +253,8 @@ class SetupState:
         if model != "brain" and provider_of(model) not in profile.providers:
             raise SetupError(f"reviewer '{model}' has no provider in {profile.name}")
         profile.reviewer = model.strip()
+        if profile.reviewer == "brain":
+            profile.reviewer_fallbacks = []
         return profile
 
     def set_default_privacy(self, name: str) -> None:
