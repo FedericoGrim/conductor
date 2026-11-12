@@ -16,7 +16,7 @@ Simple layering, no tactical DDD: a small tool with little business logic.
 - `conductor/privacy.py` — a profile → the `opencode.json` written in each worktree (one entry per provider) and the reviewer request options.
 - `conductor/scheduler.py` — asyncio DAG scheduler bounded by `max_parallel`.
 - `conductor/worker.py` — worktree creation, the streaming runner (stopped after the retry limit), `run_attempt` with a `Harness`, diff capture.
-- `conductor/harness.py` — the worker harnesses: the OpenCode command, its event stream (retries, cost, classified errors, final text) and the worktree `opencode.json`.
+- `conductor/harness.py` — the worker harnesses, each the command, its event stream (retries, cost, classified errors, final text) and its worktree configuration: OpenCode, and Claude Code (`claude -p`, isolated with `--setting-sources project`, confined to the worktree with `--permission-mode acceptEdits`). `harness_for` picks by the provider of the chosen model.
 - `conductor/verify.py` — runs a step's `verify` commands with `sh -c` in its worktree (`CONDUCTOR_REPO` set, timeout, output tail).
 - `conductor/reviewer.py` — direct OpenAI-compatible chat call with explicit criteria (spec, tests in the diff, domain rules, bugs), the plan's rules and the verification results; returns `{ok, reason}`.
 - `conductor/escalation.py` — rejected step → next tier with the reason in the prompt; beyond last tier → `failed`. A worker question → `needs_answer` (no review, no escalation). Classified model errors → next model of the level (an unusable provider is excluded for the run), level exhausted → `unavailable`, unclassified → `failed`; reviewer errors → next reviewer, all failed → `needs_brain_review`; never escalates on an error.
@@ -43,7 +43,7 @@ Rule: no module imports OpenCode or provider specifics except `harness.py`, `rev
 ## Environment
 - `OPENROUTER_API_KEY`, and for the default fallbacks `DEEPSEEK_API_KEY` (low), `AI_GATEWAY_API_KEY` (medium), `SCALEWAY_API_KEY` (high) — or the `api_key_env` named in the chosen profile — for the reviewer call: from the environment, or from `~/.local/share/conductor/auth.json` written by `conductor setup`.
 - The same key env names for `conductor billing`; `SCW_ORGANIZATION_ID` for Scaleway.
-- OpenCode providers are authenticated with `opencode auth login`, outside Conductor.
+- OpenCode providers are authenticated with `opencode auth login`, and a `claude-code` provider with a Claude Code subscription login (`claude`), both outside Conductor.
 - Repository secret `RELEASE_PLEASE_TOKEN`: fine-grained token (Contents and Pull requests, read and write, this repository only) used by release-please so that CI runs on its PRs. If it is missing or expired, release-please falls back to `GITHUB_TOKEN` and the `checks` run on the release PR must be approved by hand (`gh run rerun <id>` or "Approve and run" on the PR).
 - Never commit `.env`, `conductor.toml` with keys, or `.conductor/` run logs.
 

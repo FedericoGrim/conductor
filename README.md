@@ -8,7 +8,7 @@ Conductor takes a `plan.json` produced by a planning model (Claude in Claude Cod
 
 1. The brain writes `plan.json`: steps with a spec, the files to touch, a difficulty from 1 (trivial) to 5 (hard), and dependencies.
 2. `conductor run plan.json --privacy medium` picks the profile from `conductor.toml`.
-3. Every step whose dependencies are approved starts, up to `max_parallel` at once, in its own worktree branched from the current branch. The step runs `opencode run --format json --auto` on the first model of its difficulty level, `tiers[difficulty - 1]`. A level may list fallback models after the first one.
+3. Every step whose dependencies are approved starts, up to `max_parallel` at once, in its own worktree branched from the current branch. The step runs its provider's harness on the first model of its difficulty level, `tiers[difficulty - 1]`: `opencode run --format json --auto`, or `claude -p --output-format stream-json` for a `claude-code` provider (isolated from your personal Claude settings, confined to the worktree). A level may list fallback models after the first one.
 4. Verification: the step's `verify` commands (from the plan) run in the worktree with `sh -c`, `$CONDUCTOR_REPO` pointing at the main repository. The first failure rejects the attempt with the command's output as the reason, without calling the reviewer.
 5. The reviewer model receives the spec, the plan's domain rules, the verification results and the diff, and approves only if the spec is complete, new behaviour has tests in the diff, the domain rules hold and there is no obvious bug; it answers `{"ok": bool, "reason": str}`. `reviewer` may also list fallbacks.
 6. Rejected: the step restarts on the first usable model of the next difficulty level with the reason in the prompt, possibly on a different provider. Rejected on level 5: `failed`, and its dependents are `skipped`.
@@ -54,7 +54,7 @@ Other providers are listed with "no balance API known". Amounts are never conver
 
 - profiles per privacy level: the three built-in ones plus any you add, with one marked as default;
 - per profile: **five difficulty levels**, each a model or an ordered list of a model and its fallbacks (`f`/`F` add a fallback from the catalog or typed, `x` drops the last one), and the reviewer (a model, a list — `v` adds a fallback, `V` clears them — or `brain`; a model reviewer needs an `https` base URL, because Conductor sends it the API key);
-- providers: OpenRouter, OpenRouter EU, Vercel AI Gateway, Scaleway, OpenCode Zen, DeepSeek, or one typed by hand, each with its own `base_url` and key variable. A profile may use several of them, so level 1 can run on OpenRouter, level 3 on Scaleway and level 5 on Vercel;
+- providers: OpenRouter, OpenRouter EU, Vercel AI Gateway, Scaleway, OpenCode Zen, DeepSeek, or one typed by hand, each with its own `base_url` and key variable. A profile may use several of them, so level 1 can run on OpenRouter, level 3 on Scaleway and level 5 on Vercel. A provider may instead name a `harness` (default `opencode`; `claude-code` runs the Claude subscription through Claude Code) and then has neither `base_url` nor a key; it is not billed and cannot review;
 - models: picked from the providers' own catalogs, filtered by typing, or an id typed by hand;
 - API keys: type one and it is stored, masked, in `~/.local/share/conductor/auth.json` (mode `600`).
 
