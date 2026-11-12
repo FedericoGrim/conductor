@@ -89,6 +89,14 @@ def classify_http_error(error: urllib.error.HTTPError) -> ModelError:
 def review(profile: Profile, spec: str, diff: str, post: Post | None = None) -> Verdict:
     post = post or http_post
     provider = profile.provider_for(profile.reviewer)
+    if not provider.is_https:
+        return Verdict.failed(
+            ModelError.of(
+                PROVIDER_UNUSABLE,
+                "insecure-base-url",
+                f"refusing to send the API key to {provider.base_url}: base_url must be https",
+            )
+        )
     api_key = credentials.api_key(provider.api_key_env)
     if not api_key:
         return Verdict.failed(

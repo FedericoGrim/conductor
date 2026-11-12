@@ -51,7 +51,7 @@ Other providers are listed with "no balance API known". Amounts are never conver
 `conductor setup` is a terminal UI for `conductor.toml`, meant to be reopened whenever a provider changes its catalog or prices. Conductor ships three complete profiles (`low`, `medium`, `high`), so the UI opens on something that already works: you change a model, not the structure. The shipped ladders pick the strongest model per dollar at each difficulty level (SWE-bench Verified and Pro, plus measured cost per task); the reasoning is in decision 008.
 
 - profiles per privacy level: the three built-in ones plus any you add, with one marked as default;
-- per profile: **five difficulty levels**, one model each, and the reviewer (one of those models or `brain`);
+- per profile: **five difficulty levels**, one model each, and the reviewer (one of those models or `brain`; a model reviewer needs an `https` base URL, because Conductor sends it the API key);
 - providers: OpenRouter, OpenRouter EU, Vercel AI Gateway, Scaleway, OpenCode Zen, DeepSeek, or one typed by hand, each with its own `base_url` and key variable. A profile may use several of them, so level 1 can run on OpenRouter, level 3 on Scaleway and level 5 on Vercel;
 - models: picked from the providers' own catalogs, filtered by typing, or an id typed by hand;
 - API keys: type one and it is stored, masked, in `~/.local/share/conductor/auth.json` (mode `600`).

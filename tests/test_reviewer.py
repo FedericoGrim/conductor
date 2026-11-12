@@ -219,3 +219,24 @@ def test_the_reviewer_receives_the_options_of_its_model(monkeypatch: pytest.Monk
         "data_collection": "deny",
         "order": ["relace"],
     }
+
+
+def test_the_key_is_never_sent_to_a_base_url_that_is_not_https(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TEST_REVIEW_KEY", "sk-secret")
+    insecure = make_profile(
+        api_key_env="TEST_REVIEW_KEY",
+        base_url="http://openrouter.ai/api/v1",
+        tiers=("openrouter/a/b",),
+        reviewer="openrouter/deepseek/flash",
+    )
+
+    def fake_post(url: str, headers: dict[str, str], body: dict[str, Any]) -> dict[str, Any]:
+        raise AssertionError("must not be called")
+
+    verdict = review(insecure, spec="s", diff="d", post=fake_post)
+    assert verdict.ok is False
+    assert verdict.error is not None
+    assert (verdict.error.kind, verdict.error.type) == (PROVIDER_UNUSABLE, "insecure-base-url")
+    assert "sk-secret" not in verdict.reason

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import tomllib
+import urllib.parse
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -55,6 +56,10 @@ class Provider:
     api_key_env: str
     request_options: dict[str, Any] = field(default_factory=dict)
     model_options: dict[str, dict[str, Any]] = field(default_factory=dict)
+
+    @property
+    def is_https(self) -> bool:
+        return urllib.parse.urlsplit(self.base_url).scheme == "https"
 
     @classmethod
     def from_dict(cls, name: str, data: dict[str, Any]) -> Provider:
@@ -174,6 +179,11 @@ class Profile:
                     f"privacy.{self.name}: '{model}' does not name one of the providers "
                     f"({', '.join(self.providers)})"
                 )
+        if self.reviewer != "brain" and not self.provider_for(self.reviewer).is_https:
+            raise ConfigError(
+                f"privacy.{self.name}: the reviewer '{self.reviewer}' needs an https base_url, "
+                "because Conductor sends it the API key"
+            )
 
     def provider_for(self, model: str) -> Provider:
         provider = self.providers.get(provider_of(model))
