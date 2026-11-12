@@ -11,7 +11,7 @@ CLI that executes a `plan.json` written by a "brain" model (Claude in Claude Cod
 ## Architecture
 Simple layering, no tactical DDD: a small tool with little business logic.
 - `conductor/plan.py` — `Plan`, `Step` models and validation (unique ids, known `depends_on`, no cycles, difficulty between 1 and `DIFFICULTY_LEVELS`, optional `answers` to earlier questions).
-- `conductor/config.py` — `conductor.toml`: privacy profiles, each with five difficulty levels (a model or an ordered list with fallbacks, cheapest first), one or more providers, reviewers (a model, a list, or `brain`), `max_parallel`, `retry`. A model id is `<provider>/<model>`.
+- `conductor/config.py` — `conductor.toml`: privacy profiles, each with five difficulty levels (a model or an ordered list with fallbacks, cheapest first), one or more providers (each with a `harness`, default `opencode`; `base_url` and `api_key_env` together or neither), reviewers (a model, a list, or `brain`; never a provider without endpoint), `max_parallel`, `retry`. A model id is `<provider>/<model>`.
 - `conductor/defaults.py` — the built-in `low`/`medium`/`high` profiles (five levels each, with fallbacks on a second provider: DeepSeek, Vercel, Scaleway) and `DIFFICULTY_LEVELS`.
 - `conductor/privacy.py` — a profile → the `opencode.json` written in each worktree (one entry per provider) and the reviewer request options.
 - `conductor/scheduler.py` — asyncio DAG scheduler bounded by `max_parallel`.
