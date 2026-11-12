@@ -13,7 +13,7 @@ PROFILE = make_profile(
 def test_opencode_config_routes_every_tier_through_profile() -> None:
     config = opencode_config(PROFILE)
     provider = config["provider"]["openrouter"]
-    assert provider["options"] == {"baseURL": "https://eu.openrouter.ai/api/v1"}
+    assert provider["options"]["baseURL"] == "https://eu.openrouter.ai/api/v1"
     assert provider["models"] == {
         "deepseek/v4": {"options": {"provider": {"data_collection": "deny"}}},
         "anthropic/sonnet": {"options": {"provider": {"data_collection": "deny"}}},
@@ -99,3 +99,15 @@ def test_opencode_config_includes_the_fallback_models_of_every_level() -> None:
     config = opencode_config(profile)
     assert set(config["provider"]["openrouter"]["models"]) == {"a", "b"}
     assert set(config["provider"]["deepseek"]["models"]) == {"b2"}
+
+
+def test_provider_options_also_cover_models_that_opencode_picks_itself() -> None:
+    provider = opencode_config(PROFILE)["provider"]["openrouter"]
+    assert provider["options"] == {
+        "baseURL": "https://eu.openrouter.ai/api/v1",
+        "provider": {"data_collection": "deny"},
+    }
+
+
+def test_the_small_model_is_the_first_model_of_the_easiest_level() -> None:
+    assert opencode_config(PROFILE)["small_model"] == "openrouter/deepseek/v4"

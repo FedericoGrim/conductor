@@ -19,9 +19,15 @@ def opencode_config(profile: Profile) -> dict[str, Any]:
         }
     return {
         "$schema": "https://opencode.ai/config.json",
+        # OpenCode sends title and summary requests to a model of its own choosing: pin it to
+        # the profile, and put the provider options at provider level so they reach it anyway.
+        "small_model": profile.tiers[0][0],
         "provider": {
             name: {
-                "options": {"baseURL": profile.providers[name].base_url},
+                "options": {
+                    **profile.providers[name].request_options,
+                    "baseURL": profile.providers[name].base_url,
+                },
                 "models": models[name],
             }
             for name in profile.providers
