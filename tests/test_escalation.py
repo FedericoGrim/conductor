@@ -3,6 +3,7 @@ from typing import Any
 
 import pytest
 
+from conductor.config import Profile, Provider
 from conductor.errors import (
     MODEL_UNSUITABLE,
     PROVIDER_UNUSABLE,
@@ -10,7 +11,7 @@ from conductor.errors import (
     UNCLASSIFIED,
     ModelError,
 )
-from conductor.escalation import build_prompt, run_step
+from conductor.escalation import RunState, build_prompt, run_step
 from conductor.plan import Step
 from conductor.reviewer import Verdict
 from conductor.worker import AttemptOutput
@@ -28,7 +29,12 @@ def output(
     )
 
 
-def run(verdicts: list[Verdict], outputs: list[AttemptOutput] | None = None) -> Any:
+def run(
+    verdicts: list[Verdict],
+    outputs: list[AttemptOutput] | None = None,
+    profile: Profile = PROFILE,
+    state: RunState | None = None,
+) -> Any:
     calls: list[tuple[int, str, str]] = []
     recorded: list[dict[str, Any]] = []
     outputs = outputs or [output() for _ in verdicts]
@@ -44,7 +50,16 @@ def run(verdicts: list[Verdict], outputs: list[AttemptOutput] | None = None) -> 
     def record(step: Step, data: dict[str, Any]) -> None:
         recorded.append(data)
 
-    result = asyncio.run(run_step(STEP, PROFILE, attempt=attempt, judge=judge, record=record))
+    result = asyncio.run(
+        run_step(
+            STEP,
+            profile,
+            attempt=attempt,
+            judge=judge,
+            record=record,
+            state=state or RunState(),
+        )
+    )
     return result, calls, recorded
 
 
@@ -162,3 +177,109 @@ def test_a_reviewer_error_hands_the_diff_to_the_brain_without_escalating() -> No
 def test_a_reviewer_verdict_records_no_error() -> None:
     _, _, recorded = run([Verdict(True, "fine", "{}")])
     assert recorded[0]["review"]["error"] is None
+
+
+FALLBACK_PROFILE = Profile(
+    "medium",
+    {
+        "openrouter": Provider("openrouter", "https://openrouter.ai/api/v1", "K"),
+        "deepseek": Provider("deepseek", "https://api.deepseek.com/v1", "D"),
+    },
+    (
+        ("openrouter/t0",),
+        ("openrouter/t1", "openrouter/t1b", "deepseek/t1c"),
+        ("openrouter/t2", "deepseek/t2b"),
+    ),
+    ("openrouter/r",),
+)
+
+
+def failure(kind: str, error_type: str = "provider.x") -> AttemptOutput:
+    return output(exit_code=1, error=ModelError(kind, error_type, f"{kind} happened"))
+
+
+def models(calls: list[tuple[int, str, str]]) -> list[str]:
+    return [call[1] for call in calls]
+
+
+def test_a_transient_error_moves_to_the_next_model_of_the_same_level() -> None:
+    result, calls, recorded = run(
+        [Verdict(True, "ok", "{}")],
+        outputs=[failure(TRANSIENT), output()],
+        profile=FALLBACK_PROFILE,
+    )
+    assert result.status == "approved"
+    assert models(calls) == ["openrouter/t1", "openrouter/t1b"]
+    assert [entry["tier"] for entry in recorded] == [1, 1]
+    assert recorded[0]["error"]["kind"] == TRANSIENT
+
+
+def test_an_unsuitable_model_moves_to_the_next_model_of_the_same_level() -> None:
+    result, calls, _ = run(
+        [Verdict(True, "ok", "{}")],
+        outputs=[failure(MODEL_UNSUITABLE), output()],
+        profile=FALLBACK_PROFILE,
+    )
+    assert result.status == "approved"
+    assert models(calls) == ["openrouter/t1", "openrouter/t1b"]
+
+
+def test_an_unusable_provider_is_skipped_for_the_rest_of_the_run() -> None:
+    state = RunState()
+    result, calls, _ = run(
+        [Verdict(True, "ok", "{}")],
+        outputs=[failure(PROVIDER_UNUSABLE), output()],
+        profile=FALLBACK_PROFILE,
+        state=state,
+    )
+    assert result.status == "approved"
+    assert models(calls) == ["openrouter/t1", "deepseek/t1c"]
+    assert state.excluded_worker_providers == {"openrouter"}
+
+    _, later_calls, _ = run([Verdict(True, "ok", "{}")], profile=FALLBACK_PROFILE, state=state)
+    assert models(later_calls) == ["deepseek/t1c"]
+
+
+def test_a_level_exhausted_by_errors_makes_the_step_unavailable() -> None:
+    result, calls, _ = run(
+        [],
+        outputs=[failure(TRANSIENT), failure(MODEL_UNSUITABLE), failure(TRANSIENT)],
+        profile=FALLBACK_PROFILE,
+    )
+    assert result.status == "unavailable"
+    assert models(calls) == ["openrouter/t1", "openrouter/t1b", "deepseek/t1c"]
+    assert "deepseek/t1c" in result.detail
+
+
+def test_a_level_whose_providers_are_all_excluded_is_unavailable_without_attempts() -> None:
+    state = RunState(excluded_worker_providers={"openrouter", "deepseek"})
+    result, calls, _ = run([], profile=FALLBACK_PROFILE, state=state)
+    assert result.status == "unavailable"
+    assert calls == []
+    assert "excluded" in result.detail
+
+
+def test_an_unclassified_error_fails_without_trying_the_fallbacks() -> None:
+    result, calls, _ = run([], outputs=[failure(UNCLASSIFIED)], profile=FALLBACK_PROFILE)
+    assert result.status == "failed"
+    assert models(calls) == ["openrouter/t1"]
+
+
+def test_a_rejection_escalates_to_the_first_model_of_the_next_level() -> None:
+    result, calls, _ = run(
+        [Verdict(False, "no tests", "{}"), Verdict(True, "ok", "{}")],
+        profile=FALLBACK_PROFILE,
+    )
+    assert result.status == "approved"
+    assert models(calls) == ["openrouter/t1", "openrouter/t2"]
+
+
+def test_a_fallback_after_a_rejection_keeps_the_review_feedback() -> None:
+    result, calls, _ = run(
+        [Verdict(False, "no tests", "{}"), Verdict(True, "ok", "{}")],
+        outputs=[output(), failure(TRANSIENT), output()],
+        profile=FALLBACK_PROFILE,
+    )
+    assert result.status == "approved"
+    assert models(calls) == ["openrouter/t1", "openrouter/t2", "deepseek/t2b"]
+    assert "no tests" in calls[2][2]
