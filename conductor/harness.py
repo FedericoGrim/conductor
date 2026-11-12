@@ -113,3 +113,9 @@ OPENCODE = Harness(
     error=attempt_error,
     final_text=final_text,
 )
+
+HARNESSES = {harness.name: harness for harness in (OPENCODE,)}
+
+
+def harness_for(profile: Profile, model: str) -> Harness:
+    return HARNESSES[profile.provider_for(model).harness]
