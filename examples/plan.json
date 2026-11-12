@@ -1,5 +1,7 @@
 {
   "goal": "Add a `greet` CLI that prints a greeting for a given name, with tests.",
+  "rules": ["greet/core.py stays free of I/O: printing and exit codes belong to greet/cli.py."],
+  "verify": ["$CONDUCTOR_REPO/.venv/bin/pytest -q"],
   "steps": [
     {
       "id": "greet-core",
@@ -25,6 +27,7 @@
       "title": "Usage documentation",
       "spec": "Write a README.md section 'Usage' showing how to run the CLI and what it prints.",
       "files": ["README.md"],
+      "verify": [],
       "difficulty": 1,
       "depends_on": []
     }
