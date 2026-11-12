@@ -48,10 +48,10 @@ Other providers are listed with "no balance API known". Amounts are never conver
 
 ## Setup
 
-`conductor setup` is a terminal UI for `conductor.toml`, meant to be reopened whenever a provider changes its catalog or prices. Conductor ships three complete profiles (`low`, `medium`, `high`), so the UI opens on something that already works: you change a model, not the structure. The shipped ladders pick the strongest model per dollar at each difficulty level (SWE-bench Verified and Pro, plus measured cost per task); the reasoning is in decision 008.
+`conductor setup` is a terminal UI for `conductor.toml`, meant to be reopened whenever a provider changes its catalog or prices. Conductor ships three complete profiles (`low`, `medium`, `high`), so the UI opens on something that already works: you change a model, not the structure. The shipped ladders pick the strongest model per dollar at each difficulty level (SWE-bench Verified and Pro, plus measured cost per task); the reasoning is in decision 008. Every paid level and reviewer also falls back on a second provider that keeps the profile's data policy — the DeepSeek API for `low`, Vercel AI Gateway without prompt training for `medium`, Scaleway in Paris for `high` — so an OpenRouter outage does not stop a run (decision 014). Those fallbacks need `DEEPSEEK_API_KEY`, `AI_GATEWAY_API_KEY` or `SCALEWAY_API_KEY`; without the key a fallback is simply skipped.
 
 - profiles per privacy level: the three built-in ones plus any you add, with one marked as default;
-- per profile: **five difficulty levels**, each a model or an ordered list of a model and its fallbacks (the UI edits the first one and keeps the others), and the reviewer (a model, a list, or `brain`; a model reviewer needs an `https` base URL, because Conductor sends it the API key);
+- per profile: **five difficulty levels**, each a model or an ordered list of a model and its fallbacks (`f`/`F` add a fallback from the catalog or typed, `x` drops the last one), and the reviewer (a model, a list — `v` adds a fallback, `V` clears them — or `brain`; a model reviewer needs an `https` base URL, because Conductor sends it the API key);
 - providers: OpenRouter, OpenRouter EU, Vercel AI Gateway, Scaleway, OpenCode Zen, DeepSeek, or one typed by hand, each with its own `base_url` and key variable. A profile may use several of them, so level 1 can run on OpenRouter, level 3 on Scaleway and level 5 on Vercel;
 - models: picked from the providers' own catalogs, filtered by typing, or an id typed by hand;
 - API keys: type one and it is stored, masked, in `~/.local/share/conductor/auth.json` (mode `600`).
@@ -121,7 +121,7 @@ Multi-step changes (two or more steps, or several files) go through the `conduct
 }
 ```
 
-`difficulty` is 1 to 5 and picks the level of the chosen profile. Check it with `conductor validate plan.json`. Parallel steps must not touch the same files, or they will conflict at merge time.
+`difficulty` is 1 to 5 and picks the level of the chosen profile. Check it with `conductor validate plan.json`; when a `conductor.toml` is found (or given with `--config`), it also warns about levels and reviewers that rely on a single provider. Parallel steps must not touch the same files, or they will conflict at merge time.
 
 ## Development
 

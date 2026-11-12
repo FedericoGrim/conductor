@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import urllib.parse
 from typing import Any
 
-from conductor.config import Profile
+from conductor.config import Profile, Provider
+
+VERCEL_GATEWAY_HOST = "ai-gateway.vercel.sh"
 
 
 def api_model_id(provider: str, model: str) -> str:
@@ -10,12 +13,21 @@ def api_model_id(provider: str, model: str) -> str:
     return model[len(prefix) :] if model.startswith(prefix) else model
 
 
+def opencode_options(provider: Provider, options: dict[str, Any]) -> dict[str, Any]:
+    # Request options are the body of a direct OpenAI-compatible call (the reviewer). Vercel's
+    # gateway takes them under "providerOptions"; OpenCode puts its model options there itself.
+    if urllib.parse.urlsplit(provider.base_url).hostname != VERCEL_GATEWAY_HOST:
+        return options
+    unwrapped = {key: value for key, value in options.items() if key != "providerOptions"}
+    return {**unwrapped, **options.get("providerOptions", {})}
+
+
 def opencode_config(profile: Profile) -> dict[str, Any]:
     models: dict[str, dict[str, Any]] = {name: {} for name in profile.providers}
     for model in (model for tier in profile.tiers for model in tier):
         provider = profile.provider_for(model)
         models[provider.name][api_model_id(provider.name, model)] = {
-            "options": profile.options_for(model)
+            "options": opencode_options(provider, profile.options_for(model))
         }
     return {
         "$schema": "https://opencode.ai/config.json",
@@ -25,11 +37,11 @@ def opencode_config(profile: Profile) -> dict[str, Any]:
         "provider": {
             name: {
                 "options": {
-                    **profile.providers[name].request_options,
-                    "baseURL": profile.providers[name].base_url,
+                    **opencode_options(provider, provider.request_options),
+                    "baseURL": provider.base_url,
                 },
                 "models": models[name],
             }
-            for name in profile.providers
+            for name, provider in profile.providers.items()
         },
     }

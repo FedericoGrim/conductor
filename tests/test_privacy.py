@@ -111,3 +111,19 @@ def test_provider_options_also_cover_models_that_opencode_picks_itself() -> None
 
 def test_the_small_model_is_the_first_model_of_the_easiest_level() -> None:
     assert opencode_config(PROFILE)["small_model"] == "openrouter/deepseek/v4"
+
+
+def test_vercel_gateway_options_are_unwrapped_for_opencode() -> None:
+    from conductor.config import Profile, Provider
+
+    no_training = {"providerOptions": {"gateway": {"disallowPromptTraining": True}}}
+    profile = Profile(
+        "medium",
+        {"vercel": Provider("vercel", "https://ai-gateway.vercel.sh/v1", "V", no_training)},
+        (("vercel/openai/gpt-5.6-luna",),),
+        ("vercel/openai/gpt-5.6-luna",),
+    )
+    provider = opencode_config(profile)["provider"]["vercel"]
+    gateway = {"gateway": {"disallowPromptTraining": True}}
+    assert provider["options"] == {"baseURL": "https://ai-gateway.vercel.sh/v1", **gateway}
+    assert provider["models"] == {"openai/gpt-5.6-luna": {"options": gateway}}
