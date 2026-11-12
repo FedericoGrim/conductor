@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 BARE_KEY = re.compile(r"[A-Za-z0-9_-]+")
+DEFAULT_TRANSIENT_ATTEMPTS = 3
 DUMP_HEADER = "# Written by `conductor setup`. Comments added by hand are lost on the next save."
 
 
