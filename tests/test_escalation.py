@@ -39,19 +39,22 @@ def run(
     reviewed: list[str] | None = None,
     checks: list[list[CheckResult]] | None = None,
     checked: list[int] | None = None,
+    judged_checks: list[list[CheckResult]] | None = None,
 ) -> Any:
     calls: list[tuple[int, str, str]] = []
     recorded: list[dict[str, Any]] = []
     outputs = outputs or [output() for _ in verdicts]
     judged = list(reversed(range(len(verdicts))))
     reviewed = [] if reviewed is None else reviewed
+    judged_checks = [] if judged_checks is None else judged_checks
 
     async def attempt(step: Step, number: int, model: str, prompt: str) -> AttemptOutput:
         calls.append((number, model, prompt))
         return outputs[number - 1]
 
-    def judge(model: str, spec: str, diff: str) -> Verdict:
+    def judge(model: str, spec: str, diff: str, checks: list[CheckResult]) -> Verdict:
         reviewed.append(model)
+        judged_checks.append(checks)
         return verdicts[judged.pop()]
 
     def record(step: Step, data: dict[str, Any]) -> None:
@@ -159,7 +162,7 @@ def test_brain_reviewer_hands_the_diff_back_without_judging() -> None:
     async def attempt(step: Step, number: int, model: str, prompt: str) -> AttemptOutput:
         return output()
 
-    def judge(model: str, spec: str, diff: str) -> Verdict:
+    def judge(model: str, spec: str, diff: str, checks: list[CheckResult]) -> Verdict:
         raise AssertionError("brain profile must not call the reviewer")
 
     result = asyncio.run(
@@ -411,7 +414,7 @@ def test_a_step_with_answers_puts_them_in_the_prompt_and_reaches_the_reviewer() 
         calls.append(prompt)
         return output()
 
-    def judge(model: str, spec: str, diff: str) -> Verdict:
+    def judge(model: str, spec: str, diff: str, checks: list[CheckResult]) -> Verdict:
         reviewed.append(model)
         return Verdict(True, "ok", "{}")
 
@@ -488,3 +491,9 @@ def test_a_question_runs_no_checks() -> None:
     checked: list[int] = []
     run([], outputs=[asking()], checked=checked)
     assert checked == []
+
+
+def test_the_reviewer_receives_the_checks_that_passed() -> None:
+    judged_checks: list[list[CheckResult]] = []
+    run([Verdict(True, "ok", "{}")], checks=[[PASSED]], judged_checks=judged_checks)
+    assert judged_checks == [[PASSED]]

@@ -16,6 +16,7 @@ from conductor.merge import merge_branch
 from conductor.plan import Plan, PlanError, Step
 from conductor.privacy import opencode_config
 from conductor.scheduler import APPROVED, CONFLICT, StepResult, run_plan
+from conductor.verify import CheckResult
 from conductor.worker import (
     AttemptOutput,
     create_worktree,
@@ -78,8 +79,8 @@ async def execute_plan(
             transient_attempts=profile.transient_attempts,
         )
 
-    def judge(model: str, spec: str, diff: str) -> reviewer.Verdict:
-        return reviewer.review(profile, model, spec, diff)
+    def judge(model: str, spec: str, diff: str, checks: list[CheckResult]) -> reviewer.Verdict:
+        return reviewer.review(profile, model, spec, diff, checks=checks)
 
     async def execute(step: Step) -> StepResult:
         result = await run_step(

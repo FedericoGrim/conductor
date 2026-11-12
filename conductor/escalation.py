@@ -20,7 +20,7 @@ from conductor.verify import CheckResult, failure_reason
 from conductor.worker import AttemptOutput
 
 Attempt = Callable[[Step, int, str, str], Awaitable[AttemptOutput]]
-Judge = Callable[[str, str, str], Verdict]
+Judge = Callable[[str, str, str, list[CheckResult]], Verdict]
 Record = Callable[[Step, dict[str, Any]], object]
 Check = Callable[[Step, int], Awaitable[list[CheckResult]]]
 
@@ -200,20 +200,26 @@ class StepRun:
         entry["verify"] = [asdict(result) for result in checks]
         failed = next((result for result in checks if not result.ok), None)
         if failed is None:
-            return self.review(model, output, entry)
+            return self.review(model, output, entry, checks)
         self.record(self.step, entry)
         reason = failure_reason(failed)
         self.result.detail = f"rejected on {model}: {reason}"
         return reason
 
-    def review(self, model: str, output: AttemptOutput, entry: dict[str, Any]) -> str | None:
+    def review(
+        self,
+        model: str,
+        output: AttemptOutput,
+        entry: dict[str, Any],
+        checks: list[CheckResult],
+    ) -> str | None:
         if self.profile.is_brain_review:
             self.record(self.step, entry)
             self.result.status = NEEDS_BRAIN_REVIEW
             return None
         verdict: Verdict | None = NO_CHANGES
         if output.diff.strip():
-            verdict = self.consult_reviewers(output.diff, entry)
+            verdict = self.consult_reviewers(output.diff, entry, checks)
         else:
             entry["review"] = review_entry(self.profile.reviewers[0], NO_CHANGES)
         self.record(self.step, entry)
@@ -228,13 +234,15 @@ class StepRun:
         self.result.detail = f"rejected on {model}: {verdict.reason}"
         return verdict.reason
 
-    def consult_reviewers(self, diff: str, entry: dict[str, Any]) -> Verdict | None:
+    def consult_reviewers(
+        self, diff: str, entry: dict[str, Any], checks: list[CheckResult]
+    ) -> Verdict | None:
         """Ask the reviewers in order; the first verdict without an error decides."""
         consulted: list[tuple[str, Verdict]] = []
         for reviewer in self.profile.reviewers:
             if provider_of(reviewer) in self.state.excluded_reviewer_providers:
                 continue
-            verdict = self.judge(reviewer, self.step.spec, diff)
+            verdict = self.judge(reviewer, self.step.spec, diff, checks)
             consulted.append((reviewer, verdict))
             if verdict.error is None:
                 break
