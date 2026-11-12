@@ -3,13 +3,24 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import subprocess
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from conductor.errors import (
+    MODEL_UNSUITABLE,
+    PROVIDER_UNUSABLE,
+    TRANSIENT,
+    UNCLASSIFIED,
+    ModelError,
+)
+
 OPENCODE_CONFIG_NAME = "opencode.json"
+ERROR_EVENT = "error"
+RETRY_EVENT = "retry"
 
 Runner = Callable[[list[str], Path], Awaitable[tuple[int, str, str]]]
 
@@ -92,6 +103,39 @@ def events_cost(events: list[dict[str, Any]]) -> float:
         if event.get("type") == "step_finish" and isinstance(cost, int | float):
             total += cost
     return total
+
+
+ERROR_KINDS = {
+    "provider.rate-limit": TRANSIENT,
+    "provider.internal": TRANSIENT,
+    "provider.transport": TRANSIENT,
+    "provider.auth": PROVIDER_UNUSABLE,
+    "provider.quota": PROVIDER_UNUSABLE,
+    "provider.no-route": MODEL_UNSUITABLE,
+}
+CONTEXT_EXCEEDED = re.compile(r"context (length|window)|too many tokens", re.IGNORECASE)
+
+
+def classify_opencode_error(error: dict[str, Any]) -> ModelError:
+    error_type = str(error.get("type", ""))
+    message = str(error.get("message", ""))
+    kind = ERROR_KINDS.get(error_type, UNCLASSIFIED)
+    if error_type == "provider.invalid-request" and CONTEXT_EXCEEDED.search(message):
+        kind = MODEL_UNSUITABLE
+    return ModelError.of(kind, error_type, message)
+
+
+def attempt_error(events: list[dict[str, Any]], exit_code: int, stderr: str) -> ModelError | None:
+    if exit_code == 0:
+        return None
+    reported = [
+        event["error"]
+        for event in events
+        if event.get("type") in (ERROR_EVENT, RETRY_EVENT) and isinstance(event.get("error"), dict)
+    ]
+    if reported:
+        return classify_opencode_error(reported[-1])
+    return ModelError.of(UNCLASSIFIED, f"exit {exit_code}", stderr)
 
 
 def commit_work(worktree: Path, message: str) -> bool:
