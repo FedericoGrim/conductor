@@ -15,6 +15,7 @@ from conductor.errors import (
 from conductor.escalation import RunState, build_prompt, run_step
 from conductor.plan import Answer, Step
 from conductor.reviewer import Verdict
+from conductor.verify import CheckResult
 from conductor.worker import AttemptOutput
 from tests.factories import make_profile
 
@@ -36,6 +37,8 @@ def run(
     profile: Profile = PROFILE,
     state: RunState | None = None,
     reviewed: list[str] | None = None,
+    checks: list[list[CheckResult]] | None = None,
+    checked: list[int] | None = None,
 ) -> Any:
     calls: list[tuple[int, str, str]] = []
     recorded: list[dict[str, Any]] = []
@@ -54,6 +57,11 @@ def run(
     def record(step: Step, data: dict[str, Any]) -> None:
         recorded.append(data)
 
+    async def check(step: Step, number: int) -> list[CheckResult]:
+        if checked is not None:
+            checked.append(number)
+        return checks.pop(0) if checks else []
+
     result = asyncio.run(
         run_step(
             STEP,
@@ -62,6 +70,7 @@ def run(
             judge=judge,
             record=record,
             state=state or RunState(),
+            check=check,
         )
     )
     return result, calls, recorded
@@ -420,3 +429,62 @@ def test_the_prompt_asks_for_a_question_instead_of_a_guess() -> None:
     assert "Do not ask questions" not in prompt
     assert "QUESTION:" in prompt
     assert "Answers to your earlier questions" not in prompt
+
+
+PASSED = CheckResult("pytest -q", 0, "3 passed", 1.0)
+FAILED_CHECK = CheckResult("pytest -q", 1, "1 failed: test_total_is_never_negative", 1.0)
+
+
+def test_a_failed_check_rejects_the_attempt_without_calling_the_reviewer() -> None:
+    reviewed: list[str] = []
+    result, calls, recorded = run(
+        [Verdict(True, "ok", "{}")],
+        outputs=[output(), output()],
+        reviewed=reviewed,
+        checks=[[PASSED, FAILED_CHECK], [PASSED]],
+    )
+    assert result.status == "approved"
+    assert [c[1] for c in calls] == ["openrouter/t1", "openrouter/t2"]
+    assert reviewed == ["openrouter/r"]
+    assert recorded[0]["review"] is None
+    assert recorded[0]["verify"][1]["exit_code"] == 1
+    assert "test_total_is_never_negative" in calls[1][2]
+
+
+def test_a_failed_check_on_the_last_level_fails_the_step() -> None:
+    result, _, _ = run([], checks=[[FAILED_CHECK], [FAILED_CHECK]], outputs=[output(), output()])
+    assert result.status == "failed"
+    assert "verification failed: `pytest -q` (exit 1)" in result.detail
+
+
+def test_passing_checks_are_recorded_before_the_review() -> None:
+    _, _, recorded = run([Verdict(True, "ok", "{}")], checks=[[PASSED]])
+    assert recorded[0]["verify"] == [
+        {
+            "command": "pytest -q",
+            "exit_code": 0,
+            "output": "3 passed",
+            "seconds": 1.0,
+            "timed_out": False,
+        }
+    ]
+
+
+def test_the_brain_only_receives_verified_diffs() -> None:
+    profile = make_profile(
+        name="low",
+        api_key_env="K",
+        tiers=("openrouter/t0", "openrouter/t1", "openrouter/t2"),
+        reviewer="brain",
+    )
+    result, calls, _ = run(
+        [], outputs=[output(), output()], profile=profile, checks=[[FAILED_CHECK], [PASSED]]
+    )
+    assert result.status == "needs_brain_review"
+    assert len(calls) == 2
+
+
+def test_a_question_runs_no_checks() -> None:
+    checked: list[int] = []
+    run([], outputs=[asking()], checked=checked)
+    assert checked == []

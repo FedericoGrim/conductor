@@ -16,11 +16,13 @@ from conductor.scheduler import (
     UNAVAILABLE,
     StepResult,
 )
+from conductor.verify import CheckResult, failure_reason
 from conductor.worker import AttemptOutput
 
 Attempt = Callable[[Step, int, str, str], Awaitable[AttemptOutput]]
 Judge = Callable[[str, str, str], Verdict]
 Record = Callable[[Step, dict[str, Any]], object]
+Check = Callable[[Step, int], Awaitable[list[CheckResult]]]
 
 NO_CHANGES = Verdict(False, "no changes produced", "")
 NO_REVIEWER = "every reviewer provider is excluded for this run"
@@ -83,8 +85,11 @@ async def run_step(
     record: Record,
     goal: str = "",
     state: RunState | None = None,
+    check: Check | None = None,
 ) -> StepResult:
-    run = StepRun(step, profile, attempt, judge, record, goal, state or RunState())
+    run = StepRun(
+        step, profile, attempt, judge, record, goal, state or RunState(), check or no_checks
+    )
     return await run.execute()
 
 
@@ -104,6 +109,7 @@ def attempt_entry(
         "diff": output.diff,
         "error": None,
         "question": None,
+        "verify": [],
         "review": None,
         "review_fallbacks": [],
         "cost": {"worker": output.cost, "reviewer": None},
@@ -122,6 +128,10 @@ def review_entry(model: str, verdict: Verdict) -> dict[str, Any]:
     }
 
 
+async def no_checks(step: Step, number: int) -> list[CheckResult]:
+    return []
+
+
 @dataclass
 class StepRun:
     step: Step
@@ -131,6 +141,7 @@ class StepRun:
     record: Record
     goal: str
     state: RunState
+    check: Check
 
     def __post_init__(self) -> None:
         self.result = StepResult(self.step.id, FAILED)
@@ -158,7 +169,7 @@ class StepRun:
             entry = attempt_entry(number, tier, model, prompt, output)
             self.result.attempts.append(entry)
             if output.exit_code == 0:
-                return self.question_or_review(model, output, entry)
+                return await self.judge_attempt(number, model, output, entry)
             error = output.error or ModelError.of(
                 UNCLASSIFIED, f"exit {output.exit_code}", output.stderr
             )
@@ -174,17 +185,26 @@ class StepRun:
         self.result.detail = last_error
         return None
 
-    def question_or_review(
-        self, model: str, output: AttemptOutput, entry: dict[str, Any]
+    async def judge_attempt(
+        self, number: int, model: str, output: AttemptOutput, entry: dict[str, Any]
     ) -> str | None:
+        """Question, then verification, then review; return the rejection reason, if any."""
         question = question_in(output.final_text)
-        if question is None:
+        if question is not None:
+            entry["question"] = question
+            self.record(self.step, entry)
+            self.result.status = NEEDS_ANSWER
+            self.result.detail = question
+            return None
+        checks = await self.check(self.step, number)
+        entry["verify"] = [asdict(result) for result in checks]
+        failed = next((result for result in checks if not result.ok), None)
+        if failed is None:
             return self.review(model, output, entry)
-        entry["question"] = question
         self.record(self.step, entry)
-        self.result.status = NEEDS_ANSWER
-        self.result.detail = question
-        return None
+        reason = failure_reason(failed)
+        self.result.detail = f"rejected on {model}: {reason}"
+        return reason
 
     def review(self, model: str, output: AttemptOutput, entry: dict[str, Any]) -> str | None:
         if self.profile.is_brain_review:
