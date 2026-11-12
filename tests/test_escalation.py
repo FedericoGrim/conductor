@@ -1,6 +1,15 @@
 import asyncio
 from typing import Any
 
+import pytest
+
+from conductor.errors import (
+    MODEL_UNSUITABLE,
+    PROVIDER_UNUSABLE,
+    TRANSIENT,
+    UNCLASSIFIED,
+    ModelError,
+)
 from conductor.escalation import build_prompt, run_step
 from conductor.plan import Step
 from conductor.reviewer import Verdict
@@ -11,8 +20,12 @@ PROFILE = make_profile(api_key_env="K")
 STEP = Step("s1", "Parser", "write a parser", ("parser.py",), 2, ())
 
 
-def output(diff: str = "+code", exit_code: int = 0, cost: float = 0.0) -> AttemptOutput:
-    return AttemptOutput(exit_code=exit_code, session_id="ses", events=[], diff=diff, cost=cost)
+def output(
+    diff: str = "+code", exit_code: int = 0, cost: float = 0.0, error: ModelError | None = None
+) -> AttemptOutput:
+    return AttemptOutput(
+        exit_code=exit_code, session_id="ses", events=[], diff=diff, cost=cost, error=error
+    )
 
 
 def run(verdicts: list[Verdict], outputs: list[AttemptOutput] | None = None) -> Any:
@@ -83,8 +96,33 @@ def test_a_failed_attempt_still_records_what_the_worker_spent() -> None:
 def test_opencode_failure_does_not_retry() -> None:
     result, calls, _ = run([], outputs=[output(exit_code=3)])
     assert result.status == "failed"
-    assert "exit code 3" in result.detail
+    assert "exit 3" in result.detail
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize("kind", [TRANSIENT, PROVIDER_UNUSABLE, MODEL_UNSUITABLE])
+def test_a_classified_model_error_makes_the_step_unavailable_without_escalating(
+    kind: str,
+) -> None:
+    error = ModelError(kind, "provider.x", "it broke")
+    result, calls, recorded = run([], outputs=[output(exit_code=1, error=error)])
+    assert result.status == "unavailable"
+    assert len(calls) == 1
+    assert "it broke" in result.detail
+    assert recorded[0]["error"] == {"kind": kind, "type": "provider.x", "message": "it broke"}
+
+
+def test_an_unclassified_model_error_fails_the_step() -> None:
+    error = ModelError(UNCLASSIFIED, "tool.crashed", "boom")
+    result, calls, recorded = run([], outputs=[output(exit_code=1, error=error)])
+    assert result.status == "failed"
+    assert len(calls) == 1
+    assert recorded[0]["error"]["kind"] == UNCLASSIFIED
+
+
+def test_a_successful_attempt_records_no_error() -> None:
+    _, _, recorded = run([Verdict(True, "fine", "{}")])
+    assert recorded[0]["error"] is None
 
 
 def test_brain_reviewer_hands_the_diff_back_without_judging() -> None:

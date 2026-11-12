@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from dataclasses import asdict
 from typing import Any
 
 from conductor.config import Profile
+from conductor.errors import UNCLASSIFIED, ModelError
 from conductor.plan import Step
 from conductor.reviewer import Verdict
-from conductor.scheduler import APPROVED, FAILED, NEEDS_BRAIN_REVIEW, StepResult
+from conductor.scheduler import APPROVED, FAILED, NEEDS_BRAIN_REVIEW, UNAVAILABLE, StepResult
 from conductor.worker import AttemptOutput
 
 BRAIN = "brain"
@@ -61,13 +63,19 @@ async def run_step(
             "events": output.events,
             "stderr": output.stderr,
             "diff": output.diff,
+            "error": None,
             "review": None,
             "cost": {"worker": output.cost, "reviewer": None},
         }
         result.attempts.append(entry)
         if output.exit_code != 0:
-            result.detail = f"opencode exit code {output.exit_code}: {output.stderr.strip()[-500:]}"
+            error = output.error or ModelError.of(
+                UNCLASSIFIED, f"exit {output.exit_code}", output.stderr
+            )
+            entry["error"] = asdict(error)
             record(step, entry)
+            result.status = FAILED if error.kind == UNCLASSIFIED else UNAVAILABLE
+            result.detail = f"{model}: {error.describe()}"
             return result
         if profile.reviewer == BRAIN:
             record(step, entry)
