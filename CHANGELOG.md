@@ -1,5 +1,70 @@
 # Changelog
 
+## [0.5.0](https://github.com/FedericoGrim/conductor/compare/conductor-v0.4.0...conductor-v0.5.0) (2026-11-12)
+
+
+### Features
+
+* classify model errors and end steps as unavailable instead of hanging ([b8bf431](https://github.com/FedericoGrim/conductor/commit/b8bf4316e431d34ab2762f250fafb01b44af255c))
+* **cli:** run verification commands and send domain rules to the reviewer ([25d99ef](https://github.com/FedericoGrim/conductor/commit/25d99efb3e484493aa3a0b9739f775a1d243c857)), closes [#32](https://github.com/FedericoGrim/conductor/issues/32)
+* **cli:** warn in validate when a level relies on a single provider ([f4694ae](https://github.com/FedericoGrim/conductor/commit/f4694ae087ade70e06469693d8b2bcbce2d1740b)), closes [#34](https://github.com/FedericoGrim/conductor/issues/34)
+* **config:** add a per-profile retry limit for transient errors ([b89c076](https://github.com/FedericoGrim/conductor/commit/b89c07659ee125d981668c71af1f79a23ed4377b)), closes [#34](https://github.com/FedericoGrim/conductor/issues/34)
+* **config:** allow an ordered list of models per level and for the reviewer ([dc24ece](https://github.com/FedericoGrim/conductor/commit/dc24eced78a496dd15b0ef1ab0f0a66d108b56a5)), closes [#34](https://github.com/FedericoGrim/conductor/issues/34)
+* **config:** name the harness of a provider and allow providers without an endpoint ([1739b3d](https://github.com/FedericoGrim/conductor/commit/1739b3da8d9e20fcd82f0d5bb194664ddb049c01)), closes [#31](https://github.com/FedericoGrim/conductor/issues/31)
+* default fallbacks on a second provider, editable in setup ([1efcd46](https://github.com/FedericoGrim/conductor/commit/1efcd4612bfbbb295427bc4371f682f4f1cf03ee))
+* **escalation:** end a step as unavailable on classified model errors ([b30a0f4](https://github.com/FedericoGrim/conductor/commit/b30a0f402f9e952aa8697e72342f23b59daa3b52)), closes [#34](https://github.com/FedericoGrim/conductor/issues/34)
+* **escalation:** fall back to the next model of a level on model errors ([2b7eceb](https://github.com/FedericoGrim/conductor/commit/2b7ecebc4bda75f51afb0a8a991064667d7fa53f)), closes [#34](https://github.com/FedericoGrim/conductor/issues/34)
+* **escalation:** stop a step on a worker question instead of guessing ([082448f](https://github.com/FedericoGrim/conductor/commit/082448f6787664a039fa5f426e59cb3c4e091bc1)), closes [#30](https://github.com/FedericoGrim/conductor/issues/30)
+* **escalation:** verify an attempt before the review ([f1f6ce7](https://github.com/FedericoGrim/conductor/commit/f1f6ce7d67e693c96db423d91f6e511d5308fa29)), closes [#32](https://github.com/FedericoGrim/conductor/issues/32)
+* fallback models within a level and for the reviewer ([e0a51fa](https://github.com/FedericoGrim/conductor/commit/e0a51fa6dd930f5350db67c576616ddb697ee76a))
+* **harness:** run workers with Claude Code ([8146fd8](https://github.com/FedericoGrim/conductor/commit/8146fd82ce4195addba2cbfeb51dd61664d4aea6)), closes [#31](https://github.com/FedericoGrim/conductor/issues/31)
+* **log:** count the cost of failed reviewers in the run totals ([de9922c](https://github.com/FedericoGrim/conductor/commit/de9922c951c5d82c829b68f5385d0ca4c2b2d6a0)), closes [#34](https://github.com/FedericoGrim/conductor/issues/34)
+* **log:** record the open question of a step in run.json ([ea528f9](https://github.com/FedericoGrim/conductor/commit/ea528f9e99b200286d319a784846707250f70d58)), closes [#30](https://github.com/FedericoGrim/conductor/issues/30)
+* **plan:** declare domain rules and verification commands ([204f821](https://github.com/FedericoGrim/conductor/commit/204f821c4df06a8d855af855a22c9f1121759d8c)), closes [#32](https://github.com/FedericoGrim/conductor/issues/32)
+* **plan:** let a step carry the answers to earlier questions ([1904a0d](https://github.com/FedericoGrim/conductor/commit/1904a0d1016d56b11e32293284199dae98dcb361)), closes [#30](https://github.com/FedericoGrim/conductor/issues/30)
+* **privacy:** leave providers without an endpoint to their harness ([20c3d63](https://github.com/FedericoGrim/conductor/commit/20c3d63f92b7cf44390f3fe4e57eb8c11be8e2ee)), closes [#31](https://github.com/FedericoGrim/conductor/issues/31)
+* **privacy:** unwrap Vercel gateway options for OpenCode ([d9efde8](https://github.com/FedericoGrim/conductor/commit/d9efde8f32c2adeae23747a4bc1328b77a346e3e)), closes [#34](https://github.com/FedericoGrim/conductor/issues/34)
+* **privacy:** write the fallback models into the worktree opencode.json ([97ff48c](https://github.com/FedericoGrim/conductor/commit/97ff48c2e9d8603f6e940c295b31f051c5a35303)), closes [#34](https://github.com/FedericoGrim/conductor/issues/34)
+* **reviewer:** hand the diff to the brain when the reviewer fails ([86c8aa1](https://github.com/FedericoGrim/conductor/commit/86c8aa14d3ade9412c434e6f8ac3caa92fba8c86)), closes [#34](https://github.com/FedericoGrim/conductor/issues/34)
+* **reviewer:** judge tests and domain rules with the verification results ([6b04efc](https://github.com/FedericoGrim/conductor/commit/6b04efc486c2740675865f4ec5f739f8fc6c0154)), closes [#32](https://github.com/FedericoGrim/conductor/issues/32)
+* **reviewer:** try the reviewers in order and skip unusable providers ([eb2e2c8](https://github.com/FedericoGrim/conductor/commit/eb2e2c8b6010fc6dfc6dea85a8fae2fbb6bd1fc4)), closes [#34](https://github.com/FedericoGrim/conductor/issues/34)
+* run workers with Claude Code as a harness chosen by the provider ([fee881e](https://github.com/FedericoGrim/conductor/commit/fee881edf6b19fa0d26aba039fa7d5469d7828b4))
+* **setup:** add and remove fallback models for levels and the reviewer ([d1deb3f](https://github.com/FedericoGrim/conductor/commit/d1deb3fc74ec6c70a5915b7d447b3df9a7395abd)), closes [#34](https://github.com/FedericoGrim/conductor/issues/34)
+* **setup:** edit fallback models in the setup UI ([4d6d2e6](https://github.com/FedericoGrim/conductor/commit/4d6d2e63b3c432a62a9ac65084ba98f0aa42a9a7)), closes [#34](https://github.com/FedericoGrim/conductor/issues/34)
+* **setup:** keep the fallback models of every level and of the reviewer ([0fd3633](https://github.com/FedericoGrim/conductor/commit/0fd3633c364cc2a5cd685836b4bdb8590d68f9fc)), closes [#34](https://github.com/FedericoGrim/conductor/issues/34)
+* **setup:** offer Claude Code as a provider managed by its harness ([5f14779](https://github.com/FedericoGrim/conductor/commit/5f14779b3ada7f2698d75898eee8869c5adde06d)), closes [#31](https://github.com/FedericoGrim/conductor/issues/31)
+* verify attempts with plan commands and review against tests and domain rules ([ad4069c](https://github.com/FedericoGrim/conductor/commit/ad4069c1520d653ab4e778fb13e78ed58028b3b7))
+* **verify:** run a step's verification commands in its worktree ([d518516](https://github.com/FedericoGrim/conductor/commit/d518516afbba7ece2d4b70e01c53d55bab8023f0)), closes [#32](https://github.com/FedericoGrim/conductor/issues/32)
+* **worker:** classify OpenCode provider errors ([b1581ce](https://github.com/FedericoGrim/conductor/commit/b1581ce1fd27955b5b9c667e44c514a08b6eb5c3)), closes [#34](https://github.com/FedericoGrim/conductor/issues/34)
+* **worker:** keep the final text of an attempt ([ed3fdc0](https://github.com/FedericoGrim/conductor/commit/ed3fdc023f0cafafeee741df1e06b2ba9d484482)), closes [#30](https://github.com/FedericoGrim/conductor/issues/30)
+* workers stop on open decisions with a question for the brain ([f167e65](https://github.com/FedericoGrim/conductor/commit/f167e6512161d481a4e4c837d5ed2d6d379efd4f))
+* **worker:** stream OpenCode events and stop after the retry limit ([6811d70](https://github.com/FedericoGrim/conductor/commit/6811d705eab95c2c5491af1325e3c82c80e90adb)), closes [#34](https://github.com/FedericoGrim/conductor/issues/34)
+
+
+### Bug Fixes
+
+* **privacy:** keep the data policy on models OpenCode picks itself ([fadb411](https://github.com/FedericoGrim/conductor/commit/fadb411f13a047624e887d2e272dd05f91d6a7cb))
+* **privacy:** keep the profile's data policy on models OpenCode picks itself ([eb333b6](https://github.com/FedericoGrim/conductor/commit/eb333b6fcf6084ac184447329b91890e29fb5c77))
+* **reviewer:** never send the API key to a base URL that is not https ([6c8a7f6](https://github.com/FedericoGrim/conductor/commit/6c8a7f63b0aa0119cf047981f82e974eeba4983e))
+* **reviewer:** never send the API key to a base URL that is not https ([7cb879e](https://github.com/FedericoGrim/conductor/commit/7cb879ec7df0c6984b18112274f916533dd10950))
+
+
+### Documentation
+
+* **decisions:** accept 011 with verified OpenCode error classes ([66da435](https://github.com/FedericoGrim/conductor/commit/66da435baea224d8e3fc3a6637c1b3df21828665))
+* **decisions:** propose fallback models, autonomy levels and step agents ([b5fac3d](https://github.com/FedericoGrim/conductor/commit/b5fac3d8e1883faf56de95a94478afdc36fa5403))
+* **decisions:** propose fallback models, autonomy levels and step agents ([f1c3c89](https://github.com/FedericoGrim/conductor/commit/f1c3c898534d73731c5d1fc06b6c5f618801d4e8))
+* describe fallback models for levels and reviewers ([a2fba43](https://github.com/FedericoGrim/conductor/commit/a2fba4339d0e1be7beb6deaf9abbe597b92642b8)), closes [#34](https://github.com/FedericoGrim/conductor/issues/34)
+* describe provider harnesses and endpoint-less providers ([e32859e](https://github.com/FedericoGrim/conductor/commit/e32859e15b280177e5600a1bc45ef3ba6d113700)), closes [#31](https://github.com/FedericoGrim/conductor/issues/31)
+* describe the Claude Code harness and decision 017 ([a672ad5](https://github.com/FedericoGrim/conductor/commit/a672ad50abb057543327f19af497efe9858b5dd7)), closes [#31](https://github.com/FedericoGrim/conductor/issues/31)
+* describe the default fallbacks and decision 014 ([8af5955](https://github.com/FedericoGrim/conductor/commit/8af59558e30fb3e551c71d275e96d0315161f47f)), closes [#34](https://github.com/FedericoGrim/conductor/issues/34)
+* describe the harness module ([658e77e](https://github.com/FedericoGrim/conductor/commit/658e77e6487fb533cde2900080f44ec4890ee2f3)), closes [#31](https://github.com/FedericoGrim/conductor/issues/31)
+* describe the unavailable state and reviewer errors ([946314a](https://github.com/FedericoGrim/conductor/commit/946314ae324764f99947482fcb7a7adf1779867d)), closes [#34](https://github.com/FedericoGrim/conductor/issues/34)
+* describe verification commands, domain rules and decision 016 ([0eee061](https://github.com/FedericoGrim/conductor/commit/0eee0614822b7c84e2be25e5b77caa55015c7de5)), closes [#32](https://github.com/FedericoGrim/conductor/issues/32)
+* describe worker questions, needs_answer and decision 015 ([ec9c8fa](https://github.com/FedericoGrim/conductor/commit/ec9c8fa6aa6b81abd4affb98e459016336fdb337)), closes [#30](https://github.com/FedericoGrim/conductor/issues/30)
+* explain how the data policy reaches OpenCode's own requests ([ec22ce7](https://github.com/FedericoGrim/conductor/commit/ec22ce7fa05233889d67b0a673910d45193304b9))
+* note that a model reviewer needs an https base URL ([46f516a](https://github.com/FedericoGrim/conductor/commit/46f516af892a045657fa38484983fcd217361350))
+
 ## [0.4.0](https://github.com/FedericoGrim/conductor/compare/conductor-v0.3.1...conductor-v0.4.0) (2026-11-11)
 
 
