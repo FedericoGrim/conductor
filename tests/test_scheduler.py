@@ -1,7 +1,7 @@
 import asyncio
 
 from conductor.plan import Plan, Step
-from conductor.scheduler import UNAVAILABLE, StepResult, run_plan
+from conductor.scheduler import NEEDS_ANSWER, UNAVAILABLE, StepResult, run_plan
 
 
 def make_plan(*steps: tuple[str, list[str]]) -> Plan:
@@ -69,3 +69,13 @@ def test_dependents_of_an_unavailable_step_are_skipped() -> None:
     results = asyncio.run(run_plan(plan, max_parallel=4, execute=execute))
     assert results["b"].status == "skipped"
     assert "'a' not approved" in results["b"].detail
+
+
+def test_dependents_of_a_step_waiting_for_an_answer_are_skipped() -> None:
+    plan = make_plan(("a", []), ("b", ["a"]))
+
+    async def execute(step: Step) -> StepResult:
+        return StepResult(step.id, NEEDS_ANSWER if step.id == "a" else "approved")
+
+    results = asyncio.run(run_plan(plan, max_parallel=4, execute=execute))
+    assert results["b"].status == "skipped"

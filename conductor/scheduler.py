@@ -14,6 +14,7 @@ SKIPPED = "skipped"
 CONFLICT = "conflict"
 NEEDS_BRAIN_REVIEW = "needs_brain_review"
 UNAVAILABLE = "unavailable"
+NEEDS_ANSWER = "needs_answer"
 
 
 @dataclass
