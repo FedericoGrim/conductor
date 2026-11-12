@@ -48,10 +48,55 @@ def install_fake_opencode(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
 
 
-def test_validate_accepts_the_example_plan(capsys: pytest.CaptureFixture[str]) -> None:
-    example = Path(__file__).parent.parent / "examples" / "plan.json"
-    assert cli.main(["validate", str(example)]) == 0
-    assert "ok:" in capsys.readouterr().out
+EXAMPLE_PLAN = Path(__file__).parent.parent / "examples" / "plan.json"
+
+
+def test_validate_accepts_the_example_plan(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(cli, "DEFAULT_CONFIG_PATHS", ())
+    assert cli.main(["validate", str(EXAMPLE_PLAN)]) == 0
+    assert capsys.readouterr().out == "ok: 3 steps\n"
+
+
+SINGLE_PROVIDER = """
+default_privacy = "medium"
+[privacy.medium]
+tiers = [["openrouter/a", "openrouter/a2"], ["openrouter/b", "deepseek/b2"]]
+reviewer = "openrouter/r"
+
+[privacy.medium.providers.openrouter]
+base_url = "https://openrouter.ai/api/v1"
+api_key_env = "OPENROUTER_API_KEY"
+
+[privacy.medium.providers.deepseek]
+base_url = "https://api.deepseek.com/v1"
+api_key_env = "DEEPSEEK_API_KEY"
+"""
+
+
+def test_validate_warns_about_levels_that_depend_on_one_provider(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config = tmp_path / "conductor.toml"
+    config.write_text(SINGLE_PROVIDER)
+    assert cli.main(["validate", str(EXAMPLE_PLAN), "--config", str(config)]) == 0
+    out = capsys.readouterr().out
+    assert "ok: 3 steps" in out
+    assert (
+        "warning: privacy.medium: level 1, the reviewer rely only on openrouter; "
+        "an outage there leaves them unavailable\n"
+    ) in out
+    assert "level 2" not in out
+
+
+def test_validate_does_not_warn_about_a_brain_reviewer(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config = tmp_path / "conductor.toml"
+    config.write_text(SINGLE_PROVIDER.replace('reviewer = "openrouter/r"', 'reviewer = "brain"'))
+    cli.main(["validate", str(EXAMPLE_PLAN), "--config", str(config)])
+    assert "reviewer" not in capsys.readouterr().out
 
 
 def test_run_executes_reviews_and_merges(

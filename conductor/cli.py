@@ -45,6 +45,12 @@ def find_config(explicit: Path | None) -> Path:
 def validate(args: argparse.Namespace) -> int:
     plan = Plan.load(args.plan)
     print(f"ok: {len(plan.steps)} steps")
+    if args.config is None and not any(path.exists() for path in DEFAULT_CONFIG_PATHS):
+        return 0
+    config = Config.load(find_config(args.config))
+    for profile in config.profiles.values():
+        for warning in profile.single_provider_warnings():
+            print(f"warning: {warning}")
     return 0
 
 
@@ -239,6 +245,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     check = commands.add_parser("validate", help="check a plan.json")
     check.add_argument("plan", type=Path)
+    check.add_argument("--config", type=Path, help="path to conductor.toml")
     check.set_defaults(handler=validate)
 
     execute = commands.add_parser("run", help="execute a plan.json")

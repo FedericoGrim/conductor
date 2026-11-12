@@ -213,6 +213,21 @@ class Profile:
                     "because Conductor sends it the API key"
                 )
 
+    def single_provider_warnings(self) -> list[str]:
+        groups = [(f"level {level}", models) for level, models in enumerate(self.tiers, start=1)]
+        if not self.is_brain_review:
+            groups.append(("the reviewer", self.reviewers))
+        exposed: dict[str, list[str]] = {}
+        for label, models in groups:
+            providers = {provider_of(model) for model in models}
+            if len(providers) == 1:
+                exposed.setdefault(providers.pop(), []).append(label)
+        return [
+            f"privacy.{self.name}: {', '.join(labels)} rely only on {provider}; "
+            "an outage there leaves them unavailable"
+            for provider, labels in exposed.items()
+        ]
+
     def provider_for(self, model: str) -> Provider:
         provider = self.providers.get(provider_of(model))
         if provider is None:
