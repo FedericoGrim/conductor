@@ -96,6 +96,9 @@ async def run_step(
 def attempt_entry(
     number: int, tier: int, model: str, prompt: str, output: AttemptOutput
 ) -> dict[str, Any]:
+    cost: dict[str, float | None] = {"worker": output.cost, "reviewer": None}
+    if output.subscription_cost:
+        cost["subscription"] = output.subscription_cost
     return {
         "attempt": number,
         "tier": tier,
@@ -112,7 +115,7 @@ def attempt_entry(
         "verify": [],
         "review": None,
         "review_fallbacks": [],
-        "cost": {"worker": output.cost, "reviewer": None},
+        "cost": cost,
     }
 
 

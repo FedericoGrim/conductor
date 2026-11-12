@@ -345,3 +345,15 @@ def test_the_reviewer_gets_fallbacks_and_loses_them_when_it_becomes_the_brain(
     view.handle_key("r")
     assert view.state.draft().reviewer == "brain"
     assert view.state.draft().reviewer_fallbacks == []
+
+
+def test_a_managed_provider_says_so_and_offers_no_endpoint_to_edit(tmp_path: Path) -> None:
+    view = editor(tmp_path)
+    view.state.add_provider(next(k for k in KNOWN_PROVIDERS if k.name == "claude-code"))
+    view.handle_key("enter")
+    view.handle_key("P")
+    assert "claude-code  (managed by claude-code)" in "\n".join(render(view))
+    view.handle_key("down")
+    view.handle_key("b")
+    assert "managed" in view.message
+    assert view.screen == PROVIDERS
