@@ -86,9 +86,9 @@ def classify_http_error(error: urllib.error.HTTPError) -> ModelError:
     return ModelError.of(kind, f"http-{error.code}", body or str(error.reason))
 
 
-def review(profile: Profile, spec: str, diff: str, post: Post | None = None) -> Verdict:
+def review(profile: Profile, model: str, spec: str, diff: str, post: Post | None = None) -> Verdict:
     post = post or http_post
-    provider = profile.provider_for(profile.reviewer)
+    provider = profile.provider_for(model)
     if not provider.is_https:
         return Verdict.failed(
             ModelError.of(
@@ -107,8 +107,8 @@ def review(profile: Profile, spec: str, diff: str, post: Post | None = None) -> 
             )
         )
     body = {
-        **profile.options_for(profile.reviewer),
-        "model": api_model_id(provider.name, profile.reviewer),
+        **profile.options_for(model),
+        "model": api_model_id(provider.name, model),
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
             {

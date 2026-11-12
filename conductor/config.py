@@ -10,6 +10,7 @@ from typing import Any
 
 BARE_KEY = re.compile(r"[A-Za-z0-9_-]+")
 DEFAULT_TRANSIENT_ATTEMPTS = 3
+BRAIN = "brain"
 DUMP_HEADER = "# Written by `conductor setup`. Comments added by hand are lost on the next save."
 
 
@@ -43,6 +44,21 @@ def merge_options(base: dict[str, Any], override: dict[str, Any]) -> dict[str, A
         else:
             merged[key] = value
     return merged
+
+
+def model_list(value: Any, where: str) -> tuple[str, ...]:
+    models = [value] if isinstance(value, str) else value
+    if (
+        not isinstance(models, list)
+        or not models
+        or not all(isinstance(model, str) and model for model in models)
+    ):
+        raise ConfigError(f"{where} must name at least one model, as a string or a list")
+    return tuple(models)
+
+
+def models_value(models: tuple[str, ...]) -> str:
+    return toml_value(models[0] if len(models) == 1 else models)
 
 
 def provider_of(model: str) -> str:
@@ -99,8 +115,8 @@ class Provider:
 class Profile:
     name: str
     providers: dict[str, Provider]
-    tiers: tuple[str, ...]
-    reviewer: str
+    tiers: tuple[tuple[str, ...], ...]
+    reviewers: tuple[str, ...]
     max_parallel: int = 4
     transient_attempts: int = DEFAULT_TRANSIENT_ATTEMPTS
 
@@ -117,8 +133,11 @@ class Profile:
             profile = cls(
                 name=name,
                 providers=providers,
-                tiers=tuple(str(t) for t in tiers),
-                reviewer=str(data["reviewer"]),
+                tiers=tuple(
+                    model_list(tier, f"privacy.{name}: level {level}")
+                    for level, tier in enumerate(tiers, start=1)
+                ),
+                reviewers=model_list(data["reviewer"], f"privacy.{name}: reviewer"),
                 max_parallel=int(data.get("max_parallel", 4)),
                 transient_attempts=cls.parse_transient_attempts(name, data),
             )
@@ -163,27 +182,36 @@ class Profile:
             provider.model_options.get(model[len(provider.name) + 1 :], {}),
         )
 
+    @property
+    def is_brain_review(self) -> bool:
+        return self.reviewers == (BRAIN,)
+
+    def models(self) -> tuple[str, ...]:
+        model_reviewers = () if self.is_brain_review else self.reviewers
+        return (*(model for tier in self.tiers for model in tier), *model_reviewers)
+
     def validate(self) -> None:
+        if BRAIN in self.reviewers and not self.is_brain_review:
+            raise ConfigError(f"privacy.{self.name}: reviewer 'brain' cannot have fallbacks")
         for name, provider in self.providers.items():
-            used = {model[len(name) + 1 :] for model in (*self.tiers, self.reviewer)}
+            used = {model[len(name) + 1 :] for model in self.models()}
             for model in provider.model_options:
                 if model not in used:
                     raise ConfigError(
                         f"privacy.{self.name}: unknown model '{model}' in providers.{name}.models"
                     )
-        for model in (*self.tiers, self.reviewer):
-            if self.reviewer == "brain" and model == "brain":
-                continue
+        for model in self.models():
             if provider_of(model) not in self.providers:
                 raise ConfigError(
                     f"privacy.{self.name}: '{model}' does not name one of the providers "
                     f"({', '.join(self.providers)})"
                 )
-        if self.reviewer != "brain" and not self.provider_for(self.reviewer).is_https:
-            raise ConfigError(
-                f"privacy.{self.name}: the reviewer '{self.reviewer}' needs an https base_url, "
-                "because Conductor sends it the API key"
-            )
+        for reviewer in () if self.is_brain_review else self.reviewers:
+            if not self.provider_for(reviewer).is_https:
+                raise ConfigError(
+                    f"privacy.{self.name}: the reviewer '{reviewer}' needs an https base_url, "
+                    "because Conductor sends it the API key"
+                )
 
     def provider_for(self, model: str) -> Provider:
         provider = self.providers.get(provider_of(model))
@@ -191,17 +219,17 @@ class Profile:
             raise ConfigError(f"privacy.{self.name}: no provider for '{model}'")
         return provider
 
-    def model_for_tier(self, tier: int) -> str | None:
-        return self.tiers[tier] if 0 <= tier < len(self.tiers) else None
+    def models_for_tier(self, tier: int) -> tuple[str, ...]:
+        return self.tiers[tier] if 0 <= tier < len(self.tiers) else ()
 
     def dump(self) -> str:
         lines = [
             f"[privacy.{toml_key(self.name)}]",
             f"max_parallel = {toml_value(self.max_parallel)}",
             "tiers = [",
-            *(f"  {toml_value(tier)}," for tier in self.tiers),
+            *(f"  {models_value(tier)}," for tier in self.tiers),
             "]",
-            f"reviewer = {toml_value(self.reviewer)}",
+            f"reviewer = {models_value(self.reviewers)}",
         ]
         if self.transient_attempts != DEFAULT_TRANSIENT_ATTEMPTS:
             lines.append(f"retry = {toml_value({'transient_attempts': self.transient_attempts})}")

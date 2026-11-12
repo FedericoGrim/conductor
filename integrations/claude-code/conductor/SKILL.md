@@ -38,7 +38,7 @@ The command prints the run directory. Open `<run>/run.json` and handle each step
 
 - `approved`: merged already. Read the diff in `step-<id>/attempt-<n>.json` and double-check it against the spec; fix small issues yourself.
 - `failed`: every level was rejected or OpenCode hit an unclassified error. Read the last attempt's `review.reason`, `stderr` and `events`, then implement the step yourself or rewrite its spec with a higher `difficulty` and rerun a plan containing only that step and its unfinished dependents.
-- `unavailable`: a model or provider error (rate limit, outage, bad key, no credit, context exceeded), not a judgement on the work. Read the last attempt's `error`; rerun the step later, or with another `--privacy` profile, or implement it yourself. Do not raise its `difficulty` for this. If the error is a key or credit problem, tell the user.
+- `unavailable`: every model of the level hit a model or provider error (rate limit, outage, bad key, no credit, context exceeded), not a judgement on the work. Read the last attempt's `error`; rerun the step later, or with another `--privacy` profile, or implement it yourself. Do not raise its `difficulty` for this. If the error is a key or credit problem, tell the user.
 - `conflict`: the branch named in `detail` is kept; resolve the merge yourself.
 - `needs_brain_review`: the profile has `reviewer = "brain"`, or the reviewer failed (the last attempt's `review.error` says why); read the diff and merge the branch yourself if correct, otherwise rerun with a sharper spec.
 - `skipped`: a dependency did not get approved; rerun once it is fixed.

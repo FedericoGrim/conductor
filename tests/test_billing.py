@@ -302,8 +302,8 @@ def test_every_provider_of_a_profile_is_reported() -> None:
             ),
             "vercel": Provider("vercel", "https://ai-gateway.vercel.sh/v1", "TEST_BILLING_KEY"),
         },
-        ("openrouter/a", "vercel/b"),
-        "openrouter/a",
+        (("openrouter/a",), ("vercel/b",)),
+        ("openrouter/a",),
     )
     api = FakeApi(
         {

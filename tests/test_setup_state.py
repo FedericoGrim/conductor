@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from conductor.config import Config
+from conductor.config import Config, Provider
 from conductor.defaults import DIFFICULTY_LEVELS
 from conductor.setup_state import (
     KNOWN_PROVIDERS,
@@ -229,3 +229,36 @@ def test_model_options_survive_a_round_trip_through_the_editor(tmp_path: Path) -
     assert again.draft().providers["openrouter"].model_options == {
         "m1": {"provider": {"order": ["relace"]}}
     }
+
+
+def fallback_config() -> Config:
+    profile = make_profile(name="medium", tiers=TIERS, reviewer="openrouter/m4")
+    profile = replace(
+        profile,
+        providers={
+            **profile.providers,
+            "scaleway": Provider("scaleway", "https://api.scaleway.ai/v1", "SCALEWAY_API_KEY"),
+        },
+        tiers=(TIERS[0:1], (TIERS[1], "scaleway/b2", "openrouter/b3"), *[(t,) for t in TIERS[2:]]),
+        reviewers=("openrouter/m4", "scaleway/r2"),
+    )
+    return Config("medium", {"medium": profile})
+
+
+def test_drafts_keep_the_fallback_models_unchanged() -> None:
+    config = fallback_config()
+    assert SetupState.from_config(config).to_config() == config
+
+
+def test_removing_a_provider_drops_its_fallback_models() -> None:
+    model = SetupState.from_config(fallback_config())
+    model.remove_provider("scaleway")
+    profile = model.to_config().profile("medium")
+    assert profile.tiers[1] == (TIERS[1], "openrouter/b3")
+    assert profile.reviewers == ("openrouter/m4",)
+
+
+def test_a_brain_reviewer_drops_the_reviewer_fallbacks() -> None:
+    model = SetupState.from_config(fallback_config())
+    model.set_reviewer("brain")
+    assert model.to_config().profile("medium").reviewers == ("brain",)

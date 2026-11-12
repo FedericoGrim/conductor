@@ -263,7 +263,7 @@ def test_saving_writes_the_config_and_keeps_a_backup(tmp_path: Path) -> None:
     path = tmp_path / "conductor.toml"
     assert 'reviewer = "brain"' in path.read_text()
     assert (tmp_path / "conductor.toml.bak").read_text() == CONFIG
-    assert Config.load(path).profiles["medium"].reviewer == "brain"
+    assert Config.load(path).profiles["medium"].is_brain_review
 
 
 def test_save_config_without_an_existing_file_creates_it(tmp_path: Path) -> None:

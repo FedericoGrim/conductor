@@ -10,7 +10,7 @@ from pathlib import Path
 
 from conductor import billing, reviewer, settings, setup_tui
 from conductor.config import Config, ConfigError, Profile
-from conductor.escalation import run_step
+from conductor.escalation import RunState, run_step
 from conductor.log import RunLog
 from conductor.merge import merge_branch
 from conductor.plan import Plan, PlanError, Step
@@ -54,6 +54,7 @@ async def execute_plan(
     base = git(repo, "rev-parse", "--abbrev-ref", "HEAD").strip()
     run_name = log.directory.name
     worktrees = repo / ".conductor" / "worktrees" / run_name
+    state = RunState()
 
     async def attempt(step: Step, number: int, model: str, prompt: str) -> AttemptOutput:
         branch = f"conductor/{run_name}/{step.id}-{number}"
@@ -71,11 +72,13 @@ async def execute_plan(
             transient_attempts=profile.transient_attempts,
         )
 
-    def judge(spec: str, diff: str) -> reviewer.Verdict:
-        return reviewer.review(profile, spec, diff)
+    def judge(model: str, spec: str, diff: str) -> reviewer.Verdict:
+        return reviewer.review(profile, model, spec, diff)
 
     async def execute(step: Step) -> StepResult:
-        result = await run_step(step, profile, attempt, judge, log.attempt, goal=plan.goal)
+        result = await run_step(
+            step, profile, attempt, judge, log.attempt, goal=plan.goal, state=state
+        )
         print(f"[{step.id}] {result.status}: {result.detail}", flush=True)
         numbers = [a["attempt"] for a in result.attempts]
         for number in numbers[:-1]:

@@ -37,7 +37,9 @@ def test_sends_spec_and_diff_and_parses_verdict(monkeypatch: pytest.MonkeyPatch)
         captured.update(url=url, headers=headers, body=body)
         return completion(json.dumps({"ok": False, "reason": "missing null check"}))
 
-    verdict = review(PROFILE, spec="add parser", diff="+def parse(): ...", post=fake_post)
+    verdict = review(
+        PROFILE, PROFILE.reviewers[0], spec="add parser", diff="+def parse(): ...", post=fake_post
+    )
     assert verdict.ok is False
     assert verdict.reason == "missing null check"
     assert verdict.usage == {"total_tokens": 42}
@@ -56,7 +58,7 @@ def test_unparseable_verdict_is_a_rejection(monkeypatch: pytest.MonkeyPatch) -> 
     def fake_post(url: str, headers: dict[str, str], body: dict[str, Any]) -> dict[str, Any]:
         return completion("Looks fine to me!")
 
-    verdict = review(PROFILE, spec="s", diff="d", post=fake_post)
+    verdict = review(PROFILE, PROFILE.reviewers[0], spec="s", diff="d", post=fake_post)
     assert verdict.ok is False
     assert verdict.reason == "unparseable verdict"
     assert verdict.raw == "Looks fine to me!"
@@ -69,7 +71,7 @@ def test_fenced_json_is_accepted(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_post(url: str, headers: dict[str, str], body: dict[str, Any]) -> dict[str, Any]:
         return completion('```json\n{"ok": true, "reason": "good"}\n```')
 
-    assert review(PROFILE, spec="s", diff="d", post=fake_post).ok is True
+    assert review(PROFILE, PROFILE.reviewers[0], spec="s", diff="d", post=fake_post).ok is True
 
 
 def test_missing_api_key_makes_the_provider_unusable_before_any_request(
@@ -80,7 +82,7 @@ def test_missing_api_key_makes_the_provider_unusable_before_any_request(
     def fake_post(url: str, headers: dict[str, str], body: dict[str, Any]) -> dict[str, Any]:
         raise AssertionError("must not be called")
 
-    verdict = review(PROFILE, spec="s", diff="d", post=fake_post)
+    verdict = review(PROFILE, PROFILE.reviewers[0], spec="s", diff="d", post=fake_post)
     assert verdict.ok is False
     assert verdict.error is not None
     assert verdict.error.kind == PROVIDER_UNUSABLE
@@ -113,7 +115,7 @@ def test_request_failures_become_classified_errors_instead_of_raising(
     def fake_post(url: str, headers: dict[str, str], body: dict[str, Any]) -> dict[str, Any]:
         raise failure
 
-    verdict = review(PROFILE, spec="s", diff="d", post=fake_post)
+    verdict = review(PROFILE, PROFILE.reviewers[0], spec="s", diff="d", post=fake_post)
     assert verdict.ok is False
     assert verdict.error is not None
     assert (verdict.error.kind, verdict.error.type) == (kind, error_type)
@@ -125,7 +127,7 @@ def test_a_malformed_response_is_an_unclassified_error(monkeypatch: pytest.Monke
     def fake_post(url: str, headers: dict[str, str], body: dict[str, Any]) -> dict[str, Any]:
         return {"unexpected": True}
 
-    verdict = review(PROFILE, spec="s", diff="d", post=fake_post)
+    verdict = review(PROFILE, PROFILE.reviewers[0], spec="s", diff="d", post=fake_post)
     assert verdict.ok is False
     assert verdict.error is not None
     assert verdict.error.kind == UNCLASSIFIED
@@ -137,7 +139,7 @@ def test_a_parsed_verdict_has_no_error(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_post(url: str, headers: dict[str, str], body: dict[str, Any]) -> dict[str, Any]:
         return completion('{"ok": false, "reason": "no tests"}')
 
-    assert review(PROFILE, spec="s", diff="d", post=fake_post).error is None
+    assert review(PROFILE, PROFILE.reviewers[0], spec="s", diff="d", post=fake_post).error is None
 
 
 def test_verdict_cost_comes_from_the_usage_reported_by_the_provider() -> None:
@@ -160,7 +162,7 @@ def test_a_stored_key_is_used_when_the_environment_has_none(
         captured.update(headers=headers)
         return completion(json.dumps({"ok": True, "reason": "fine"}))
 
-    assert review(PROFILE, spec="s", diff="+x", post=fake_post).ok is True
+    assert review(PROFILE, PROFILE.reviewers[0], spec="s", diff="+x", post=fake_post).ok is True
     assert captured["headers"]["Authorization"] == "Bearer sk-stored"
 
 
@@ -173,8 +175,8 @@ def test_the_reviewer_uses_the_provider_of_its_model(monkeypatch: pytest.MonkeyP
             "openrouter": Provider("openrouter", "https://openrouter.ai/api/v1", "K1"),
             "scaleway": Provider("scaleway", "https://api.scaleway.ai/v1", "K2"),
         },
-        ("openrouter/a",),
-        "scaleway/glm-5.3",
+        (("openrouter/a",),),
+        ("scaleway/glm-5.3",),
     )
     monkeypatch.setenv("K1", "sk-one")
     monkeypatch.setenv("K2", "sk-two")
@@ -184,7 +186,7 @@ def test_the_reviewer_uses_the_provider_of_its_model(monkeypatch: pytest.MonkeyP
         captured.update(url=url, headers=headers, body=body)
         return completion(json.dumps({"ok": True, "reason": "fine"}))
 
-    review(profile, spec="s", diff="+x", post=fake_post)
+    review(profile, profile.reviewers[0], spec="s", diff="+x", post=fake_post)
     assert captured["url"] == "https://api.scaleway.ai/v1/chat/completions"
     assert captured["headers"]["Authorization"] == "Bearer sk-two"
     assert captured["body"]["model"] == "glm-5.3"
@@ -204,8 +206,8 @@ def test_the_reviewer_receives_the_options_of_its_model(monkeypatch: pytest.Monk
                 {"deepseek/flash": {"provider": {"order": ["relace"]}}},
             )
         },
-        ("openrouter/a",),
-        "openrouter/deepseek/flash",
+        (("openrouter/a",),),
+        ("openrouter/deepseek/flash",),
     )
     monkeypatch.setenv("K", "sk")
     captured: dict[str, Any] = {}
@@ -214,7 +216,7 @@ def test_the_reviewer_receives_the_options_of_its_model(monkeypatch: pytest.Monk
         captured.update(body=body)
         return completion(json.dumps({"ok": True, "reason": "fine"}))
 
-    review(profile, spec="s", diff="+x", post=fake_post)
+    review(profile, profile.reviewers[0], spec="s", diff="+x", post=fake_post)
     assert captured["body"]["provider"] == {
         "data_collection": "deny",
         "order": ["relace"],
@@ -235,8 +237,32 @@ def test_the_key_is_never_sent_to_a_base_url_that_is_not_https(
     def fake_post(url: str, headers: dict[str, str], body: dict[str, Any]) -> dict[str, Any]:
         raise AssertionError("must not be called")
 
-    verdict = review(insecure, spec="s", diff="d", post=fake_post)
+    verdict = review(insecure, insecure.reviewers[0], spec="s", diff="d", post=fake_post)
     assert verdict.ok is False
     assert verdict.error is not None
     assert (verdict.error.kind, verdict.error.type) == (PROVIDER_UNUSABLE, "insecure-base-url")
     assert "sk-secret" not in verdict.reason
+
+
+def test_the_review_uses_the_reviewer_it_is_given(monkeypatch: pytest.MonkeyPatch) -> None:
+    from conductor.config import Profile, Provider
+
+    profile = Profile(
+        "medium",
+        {
+            "openrouter": Provider("openrouter", "https://openrouter.ai/api/v1", "K1"),
+            "scaleway": Provider("scaleway", "https://api.scaleway.ai/v1", "K2"),
+        },
+        (("openrouter/a",),),
+        ("openrouter/r", "scaleway/r2"),
+    )
+    monkeypatch.setenv("K2", "sk-two")
+    captured: dict[str, Any] = {}
+
+    def fake_post(url: str, headers: dict[str, str], body: dict[str, Any]) -> dict[str, Any]:
+        captured.update(url=url, body=body)
+        return completion(json.dumps({"ok": True, "reason": "fine"}))
+
+    review(profile, "scaleway/r2", spec="s", diff="+x", post=fake_post)
+    assert captured["url"] == "https://api.scaleway.ai/v1/chat/completions"
+    assert captured["body"]["model"] == "r2"
