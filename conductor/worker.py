@@ -33,6 +33,7 @@ class Harness:
     cost: Callable[[Events], float]
     error: Callable[[Events, int, str], ModelError | None]
     final_text: Callable[[Events], str]
+    subscription_cost: Callable[[Events], float] | None = None
 
 
 @dataclass
@@ -46,6 +47,7 @@ class AttemptOutput:
     cost: float = 0.0
     error: ModelError | None = None
     final_text: str = ""
+    subscription_cost: float = 0.0
 
 
 def git(cwd: Path, *args: str) -> str:
@@ -186,4 +188,5 @@ async def run_attempt(
         cost=harness.cost(events),
         error=harness.error(events, exit_code, stderr),
         final_text=harness.final_text(events),
+        subscription_cost=harness.subscription_cost(events) if harness.subscription_cost else 0.0,
     )
