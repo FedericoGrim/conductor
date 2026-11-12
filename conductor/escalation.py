@@ -12,8 +12,11 @@ from conductor.scheduler import APPROVED, FAILED, NEEDS_BRAIN_REVIEW, UNAVAILABL
 from conductor.worker import AttemptOutput
 
 Attempt = Callable[[Step, int, str, str], Awaitable[AttemptOutput]]
-Judge = Callable[[str, str], Verdict]
+Judge = Callable[[str, str, str], Verdict]
 Record = Callable[[Step, dict[str, Any]], object]
+
+NO_CHANGES = Verdict(False, "no changes produced", "")
+NO_REVIEWER = "every reviewer provider is excluded for this run"
 
 
 def build_prompt(goal: str, step: Step, feedback: str | None = None) -> str:
@@ -69,7 +72,20 @@ def attempt_entry(
         "diff": output.diff,
         "error": None,
         "review": None,
+        "review_fallbacks": [],
         "cost": {"worker": output.cost, "reviewer": None},
+    }
+
+
+def review_entry(model: str, verdict: Verdict) -> dict[str, Any]:
+    return {
+        "model": model,
+        "ok": verdict.ok,
+        "reason": verdict.reason,
+        "raw": verdict.raw,
+        "usage": verdict.usage,
+        "error": asdict(verdict.error) if verdict.error else None,
+        "cost": verdict.cost,
     }
 
 
@@ -130,24 +146,15 @@ class StepRun:
             self.record(self.step, entry)
             self.result.status = NEEDS_BRAIN_REVIEW
             return None
-        verdict = (
-            Verdict(False, "no changes produced", "")
-            if not output.diff.strip()
-            else self.judge(self.step.spec, output.diff)
-        )
-        entry["review"] = {
-            "model": self.profile.reviewers[0],
-            "ok": verdict.ok,
-            "reason": verdict.reason,
-            "raw": verdict.raw,
-            "usage": verdict.usage,
-            "error": asdict(verdict.error) if verdict.error else None,
-        }
-        entry["cost"]["reviewer"] = verdict.cost
+        verdict: Verdict | None = NO_CHANGES
+        if output.diff.strip():
+            verdict = self.consult_reviewers(output.diff, entry)
+        else:
+            entry["review"] = review_entry(self.profile.reviewers[0], NO_CHANGES)
         self.record(self.step, entry)
-        if verdict.error is not None:
+        if verdict is None or verdict.error is not None:
             self.result.status = NEEDS_BRAIN_REVIEW
-            self.result.detail = verdict.reason
+            self.result.detail = verdict.reason if verdict else NO_REVIEWER
             return None
         if verdict.ok:
             self.result.status = APPROVED
@@ -155,3 +162,23 @@ class StepRun:
             return None
         self.result.detail = f"rejected on {model}: {verdict.reason}"
         return verdict.reason
+
+    def consult_reviewers(self, diff: str, entry: dict[str, Any]) -> Verdict | None:
+        """Ask the reviewers in order; the first verdict without an error decides."""
+        consulted: list[tuple[str, Verdict]] = []
+        for reviewer in self.profile.reviewers:
+            if provider_of(reviewer) in self.state.excluded_reviewer_providers:
+                continue
+            verdict = self.judge(reviewer, self.step.spec, diff)
+            consulted.append((reviewer, verdict))
+            if verdict.error is None:
+                break
+            if verdict.error.kind == PROVIDER_UNUSABLE:
+                self.state.excluded_reviewer_providers.add(provider_of(reviewer))
+        if not consulted:
+            return None
+        *failed, (reviewer, verdict) = consulted
+        entry["review_fallbacks"] = [review_entry(*pair) for pair in failed]
+        entry["review"] = review_entry(reviewer, verdict)
+        entry["cost"]["reviewer"] = verdict.cost
+        return verdict

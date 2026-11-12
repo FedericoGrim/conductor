@@ -72,8 +72,8 @@ async def execute_plan(
             transient_attempts=profile.transient_attempts,
         )
 
-    def judge(spec: str, diff: str) -> reviewer.Verdict:
-        return reviewer.review(profile, spec, diff)
+    def judge(model: str, spec: str, diff: str) -> reviewer.Verdict:
+        return reviewer.review(profile, model, spec, diff)
 
     async def execute(step: Step) -> StepResult:
         result = await run_step(

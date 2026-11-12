@@ -34,17 +34,20 @@ def run(
     outputs: list[AttemptOutput] | None = None,
     profile: Profile = PROFILE,
     state: RunState | None = None,
+    reviewed: list[str] | None = None,
 ) -> Any:
     calls: list[tuple[int, str, str]] = []
     recorded: list[dict[str, Any]] = []
     outputs = outputs or [output() for _ in verdicts]
     judged = list(reversed(range(len(verdicts))))
+    reviewed = [] if reviewed is None else reviewed
 
     async def attempt(step: Step, number: int, model: str, prompt: str) -> AttemptOutput:
         calls.append((number, model, prompt))
         return outputs[number - 1]
 
-    def judge(spec: str, diff: str) -> Verdict:
+    def judge(model: str, spec: str, diff: str) -> Verdict:
+        reviewed.append(model)
         return verdicts[judged.pop()]
 
     def record(step: Step, data: dict[str, Any]) -> None:
@@ -146,7 +149,7 @@ def test_brain_reviewer_hands_the_diff_back_without_judging() -> None:
     async def attempt(step: Step, number: int, model: str, prompt: str) -> AttemptOutput:
         return output()
 
-    def judge(spec: str, diff: str) -> Verdict:
+    def judge(model: str, spec: str, diff: str) -> Verdict:
         raise AssertionError("brain profile must not call the reviewer")
 
     result = asyncio.run(
@@ -283,3 +286,74 @@ def test_a_fallback_after_a_rejection_keeps_the_review_feedback() -> None:
     assert result.status == "approved"
     assert models(calls) == ["openrouter/t1", "openrouter/t2", "deepseek/t2b"]
     assert "no tests" in calls[2][2]
+
+
+REVIEWERS_PROFILE = Profile(
+    "medium",
+    {
+        "openrouter": Provider("openrouter", "https://openrouter.ai/api/v1", "K"),
+        "deepseek": Provider("deepseek", "https://api.deepseek.com/v1", "D"),
+    },
+    (("openrouter/t0",), ("openrouter/t1",), ("openrouter/t2",)),
+    ("openrouter/r", "openrouter/r2", "deepseek/r3"),
+)
+
+
+def reviewer_error(kind: str, reason: str = "reviewer broke") -> Verdict:
+    return Verdict(False, reason, "", usage={"cost": 0.001}, error=ModelError(kind, "x", reason))
+
+
+def test_an_unparseable_verdict_moves_to_the_next_reviewer_without_costing_a_level() -> None:
+    reviewed: list[str] = []
+    result, calls, recorded = run(
+        [reviewer_error(MODEL_UNSUITABLE, "unparseable verdict"), Verdict(True, "ok", "{}")],
+        profile=REVIEWERS_PROFILE,
+        reviewed=reviewed,
+    )
+    assert result.status == "approved"
+    assert models(calls) == ["openrouter/t1"]
+    assert reviewed == ["openrouter/r", "openrouter/r2"]
+    assert recorded[0]["review"]["model"] == "openrouter/r2"
+    fallback = recorded[0]["review_fallbacks"][0]
+    assert fallback["model"] == "openrouter/r"
+    assert fallback["error"]["kind"] == MODEL_UNSUITABLE
+    assert fallback["cost"] == 0.001
+
+
+def test_an_unusable_reviewer_provider_is_skipped_for_the_rest_of_the_run() -> None:
+    state = RunState()
+    reviewed: list[str] = []
+    run(
+        [reviewer_error(PROVIDER_UNUSABLE), Verdict(True, "ok", "{}")],
+        profile=REVIEWERS_PROFILE,
+        state=state,
+        reviewed=reviewed,
+    )
+    assert reviewed == ["openrouter/r", "deepseek/r3"]
+    assert state.excluded_reviewer_providers == {"openrouter"}
+    assert state.excluded_worker_providers == set()
+
+
+def test_every_reviewer_failing_hands_the_diff_to_the_brain() -> None:
+    result, calls, recorded = run(
+        [reviewer_error(TRANSIENT), reviewer_error(TRANSIENT), reviewer_error(TRANSIENT, "last")],
+        profile=REVIEWERS_PROFILE,
+    )
+    assert result.status == "needs_brain_review"
+    assert len(calls) == 1
+    assert "last" in result.detail
+    assert recorded[0]["review"]["model"] == "deepseek/r3"
+    assert recorded[0]["review"]["error"]["kind"] == TRANSIENT
+    assert len(recorded[0]["review_fallbacks"]) == 2
+
+
+def test_no_usable_reviewer_hands_the_diff_to_the_brain_without_a_call() -> None:
+    state = RunState(excluded_reviewer_providers={"openrouter", "deepseek"})
+    reviewed: list[str] = []
+    result, _, recorded = run(
+        [], outputs=[output()], profile=REVIEWERS_PROFILE, state=state, reviewed=reviewed
+    )
+    assert result.status == "needs_brain_review"
+    assert reviewed == []
+    assert "excluded" in result.detail
+    assert recorded[0]["review"] is None
