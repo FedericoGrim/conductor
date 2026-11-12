@@ -11,8 +11,6 @@ from conductor.reviewer import Verdict
 from conductor.scheduler import APPROVED, FAILED, NEEDS_BRAIN_REVIEW, UNAVAILABLE, StepResult
 from conductor.worker import AttemptOutput
 
-BRAIN = "brain"
-
 Attempt = Callable[[Step, int, str, str], Awaitable[AttemptOutput]]
 Judge = Callable[[str, str], Verdict]
 Record = Callable[[Step, dict[str, Any]], object]
@@ -48,7 +46,8 @@ async def run_step(
     tier = min(step.difficulty - 1, len(profile.tiers) - 1)
     feedback: str | None = None
     number = 0
-    while (model := profile.model_for_tier(tier)) is not None:
+    while models := profile.models_for_tier(tier):
+        model = models[0]
         number += 1
         prompt = build_prompt(goal, step, feedback)
         output = await attempt(step, number, model, prompt)
@@ -77,7 +76,7 @@ async def run_step(
             result.status = FAILED if error.kind == UNCLASSIFIED else UNAVAILABLE
             result.detail = f"{model}: {error.describe()}"
             return result
-        if profile.reviewer == BRAIN:
+        if profile.is_brain_review:
             record(step, entry)
             result.status = NEEDS_BRAIN_REVIEW
             return result
@@ -87,7 +86,7 @@ async def run_step(
             else judge(step.spec, output.diff)
         )
         entry["review"] = {
-            "model": profile.reviewer,
+            "model": profile.reviewers[0],
             "ok": verdict.ok,
             "reason": verdict.reason,
             "raw": verdict.raw,

@@ -77,7 +77,7 @@ class ProfileDraft:
 
     @classmethod
     def from_profile(cls, profile: Profile) -> ProfileDraft:
-        tiers = list(profile.tiers)[:DIFFICULTY_LEVELS]
+        tiers = [tier[0] for tier in profile.tiers][:DIFFICULTY_LEVELS]
         tiers += [EMPTY_SLOT] * (DIFFICULTY_LEVELS - len(tiers))
         return cls(
             name=profile.name,
@@ -86,7 +86,7 @@ class ProfileDraft:
                 for name, provider in profile.providers.items()
             },
             tiers=tiers,
-            reviewer=profile.reviewer,
+            reviewer=profile.reviewers[0],
             max_parallel=profile.max_parallel,
             transient_attempts=profile.transient_attempts,
         )
@@ -95,8 +95,8 @@ class ProfileDraft:
         return Profile(
             name=self.name,
             providers={name: provider.to_provider() for name, provider in self.providers.items()},
-            tiers=tuple(tier for tier in self.tiers if tier != EMPTY_SLOT),
-            reviewer=self.reviewer,
+            tiers=tuple((tier,) for tier in self.tiers if tier != EMPTY_SLOT),
+            reviewers=(self.reviewer,),
             max_parallel=self.max_parallel,
             transient_attempts=self.transient_attempts,
         )

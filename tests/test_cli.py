@@ -292,7 +292,7 @@ def test_config_export_and_import_round_trip_through_the_cli(
     assert cli.main(["config", "import", str(exported), "--config", str(target)]) == 0
     out = capsys.readouterr().out
     assert "medium" in out
-    assert Config.load(target).profile("medium").tiers[0] == "openrouter/cheap"
+    assert Config.load(target).profile("medium").tiers[0] == ("openrouter/cheap",)
 
     assert cli.main(["config", "import", str(exported), "--config", str(target)]) == 0
     assert "previous file kept" in capsys.readouterr().out

@@ -173,8 +173,8 @@ def test_the_reviewer_uses_the_provider_of_its_model(monkeypatch: pytest.MonkeyP
             "openrouter": Provider("openrouter", "https://openrouter.ai/api/v1", "K1"),
             "scaleway": Provider("scaleway", "https://api.scaleway.ai/v1", "K2"),
         },
-        ("openrouter/a",),
-        "scaleway/glm-5.3",
+        (("openrouter/a",),),
+        ("scaleway/glm-5.3",),
     )
     monkeypatch.setenv("K1", "sk-one")
     monkeypatch.setenv("K2", "sk-two")
@@ -204,8 +204,8 @@ def test_the_reviewer_receives_the_options_of_its_model(monkeypatch: pytest.Monk
                 {"deepseek/flash": {"provider": {"order": ["relace"]}}},
             )
         },
-        ("openrouter/a",),
-        "openrouter/deepseek/flash",
+        (("openrouter/a",),),
+        ("openrouter/deepseek/flash",),
     )
     monkeypatch.setenv("K", "sk")
     captured: dict[str, Any] = {}

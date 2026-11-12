@@ -37,9 +37,9 @@ def test_loads_profile_with_defaults(tmp_path: Path) -> None:
     medium = config.profile("medium")
     assert medium.name == "medium"
     assert medium.tiers == (
-        "openrouter/cheap/model",
-        "openrouter/mid/model",
-        "openrouter/strong/model",
+        ("openrouter/cheap/model",),
+        ("openrouter/mid/model",),
+        ("openrouter/strong/model",),
     )
     assert medium.max_parallel == 4
     assert medium.providers["openrouter"].request_options == {
@@ -64,11 +64,11 @@ def test_profile_without_tiers_fails(tmp_path: Path) -> None:
         Config.load(write(tmp_path, broken))
 
 
-def test_model_for_difficulty_caps_at_strongest_tier(tmp_path: Path) -> None:
+def test_models_for_tier_are_empty_beyond_the_strongest_tier(tmp_path: Path) -> None:
     profile = Config.load(write(tmp_path)).profile("low")
-    assert profile.model_for_tier(0) == "openrouter/free/model:free"
-    assert profile.model_for_tier(1) == "openrouter/cheap/model"
-    assert profile.model_for_tier(7) is None
+    assert profile.models_for_tier(0) == ("openrouter/free/model:free",)
+    assert profile.models_for_tier(1) == ("openrouter/cheap/model",)
+    assert profile.models_for_tier(7) == ()
 
 
 def test_dump_round_trips_the_example_configuration(tmp_path: Path) -> None:
@@ -81,7 +81,7 @@ def test_dump_round_trips_the_example_configuration(tmp_path: Path) -> None:
 def test_dump_writes_one_tier_per_line_and_omits_empty_request_options() -> None:
     provider = Provider("openrouter", "https://openrouter.ai/api/v1", "OPENROUTER_API_KEY")
     profile = Profile(
-        "low", {"openrouter": provider}, ("openrouter/a:free", "openrouter/b"), "brain", 2
+        "low", {"openrouter": provider}, (("openrouter/a:free",), ("openrouter/b",)), ("brain",), 2
     )
     assert (
         Config("low", {"low": profile}).dump()
@@ -111,7 +111,7 @@ def test_dump_quotes_unusual_names_and_nested_options(tmp_path: Path) -> None:
         "K",
         {"provider": {"only": ["a", "b"], "zdr": True}, "max tokens": 512},
     )
-    profile = Profile("eu only", {"p": provider}, ('p/odd "name"',), "p/r")
+    profile = Profile("eu only", {"p": provider}, (('p/odd "name"',),), ("p/r",))
     config = Config("eu only", {"eu only": profile})
     written = tmp_path / "conductor.toml"
     written.write_text(config.dump())
@@ -258,4 +258,79 @@ def test_a_brain_reviewer_does_not_need_an_https_provider() -> None:
         "https://openrouter.ai/api/v1", "http://localhost:11434/v1"
     ).replace('reviewer = "openrouter/a"', 'reviewer = "brain"')
     profile = Profile.from_dict("medium", tomllib.loads(text)["privacy"]["medium"])
-    assert profile.reviewer == "brain"
+    assert profile.is_brain_review
+
+
+FALLBACKS = """
+default_privacy = "medium"
+[privacy.medium]
+tiers = ["openrouter/a", ["openrouter/b", "deepseek/b2"]]
+reviewer = ["openrouter/r", "deepseek/r2"]
+
+[privacy.medium.providers.openrouter]
+base_url = "https://openrouter.ai/api/v1"
+api_key_env = "OPENROUTER_API_KEY"
+
+[privacy.medium.providers.deepseek]
+base_url = "https://api.deepseek.com/v1"
+api_key_env = "DEEPSEEK_API_KEY"
+
+[privacy.medium.providers.deepseek.models."b2"]
+request_options = { temperature = 0 }
+"""
+
+
+def fallback_profile(text: str = FALLBACKS) -> Profile:
+    return Profile.from_dict("medium", tomllib.loads(text)["privacy"]["medium"])
+
+
+def test_a_level_may_list_fallback_models_in_order() -> None:
+    profile = fallback_profile()
+    assert profile.tiers == (("openrouter/a",), ("openrouter/b", "deepseek/b2"))
+    assert profile.models_for_tier(1) == ("openrouter/b", "deepseek/b2")
+    assert profile.models_for_tier(2) == ()
+
+
+def test_the_reviewer_may_be_a_list() -> None:
+    assert fallback_profile().reviewers == ("openrouter/r", "deepseek/r2")
+
+
+def test_a_plain_reviewer_is_a_one_model_list() -> None:
+    profile = Profile.from_dict("medium", tomllib.loads(MULTI_PROVIDER)["privacy"]["medium"])
+    assert profile.reviewers == ("openrouter/a",)
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "message"),
+    [
+        ('["openrouter/b", "deepseek/b2"]', "[]", "level 2 must name at least one model"),
+        ('["openrouter/b", "deepseek/b2"]', '["openrouter/b", 3]', "level 2 must name"),
+        (
+            '["openrouter/b", "deepseek/b2"]',
+            '["openrouter/b", "deepseek/b2", "nope/x"]',
+            "nope/x",
+        ),
+        ('["openrouter/r", "deepseek/r2"]', "[]", "reviewer must name at least one model"),
+        ('["openrouter/r", "deepseek/r2"]', '["brain", "deepseek/r2"]', "brain"),
+    ],
+)
+def test_rejects_malformed_lists(old: str, new: str, message: str) -> None:
+    with pytest.raises(ConfigError, match=message):
+        fallback_profile(FALLBACKS.replace(old, new))
+
+
+def test_every_reviewer_needs_an_https_provider() -> None:
+    text = FALLBACKS.replace("https://api.deepseek.com/v1", "http://api.deepseek.com/v1")
+    with pytest.raises(ConfigError, match="deepseek/r2.*https"):
+        fallback_profile(text)
+
+
+def test_dump_writes_lists_only_for_levels_with_fallbacks(tmp_path: Path) -> None:
+    config = Config("medium", {"medium": fallback_profile()})
+    text = config.dump()
+    assert '  "openrouter/a",\n' in text
+    assert '  ["openrouter/b", "deepseek/b2"],\n' in text
+    assert 'reviewer = ["openrouter/r", "deepseek/r2"]\n' in text
+    written = tmp_path / "conductor.toml"
+    written.write_text(text)
+    assert Config.load(written) == config

@@ -20,7 +20,8 @@ def profile(
     request_options: dict[str, Any],
 ) -> Profile:
     provider = Provider("openrouter", base_url, "OPENROUTER_API_KEY", dict(request_options))
-    return Profile(name, {"openrouter": provider}, tiers, reviewer, max_parallel)
+    levels = tuple((model,) for model in tiers)
+    return Profile(name, {"openrouter": provider}, levels, (reviewer,), max_parallel)
 
 
 DEFAULT_PROFILES: tuple[Profile, ...] = (
