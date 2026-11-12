@@ -17,6 +17,9 @@ Explore the repository first. Then write `plan.json` in the repository root:
 - `steps[]`: `id` (kebab-case), `title`, `spec`, `files`, `difficulty`, `depends_on`.
 - `spec` is the whole brief for a model that has not read this conversation: exact file paths, function names and signatures, behaviour, edge cases, tests to write, commands that must pass. Never assume context.
 - `difficulty`: 1 = mechanical (boilerplate, docs, small tests), 2 = ordinary feature work, 3 = tricky logic or several moving parts, 4 = concurrency, migrations or security-sensitive code, 5 = the hardest work of the plan. There are five levels in a profile; a step rejected at level N is retried at N+1 with the reviewer's reason in the prompt.
+- `verify` (plan level, or per step to replace it; `[]` drops it): shell commands Conductor runs in the step's worktree before any review. A failure rejects the attempt with the command's output and escalates; the reviewer only sees verified diffs. The worktree has no virtualenv: use `$CONDUCTOR_REPO`, the main repository, e.g. `$CONDUCTOR_REPO/.venv/bin/pytest -q tests/test_core.py`. Prefer the tests of the step to the whole suite when steps run in parallel; `verify_timeout` (seconds, default 600) bounds each command.
+- `rules` (plan level) and `rules_file` (a file of the repository): the domain rules the reviewer must enforce — ubiquitous language, invariants, boundaries between modules. Put invariants a diff alone cannot show here.
+- The reviewer rejects new behaviour that comes without tests in the diff, so ask for tests in the `spec` of every step that changes behaviour.
 - Steps that run in parallel (no dependency between them) must not touch the same files.
 - A tier may live on a different provider from the one before it: model ids are `<provider>/<model>` and the provider comes from the user's `conductor.toml`. Do not invent ids; ask, or read the profile with `conductor setup` first.
 
@@ -37,9 +40,11 @@ The repository must be clean (commit or stash first). Do not edit files while it
 The command prints the run directory. Open `<run>/run.json` and handle each step:
 
 - `approved`: merged already. Read the diff in `step-<id>/attempt-<n>.json` and double-check it against the spec; fix small issues yourself.
-- `failed`: every level was rejected or OpenCode errored. Read the last attempt's `review.reason`, `stderr` and `events`, then implement the step yourself or rewrite its spec with a higher `difficulty` and rerun a plan containing only that step and its unfinished dependents.
+- `failed`: every level was rejected or OpenCode hit an unclassified error. Read the last attempt's `review.reason`, `stderr` and `events`, then implement the step yourself or rewrite its spec with a higher `difficulty` and rerun a plan containing only that step and its unfinished dependents.
+- `unavailable`: every model of the level hit a model or provider error (rate limit, outage, bad key, no credit, context exceeded), not a judgement on the work. Read the last attempt's `error`; rerun the step later, or with another `--privacy` profile, or implement it yourself. Do not raise its `difficulty` for this. If the error is a key or credit problem, tell the user.
+- `needs_answer`: the worker stopped on a decision the spec leaves open; the question, its options and what the worker already established are in `question`. Answer it yourself only when the spec, the code or decisions already taken settle it; otherwise ask the user. Then rerun a plan containing that step (with an `answers` list: `[{"question": "...", "answer": "..."}]`) and its unfinished dependents. The step starts over; nothing from the questioning attempt was merged.
 - `conflict`: the branch named in `detail` is kept; resolve the merge yourself.
-- `needs_brain_review`: the profile has `reviewer = "brain"`; read the diff and merge the branch yourself if correct, otherwise rerun with a sharper spec.
+- `needs_brain_review`: the profile has `reviewer = "brain"`, or the reviewer failed (the last attempt's `review.error` says why); read the diff and merge the branch yourself if correct, otherwise rerun with a sharper spec.
 - `skipped`: a dependency did not get approved; rerun once it is fixed.
 
 Check the cost when it matters: `conductor billing project` for this repository, `conductor billing` for the providers' balances.

@@ -3,11 +3,16 @@ from __future__ import annotations
 import json
 import re
 import tomllib
+import urllib.parse
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 BARE_KEY = re.compile(r"[A-Za-z0-9_-]+")
+DEFAULT_TRANSIENT_ATTEMPTS = 3
+BRAIN = "brain"
+DEFAULT_HARNESS = "opencode"
+HARNESS_NAMES = ("opencode", "claude-code")
 DUMP_HEADER = "# Written by `conductor setup`. Comments added by hand are lost on the next save."
 
 
@@ -43,6 +48,21 @@ def merge_options(base: dict[str, Any], override: dict[str, Any]) -> dict[str, A
     return merged
 
 
+def model_list(value: Any, where: str) -> tuple[str, ...]:
+    models = [value] if isinstance(value, str) else value
+    if (
+        not isinstance(models, list)
+        or not models
+        or not all(isinstance(model, str) and model for model in models)
+    ):
+        raise ConfigError(f"{where} must name at least one model, as a string or a list")
+    return tuple(models)
+
+
+def models_value(models: tuple[str, ...]) -> str:
+    return toml_value(models[0] if len(models) == 1 else models)
+
+
 def provider_of(model: str) -> str:
     return model.split("/", 1)[0] if "/" in model else ""
 
@@ -54,28 +74,46 @@ class Provider:
     api_key_env: str
     request_options: dict[str, Any] = field(default_factory=dict)
     model_options: dict[str, dict[str, Any]] = field(default_factory=dict)
+    harness: str = DEFAULT_HARNESS
+
+    @property
+    def has_endpoint(self) -> bool:
+        return bool(self.base_url)
+
+    @property
+    def is_https(self) -> bool:
+        return urllib.parse.urlsplit(self.base_url).scheme == "https"
 
     @classmethod
     def from_dict(cls, name: str, data: dict[str, Any]) -> Provider:
-        try:
-            return cls(
-                name=name,
-                base_url=str(data["base_url"]),
-                api_key_env=str(data["api_key_env"]),
-                request_options=dict(data.get("request_options", {})),
-                model_options={
-                    str(model): dict(body.get("request_options", {}))
-                    for model, body in data.get("models", {}).items()
-                },
+        where = f"privacy.*.providers.{name}"
+        base_url, api_key_env = str(data.get("base_url", "")), str(data.get("api_key_env", ""))
+        if bool(base_url) != bool(api_key_env):
+            raise ConfigError(f"{where}: set both base_url and api_key_env, or neither")
+        harness = str(data.get("harness", DEFAULT_HARNESS))
+        if harness not in HARNESS_NAMES:
+            raise ConfigError(
+                f"{where}: unknown harness '{harness}' (known: {', '.join(HARNESS_NAMES)})"
             )
-        except KeyError as error:
-            raise ConfigError(f"privacy.*.providers.{name}: missing key {error}") from error
+        return cls(
+            name=name,
+            base_url=base_url,
+            api_key_env=api_key_env,
+            request_options=dict(data.get("request_options", {})),
+            model_options={
+                str(model): dict(body.get("request_options", {}))
+                for model, body in data.get("models", {}).items()
+            },
+            harness=harness,
+        )
 
     def dump(self, prefix: str) -> list[str]:
-        lines = [
-            f"base_url = {toml_value(self.base_url)}",
-            f"api_key_env = {toml_value(self.api_key_env)}",
-        ]
+        lines = []
+        if self.harness != DEFAULT_HARNESS:
+            lines.append(f"harness = {toml_value(self.harness)}")
+        if self.has_endpoint:
+            lines.append(f"base_url = {toml_value(self.base_url)}")
+            lines.append(f"api_key_env = {toml_value(self.api_key_env)}")
         if self.request_options:
             lines.append(f"request_options = {toml_value(self.request_options)}")
         for model, options in self.model_options.items():
@@ -93,9 +131,10 @@ class Provider:
 class Profile:
     name: str
     providers: dict[str, Provider]
-    tiers: tuple[str, ...]
-    reviewer: str
+    tiers: tuple[tuple[str, ...], ...]
+    reviewers: tuple[str, ...]
     max_parallel: int = 4
+    transient_attempts: int = DEFAULT_TRANSIENT_ATTEMPTS
 
     @classmethod
     def from_dict(cls, name: str, data: dict[str, Any]) -> Profile:
@@ -110,14 +149,28 @@ class Profile:
             profile = cls(
                 name=name,
                 providers=providers,
-                tiers=tuple(str(t) for t in tiers),
-                reviewer=str(data["reviewer"]),
+                tiers=tuple(
+                    model_list(tier, f"privacy.{name}: level {level}")
+                    for level, tier in enumerate(tiers, start=1)
+                ),
+                reviewers=model_list(data["reviewer"], f"privacy.{name}: reviewer"),
                 max_parallel=int(data.get("max_parallel", 4)),
+                transient_attempts=cls.parse_transient_attempts(name, data),
             )
         except KeyError as error:
             raise ConfigError(f"privacy.{name}: missing key {error}") from error
         profile.validate()
         return profile
+
+    @staticmethod
+    def parse_transient_attempts(name: str, data: dict[str, Any]) -> int:
+        retry = data.get("retry", {})
+        if not isinstance(retry, dict):
+            raise ConfigError(f"privacy.{name}: retry must be a table")
+        attempts = retry.get("transient_attempts", DEFAULT_TRANSIENT_ATTEMPTS)
+        if isinstance(attempts, bool) or not isinstance(attempts, int) or attempts < 0:
+            raise ConfigError(f"privacy.{name}: retry.transient_attempts must be a count >= 0")
+        return attempts
 
     @staticmethod
     def parse_providers(name: str, data: dict[str, Any]) -> dict[str, Provider]:
@@ -145,22 +198,56 @@ class Profile:
             provider.model_options.get(model[len(provider.name) + 1 :], {}),
         )
 
+    @property
+    def is_brain_review(self) -> bool:
+        return self.reviewers == (BRAIN,)
+
+    def models(self) -> tuple[str, ...]:
+        model_reviewers = () if self.is_brain_review else self.reviewers
+        return (*(model for tier in self.tiers for model in tier), *model_reviewers)
+
     def validate(self) -> None:
+        if BRAIN in self.reviewers and not self.is_brain_review:
+            raise ConfigError(f"privacy.{self.name}: reviewer 'brain' cannot have fallbacks")
         for name, provider in self.providers.items():
-            used = {model[len(name) + 1 :] for model in (*self.tiers, self.reviewer)}
+            used = {model[len(name) + 1 :] for model in self.models()}
             for model in provider.model_options:
                 if model not in used:
                     raise ConfigError(
                         f"privacy.{self.name}: unknown model '{model}' in providers.{name}.models"
                     )
-        for model in (*self.tiers, self.reviewer):
-            if self.reviewer == "brain" and model == "brain":
-                continue
+        for model in self.models():
             if provider_of(model) not in self.providers:
                 raise ConfigError(
                     f"privacy.{self.name}: '{model}' does not name one of the providers "
                     f"({', '.join(self.providers)})"
                 )
+        for reviewer in () if self.is_brain_review else self.reviewers:
+            if not self.provider_for(reviewer).has_endpoint:
+                raise ConfigError(
+                    f"privacy.{self.name}: the reviewer '{reviewer}' has no base_url to call; "
+                    "use 'brain' or a model of a provider with an endpoint"
+                )
+            if not self.provider_for(reviewer).is_https:
+                raise ConfigError(
+                    f"privacy.{self.name}: the reviewer '{reviewer}' needs an https base_url, "
+                    "because Conductor sends it the API key"
+                )
+
+    def single_provider_warnings(self) -> list[str]:
+        groups = [(f"level {level}", models) for level, models in enumerate(self.tiers, start=1)]
+        if not self.is_brain_review:
+            groups.append(("the reviewer", self.reviewers))
+        exposed: dict[str, list[str]] = {}
+        for label, models in groups:
+            providers = {provider_of(model) for model in models}
+            if len(providers) == 1:
+                exposed.setdefault(providers.pop(), []).append(label)
+        return [
+            f"privacy.{self.name}: {', '.join(labels)} rely only on {provider}; "
+            "an outage there leaves them unavailable"
+            for provider, labels in exposed.items()
+        ]
 
     def provider_for(self, model: str) -> Provider:
         provider = self.providers.get(provider_of(model))
@@ -168,18 +255,20 @@ class Profile:
             raise ConfigError(f"privacy.{self.name}: no provider for '{model}'")
         return provider
 
-    def model_for_tier(self, tier: int) -> str | None:
-        return self.tiers[tier] if 0 <= tier < len(self.tiers) else None
+    def models_for_tier(self, tier: int) -> tuple[str, ...]:
+        return self.tiers[tier] if 0 <= tier < len(self.tiers) else ()
 
     def dump(self) -> str:
         lines = [
             f"[privacy.{toml_key(self.name)}]",
             f"max_parallel = {toml_value(self.max_parallel)}",
             "tiers = [",
-            *(f"  {toml_value(tier)}," for tier in self.tiers),
+            *(f"  {models_value(tier)}," for tier in self.tiers),
             "]",
-            f"reviewer = {toml_value(self.reviewer)}",
+            f"reviewer = {models_value(self.reviewers)}",
         ]
+        if self.transient_attempts != DEFAULT_TRANSIENT_ATTEMPTS:
+            lines.append(f"retry = {toml_value({'transient_attempts': self.transient_attempts})}")
         for name, provider in self.providers.items():
             prefix = f"privacy.{toml_key(self.name)}.providers.{toml_key(name)}"
             lines.extend(["", f"[{prefix}]"])

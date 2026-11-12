@@ -1,19 +1,54 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
-from conductor.config import Profile
+from conductor.config import Profile, provider_of
+from conductor.errors import PROVIDER_UNUSABLE, UNCLASSIFIED, ModelError
 from conductor.plan import Step
 from conductor.reviewer import Verdict
-from conductor.scheduler import APPROVED, FAILED, NEEDS_BRAIN_REVIEW, StepResult
+from conductor.scheduler import (
+    APPROVED,
+    FAILED,
+    NEEDS_ANSWER,
+    NEEDS_BRAIN_REVIEW,
+    UNAVAILABLE,
+    StepResult,
+)
+from conductor.verify import CheckResult, failure_reason
 from conductor.worker import AttemptOutput
 
-BRAIN = "brain"
-
 Attempt = Callable[[Step, int, str, str], Awaitable[AttemptOutput]]
-Judge = Callable[[str, str], Verdict]
+Judge = Callable[[str, str, str, list[CheckResult]], Verdict]
 Record = Callable[[Step, dict[str, Any]], object]
+Check = Callable[[Step, int], Awaitable[list[CheckResult]]]
+
+NO_CHANGES = Verdict(False, "no changes produced", "")
+NO_REVIEWER = "every reviewer provider is excluded for this run"
+
+
+QUESTION_MARKER = "QUESTION:"
+QUESTION_LIMIT = 4000
+WORKING_RULES = (
+    "# How to work\n"
+    "Work only inside the current repository. Do not commit.\n"
+    "Make mechanical choices yourself (names, formatting, local structure), and any choice "
+    "that the spec, the existing code or the answers below already settle.\n"
+    "If the task needs a decision that none of them settles and whose options have different "
+    "consequences (behaviour, interfaces, data, security), do not guess. Stop before changing "
+    "files and end your reply with a block whose first line is "
+    f"`{QUESTION_MARKER} <the question>`, followed by the options with their consequences and "
+    "what you have already established."
+)
+
+
+def question_in(final_text: str) -> str | None:
+    lines = final_text.strip().splitlines()
+    starts = [i for i, line in enumerate(lines) if line.lstrip("*#> ").startswith(QUESTION_MARKER)]
+    if not starts:
+        return None
+    return "\n".join(lines[starts[-1] :]).strip()[:QUESTION_LIMIT]
 
 
 def build_prompt(goal: str, step: Step, feedback: str | None = None) -> str:
@@ -22,9 +57,11 @@ def build_prompt(goal: str, step: Step, feedback: str | None = None) -> str:
         f"# Overall goal\n{goal}",
         f"# Your task: {step.title}\n{step.spec}",
         f"# Files expected to change\n{files}",
-        "Work only inside the current repository. Do not ask questions; make reasonable "
-        "choices and finish the task. Do not commit.",
+        WORKING_RULES,
     ]
+    if step.answers:
+        answered = "\n\n".join(f"Q: {a.question}\nA: {a.answer}" for a in step.answers)
+        parts.append(f"# Answers to your earlier questions\n{answered}")
     if feedback:
         parts.append(
             "# Review feedback on a previous attempt\n"
@@ -34,6 +71,12 @@ def build_prompt(goal: str, step: Step, feedback: str | None = None) -> str:
     return "\n\n".join(parts)
 
 
+@dataclass
+class RunState:
+    excluded_worker_providers: set[str] = field(default_factory=set)
+    excluded_reviewer_providers: set[str] = field(default_factory=set)
+
+
 async def run_step(
     step: Step,
     profile: Profile,
@@ -41,57 +84,177 @@ async def run_step(
     judge: Judge,
     record: Record,
     goal: str = "",
+    state: RunState | None = None,
+    check: Check | None = None,
 ) -> StepResult:
-    result = StepResult(step.id, FAILED)
-    tier = min(step.difficulty - 1, len(profile.tiers) - 1)
-    feedback: str | None = None
-    number = 0
-    while (model := profile.model_for_tier(tier)) is not None:
-        number += 1
-        prompt = build_prompt(goal, step, feedback)
-        output = await attempt(step, number, model, prompt)
-        entry: dict[str, Any] = {
-            "attempt": number,
-            "tier": tier,
-            "model": model,
-            "prompt": prompt,
-            "exit_code": output.exit_code,
-            "session_id": output.session_id,
-            "command": output.command,
-            "events": output.events,
-            "stderr": output.stderr,
-            "diff": output.diff,
-            "review": None,
-            "cost": {"worker": output.cost, "reviewer": None},
-        }
-        result.attempts.append(entry)
-        if output.exit_code != 0:
-            result.detail = f"opencode exit code {output.exit_code}: {output.stderr.strip()[-500:]}"
-            record(step, entry)
-            return result
-        if profile.reviewer == BRAIN:
-            record(step, entry)
-            result.status = NEEDS_BRAIN_REVIEW
-            return result
-        verdict = (
-            Verdict(False, "no changes produced", "")
-            if not output.diff.strip()
-            else judge(step.spec, output.diff)
-        )
-        entry["review"] = {
-            "model": profile.reviewer,
-            "ok": verdict.ok,
-            "reason": verdict.reason,
-            "raw": verdict.raw,
-            "usage": verdict.usage,
-        }
-        entry["cost"]["reviewer"] = verdict.cost
-        record(step, entry)
+    run = StepRun(
+        step, profile, attempt, judge, record, goal, state or RunState(), check or no_checks
+    )
+    return await run.execute()
+
+
+def attempt_entry(
+    number: int, tier: int, model: str, prompt: str, output: AttemptOutput
+) -> dict[str, Any]:
+    cost: dict[str, float | None] = {"worker": output.cost, "reviewer": None}
+    if output.subscription_cost:
+        cost["subscription"] = output.subscription_cost
+    return {
+        "attempt": number,
+        "tier": tier,
+        "model": model,
+        "prompt": prompt,
+        "exit_code": output.exit_code,
+        "session_id": output.session_id,
+        "command": output.command,
+        "events": output.events,
+        "stderr": output.stderr,
+        "diff": output.diff,
+        "error": None,
+        "question": None,
+        "verify": [],
+        "review": None,
+        "review_fallbacks": [],
+        "cost": cost,
+    }
+
+
+def review_entry(model: str, verdict: Verdict) -> dict[str, Any]:
+    return {
+        "model": model,
+        "ok": verdict.ok,
+        "reason": verdict.reason,
+        "raw": verdict.raw,
+        "usage": verdict.usage,
+        "error": asdict(verdict.error) if verdict.error else None,
+        "cost": verdict.cost,
+    }
+
+
+async def no_checks(step: Step, number: int) -> list[CheckResult]:
+    return []
+
+
+@dataclass
+class StepRun:
+    step: Step
+    profile: Profile
+    attempt: Attempt
+    judge: Judge
+    record: Record
+    goal: str
+    state: RunState
+    check: Check
+
+    def __post_init__(self) -> None:
+        self.result = StepResult(self.step.id, FAILED)
+
+    async def execute(self) -> StepResult:
+        tier = min(self.step.difficulty - 1, len(self.profile.tiers) - 1)
+        feedback: str | None = None
+        while tier < len(self.profile.tiers):
+            rejection = await self.run_level(tier, feedback)
+            if rejection is None:
+                return self.result
+            feedback = rejection
+            tier += 1
+        return self.result
+
+    async def run_level(self, tier: int, feedback: str | None) -> str | None:
+        """Try the models of one level in order; return the rejection reason, or None when done."""
+        last_error = f"level {tier + 1}: every provider is excluded for this run"
+        for model in self.profile.models_for_tier(tier):
+            if provider_of(model) in self.state.excluded_worker_providers:
+                continue
+            number = len(self.result.attempts) + 1
+            prompt = build_prompt(self.goal, self.step, feedback)
+            output = await self.attempt(self.step, number, model, prompt)
+            entry = attempt_entry(number, tier, model, prompt, output)
+            self.result.attempts.append(entry)
+            if output.exit_code == 0:
+                return await self.judge_attempt(number, model, output, entry)
+            error = output.error or ModelError.of(
+                UNCLASSIFIED, f"exit {output.exit_code}", output.stderr
+            )
+            entry["error"] = asdict(error)
+            self.record(self.step, entry)
+            last_error = f"{model}: {error.describe()}"
+            if error.kind == UNCLASSIFIED:
+                self.result.detail = last_error
+                return None
+            if error.kind == PROVIDER_UNUSABLE:
+                self.state.excluded_worker_providers.add(provider_of(model))
+        self.result.status = UNAVAILABLE
+        self.result.detail = last_error
+        return None
+
+    async def judge_attempt(
+        self, number: int, model: str, output: AttemptOutput, entry: dict[str, Any]
+    ) -> str | None:
+        """Question, then verification, then review; return the rejection reason, if any."""
+        question = question_in(output.final_text)
+        if question is not None:
+            entry["question"] = question
+            self.record(self.step, entry)
+            self.result.status = NEEDS_ANSWER
+            self.result.detail = question
+            return None
+        checks = await self.check(self.step, number)
+        entry["verify"] = [asdict(result) for result in checks]
+        failed = next((result for result in checks if not result.ok), None)
+        if failed is None:
+            return self.review(model, output, entry, checks)
+        self.record(self.step, entry)
+        reason = failure_reason(failed)
+        self.result.detail = f"rejected on {model}: {reason}"
+        return reason
+
+    def review(
+        self,
+        model: str,
+        output: AttemptOutput,
+        entry: dict[str, Any],
+        checks: list[CheckResult],
+    ) -> str | None:
+        if self.profile.is_brain_review:
+            self.record(self.step, entry)
+            self.result.status = NEEDS_BRAIN_REVIEW
+            return None
+        verdict: Verdict | None = NO_CHANGES
+        if output.diff.strip():
+            verdict = self.consult_reviewers(output.diff, entry, checks)
+        else:
+            entry["review"] = review_entry(self.profile.reviewers[0], NO_CHANGES)
+        self.record(self.step, entry)
+        if verdict is None or verdict.error is not None:
+            self.result.status = NEEDS_BRAIN_REVIEW
+            self.result.detail = verdict.reason if verdict else NO_REVIEWER
+            return None
         if verdict.ok:
-            result.status = APPROVED
-            result.detail = verdict.reason
-            return result
-        feedback = verdict.reason
-        result.detail = f"rejected on {model}: {verdict.reason}"
-        tier += 1
-    return result
+            self.result.status = APPROVED
+            self.result.detail = verdict.reason
+            return None
+        self.result.detail = f"rejected on {model}: {verdict.reason}"
+        return verdict.reason
+
+    def consult_reviewers(
+        self, diff: str, entry: dict[str, Any], checks: list[CheckResult]
+    ) -> Verdict | None:
+        """Ask the reviewers in order; the first verdict without an error decides."""
+        consulted: list[tuple[str, Verdict]] = []
+        for reviewer in self.profile.reviewers:
+            if provider_of(reviewer) in self.state.excluded_reviewer_providers:
+                continue
+            verdict = self.judge(reviewer, self.step.spec, diff, checks)
+            consulted.append((reviewer, verdict))
+            if verdict.error is None:
+                break
+            if verdict.error.kind == PROVIDER_UNUSABLE:
+                self.state.excluded_reviewer_providers.add(provider_of(reviewer))
+        if not consulted:
+            return None
+        *failed, (reviewer, verdict) = consulted
+        entry["review_fallbacks"] = [review_entry(*pair) for pair in failed]
+        entry["review"] = review_entry(reviewer, verdict)
+        entry["cost"]["reviewer"] = verdict.cost
+        return verdict

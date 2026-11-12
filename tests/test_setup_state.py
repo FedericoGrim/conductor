@@ -1,8 +1,9 @@
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
-from conductor.config import Config
+from conductor.config import Config, Provider
 from conductor.defaults import DIFFICULTY_LEVELS
 from conductor.setup_state import (
     KNOWN_PROVIDERS,
@@ -35,7 +36,7 @@ def scaleway() -> KnownProvider:
     )
 
 
-def test_known_providers_are_all_https_and_have_a_key_variable() -> None:
+def test_known_providers_are_either_https_with_a_key_or_managed_by_their_harness() -> None:
     assert [known.name for known in KNOWN_PROVIDERS] == [
         "openrouter",
         "openrouter",
@@ -43,9 +44,31 @@ def test_known_providers_are_all_https_and_have_a_key_variable() -> None:
         "scaleway",
         "opencode",
         "deepseek",
+        "claude-code",
     ]
-    assert all(known.base_url.startswith("https://") for known in KNOWN_PROVIDERS)
-    assert all(known.api_key_env.isupper() for known in KNOWN_PROVIDERS)
+    for known in KNOWN_PROVIDERS:
+        if known.is_managed:
+            assert known.base_url == "" and known.api_key_env == ""
+            assert known.harness == "claude-code"
+        else:
+            assert known.base_url.startswith("https://")
+            assert known.api_key_env.isupper()
+            assert known.harness == "opencode"
+
+
+def test_adding_the_claude_code_provider_keeps_it_endpointless() -> None:
+    model = state()
+    provider = model.add_provider(next(k for k in KNOWN_PROVIDERS if k.name == "claude-code"))
+    assert (provider.base_url, provider.api_key_env, provider.harness) == ("", "", "claude-code")
+    model.set_tier(1, "claude-code/sonnet")
+    assert model.to_config().profile("low").tiers[0] == ("claude-code/sonnet",)
+
+
+def test_a_managed_provider_cannot_review() -> None:
+    model = state()
+    model.add_provider(next(k for k in KNOWN_PROVIDERS if k.name == "claude-code"))
+    model.set_reviewer("claude-code/sonnet")
+    assert any("no endpoint" in problem for problem in model.problems())
 
 
 def test_defaults_carry_three_profiles_with_five_filled_levels() -> None:
@@ -70,6 +93,12 @@ def test_to_config_round_trips_through_dump_and_load(tmp_path: Path) -> None:
     written = tmp_path / "conductor.toml"
     written.write_text(state().to_config().dump())
     assert Config.load(written) == CONFIG
+
+
+def test_drafts_keep_the_retry_limit_of_a_profile() -> None:
+    profile = replace(make_profile(name="low", tiers=TIERS), transient_attempts=7)
+    draft = ProfileDraft.from_profile(profile)
+    assert draft.to_profile() == profile
 
 
 def test_select_clamps_to_the_available_profiles() -> None:
@@ -222,3 +251,82 @@ def test_model_options_survive_a_round_trip_through_the_editor(tmp_path: Path) -
     assert again.draft().providers["openrouter"].model_options == {
         "m1": {"provider": {"order": ["relace"]}}
     }
+
+
+def fallback_config() -> Config:
+    profile = make_profile(name="medium", tiers=TIERS, reviewer="openrouter/m4")
+    profile = replace(
+        profile,
+        providers={
+            **profile.providers,
+            "scaleway": Provider("scaleway", "https://api.scaleway.ai/v1", "SCALEWAY_API_KEY"),
+        },
+        tiers=(TIERS[0:1], (TIERS[1], "scaleway/b2", "openrouter/b3"), *[(t,) for t in TIERS[2:]]),
+        reviewers=("openrouter/m4", "scaleway/r2"),
+    )
+    return Config("medium", {"medium": profile})
+
+
+def test_drafts_keep_the_fallback_models_unchanged() -> None:
+    config = fallback_config()
+    assert SetupState.from_config(config).to_config() == config
+
+
+def test_removing_a_provider_drops_its_fallback_models() -> None:
+    model = SetupState.from_config(fallback_config())
+    model.remove_provider("scaleway")
+    profile = model.to_config().profile("medium")
+    assert profile.tiers[1] == (TIERS[1], "openrouter/b3")
+    assert profile.reviewers == ("openrouter/m4",)
+
+
+def test_a_brain_reviewer_drops_the_reviewer_fallbacks() -> None:
+    model = SetupState.from_config(fallback_config())
+    model.set_reviewer("brain")
+    assert model.to_config().profile("medium").reviewers == ("brain",)
+
+
+def test_a_level_takes_fallbacks_in_order_and_drops_the_last_one() -> None:
+    model = state()
+    model.add_provider(scaleway())
+    model.add_fallback(2, "scaleway/glm-5.3")
+    model.add_fallback(2, "openrouter/m1")
+    assert model.draft().fallbacks[1] == ["scaleway/glm-5.3", "openrouter/m1"]
+    model.remove_fallback(2)
+    assert model.to_config().profile("low").tiers[1] == ("openrouter/m2", "scaleway/glm-5.3")
+
+
+def test_a_fallback_needs_a_level_model_a_known_provider_and_no_duplicate() -> None:
+    model = state()
+    with pytest.raises(SetupError, match="add provider 'scaleway' first"):
+        model.add_fallback(1, "scaleway/glm-5.3")
+    with pytest.raises(SetupError, match="already in difficulty 1"):
+        model.add_fallback(1, "openrouter/m1")
+    model.add_fallback(1, "openrouter/m2")
+    with pytest.raises(SetupError, match="already in difficulty 1"):
+        model.add_fallback(1, "openrouter/m2")
+    model.clear_tier(3)
+    with pytest.raises(SetupError, match="difficulty 3 has no model"):
+        model.add_fallback(3, "openrouter/x")
+    with pytest.raises(SetupError, match="between 1 and 5"):
+        model.add_fallback(6, "openrouter/x")
+    with pytest.raises(SetupError, match="no fallback"):
+        model.remove_fallback(4)
+
+
+def test_the_reviewer_takes_fallbacks_unless_it_is_the_brain() -> None:
+    model = state()
+    model.add_reviewer_fallback("openrouter/m4")
+    assert model.to_config().profile("low").reviewers == ("openrouter/m5", "openrouter/m4")
+    with pytest.raises(SetupError, match="already a reviewer"):
+        model.add_reviewer_fallback("openrouter/m5")
+    model.clear_reviewer_fallbacks()
+    assert model.to_config().profile("low").reviewers == ("openrouter/m5",)
+    model.set_reviewer("brain")
+    with pytest.raises(SetupError, match="brain"):
+        model.add_reviewer_fallback("openrouter/m4")
+
+
+def test_drafts_keep_the_harness_of_a_provider() -> None:
+    managed = Provider("subscription", "", "", harness="opencode")
+    assert ProviderDraft.from_provider(managed).to_provider() == managed

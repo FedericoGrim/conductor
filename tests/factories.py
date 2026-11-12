@@ -18,7 +18,7 @@ def make_profile(
     return Profile(
         name,
         {provider: Provider(provider, base_url, api_key_env, dict(request_options or {}))},
-        tiers,
-        reviewer,
+        tuple((tier,) for tier in tiers),
+        (reviewer,),
         max_parallel,
     )

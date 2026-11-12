@@ -302,8 +302,8 @@ def test_every_provider_of_a_profile_is_reported() -> None:
             ),
             "vercel": Provider("vercel", "https://ai-gateway.vercel.sh/v1", "TEST_BILLING_KEY"),
         },
-        ("openrouter/a", "vercel/b"),
-        "openrouter/a",
+        (("openrouter/a",), ("vercel/b",)),
+        ("openrouter/a",),
     )
     api = FakeApi(
         {
@@ -317,3 +317,23 @@ def test_every_provider_of_a_profile_is_reported() -> None:
         "openrouter.ai",
         "ai-gateway.vercel.sh",
     ]
+
+
+def test_providers_without_url_have_no_balance_to_read() -> None:
+    from conductor.config import Profile, Provider
+
+    profile = Profile(
+        "medium",
+        {
+            "subscription": Provider("subscription", "", ""),
+            "openrouter": Provider(
+                "openrouter", "https://openrouter.ai/api/v1", "TEST_BILLING_KEY"
+            ),
+        },
+        (("subscription/opus", "openrouter/a"),),
+        ("openrouter/a",),
+    )
+    api = FakeApi(
+        {"https://openrouter.ai/api/v1/credits": {"data": {"total_credits": 1, "total_usage": 0}}}
+    )
+    assert [balance.account for balance in balances([profile], api)] == ["openrouter.ai"]

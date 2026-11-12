@@ -263,7 +263,7 @@ def test_saving_writes_the_config_and_keeps_a_backup(tmp_path: Path) -> None:
     path = tmp_path / "conductor.toml"
     assert 'reviewer = "brain"' in path.read_text()
     assert (tmp_path / "conductor.toml.bak").read_text() == CONFIG
-    assert Config.load(path).profiles["medium"].reviewer == "brain"
+    assert Config.load(path).profiles["medium"].is_brain_review
 
 
 def test_save_config_without_an_existing_file_creates_it(tmp_path: Path) -> None:
@@ -297,3 +297,63 @@ def test_known_providers_are_offered_when_adding_one(tmp_path: Path) -> None:
     for known in KNOWN_PROVIDERS:
         assert known.label in text
     assert isinstance(view.state.draft().providers["openrouter"], ProviderDraft)
+
+
+def test_a_level_gets_fallbacks_from_the_catalog_or_typed_and_drops_the_last(
+    tmp_path: Path,
+) -> None:
+    view = editor(tmp_path)
+    view.handle_key("enter")
+    view.handle_key("down")
+    view.handle_key("f")
+    assert view.screen == CATALOG
+    type_text(view, "sonnet")
+    view.handle_key("enter")
+    assert view.screen == EDITOR
+    view.handle_key("F")
+    assert view.screen == MODEL
+    type_text(view, "openrouter/typed/model")
+    view.handle_key("enter")
+    assert view.state.draft().tiers[1] == "openrouter/m2"
+    assert view.state.draft().fallbacks[1] == [
+        "openrouter/anthropic/sonnet",
+        "openrouter/typed/model",
+    ]
+    text = "\n".join(render(view))
+    assert "2. openrouter/m2 → openrouter/anthropic/sonnet, openrouter/typed/model" in text
+    view.handle_key("x")
+    assert view.state.draft().fallbacks[1] == ["openrouter/anthropic/sonnet"]
+    view.handle_key("down")
+    view.handle_key("x")
+    assert "no fallback" in view.message
+
+
+def test_the_reviewer_gets_fallbacks_and_loses_them_when_it_becomes_the_brain(
+    tmp_path: Path,
+) -> None:
+    view = editor(tmp_path)
+    view.handle_key("enter")
+    view.handle_key("v")
+    assert view.screen == CATALOG
+    type_text(view, "flash")
+    view.handle_key("enter")
+    assert "reviewer  openrouter/m5 → openrouter/deepseek/flash" in "\n".join(render(view))
+    view.handle_key("V")
+    assert view.state.draft().reviewer_fallbacks == []
+    view.handle_key("v")
+    view.handle_key("enter")
+    view.handle_key("r")
+    assert view.state.draft().reviewer == "brain"
+    assert view.state.draft().reviewer_fallbacks == []
+
+
+def test_a_managed_provider_says_so_and_offers_no_endpoint_to_edit(tmp_path: Path) -> None:
+    view = editor(tmp_path)
+    view.state.add_provider(next(k for k in KNOWN_PROVIDERS if k.name == "claude-code"))
+    view.handle_key("enter")
+    view.handle_key("P")
+    assert "claude-code  (managed by claude-code)" in "\n".join(render(view))
+    view.handle_key("down")
+    view.handle_key("b")
+    assert "managed" in view.message
+    assert view.screen == PROVIDERS

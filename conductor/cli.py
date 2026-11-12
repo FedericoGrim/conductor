@@ -10,12 +10,13 @@ from pathlib import Path
 
 from conductor import billing, reviewer, settings, setup_tui
 from conductor.config import Config, ConfigError, Profile
-from conductor.escalation import run_step
+from conductor.escalation import RunState, run_step
+from conductor.harness import harness_for
 from conductor.log import RunLog
 from conductor.merge import merge_branch
 from conductor.plan import Plan, PlanError, Step
-from conductor.privacy import opencode_config
 from conductor.scheduler import APPROVED, CONFLICT, StepResult, run_plan
+from conductor.verify import CheckResult, run_checks
 from conductor.worker import (
     AttemptOutput,
     create_worktree,
@@ -23,9 +24,9 @@ from conductor.worker import (
     git,
     remove_worktree,
     run_attempt,
-    write_opencode_config,
 )
 
+RULES_FILE_LIMIT = 20_000
 DEFAULT_CONFIG_PATHS = (
     Path("conductor.toml"),
     Path.home() / ".config" / "conductor" / "conductor.toml",
@@ -45,31 +46,71 @@ def find_config(explicit: Path | None) -> Path:
 def validate(args: argparse.Namespace) -> int:
     plan = Plan.load(args.plan)
     print(f"ok: {len(plan.steps)} steps")
+    if args.config is None and not any(path.exists() for path in DEFAULT_CONFIG_PATHS):
+        return 0
+    config = Config.load(find_config(args.config))
+    for profile in config.profiles.values():
+        for warning in profile.single_provider_warnings():
+            print(f"warning: {warning}")
     return 0
 
 
+def domain_rules(repo: Path, plan: Plan) -> tuple[str, ...]:
+    if plan.rules_file is None:
+        return plan.rules
+    path = repo / plan.rules_file
+    if not path.is_file():
+        raise PlanError(f"rules_file '{plan.rules_file}' does not exist in {repo}")
+    text = path.read_text(errors="replace").strip()
+    if len(text) > RULES_FILE_LIMIT:
+        raise PlanError(
+            f"rules_file '{plan.rules_file}' is longer than {RULES_FILE_LIMIT} characters"
+        )
+    return (*plan.rules, text) if text else plan.rules
+
+
 async def execute_plan(
-    repo: Path, plan: Plan, profile: Profile, log: RunLog, extra_args: list[str]
+    repo: Path,
+    plan: Plan,
+    profile: Profile,
+    log: RunLog,
+    extra_args: list[str],
+    rules: tuple[str, ...] = (),
 ) -> dict[str, StepResult]:
     base = git(repo, "rev-parse", "--abbrev-ref", "HEAD").strip()
     run_name = log.directory.name
     worktrees = repo / ".conductor" / "worktrees" / run_name
+    state = RunState()
 
     async def attempt(step: Step, number: int, model: str, prompt: str) -> AttemptOutput:
         branch = f"conductor/{run_name}/{step.id}-{number}"
         path = worktrees / f"{step.id}-{number}"
         create_worktree(repo, path, branch, base)
-        write_opencode_config(path, opencode_config(profile))
+        harness = harness_for(profile, model)
+        harness.prepare(path, profile)
         print(f"[{step.id}] attempt {number} on {model}", flush=True)
         return await run_attempt(
-            path, base, model, prompt, extra_args, f"conductor: {step.id} attempt {number}"
+            path,
+            base,
+            model,
+            prompt,
+            extra_args,
+            f"conductor: {step.id} attempt {number}",
+            transient_attempts=profile.transient_attempts,
+            harness=harness,
         )
 
-    def judge(spec: str, diff: str) -> reviewer.Verdict:
-        return reviewer.review(profile, spec, diff)
+    def judge(model: str, spec: str, diff: str, checks: list[CheckResult]) -> reviewer.Verdict:
+        return reviewer.review(profile, model, spec, diff, rules=rules, checks=checks)
+
+    async def check(step: Step, number: int) -> list[CheckResult]:
+        path = worktrees / f"{step.id}-{number}"
+        return await run_checks(plan.verify_for(step), path, repo, plan.verify_timeout)
 
     async def execute(step: Step) -> StepResult:
-        result = await run_step(step, profile, attempt, judge, log.attempt, goal=plan.goal)
+        result = await run_step(
+            step, profile, attempt, judge, log.attempt, goal=plan.goal, state=state, check=check
+        )
         print(f"[{step.id}] {result.status}: {result.detail}", flush=True)
         numbers = [a["attempt"] for a in result.attempts]
         for number in numbers[:-1]:
@@ -96,13 +137,14 @@ def run(args: argparse.Namespace) -> int:
     config = Config.load(find_config(args.config))
     profile = config.profile(args.privacy)
     plan = Plan.load(args.plan)
+    rules = domain_rules(repo, plan)
     exclude_from_git(repo, ".conductor/")
     if git(repo, "status", "--porcelain").strip():
         print("error: repository has uncommitted changes; commit or stash them first")
         return 2
     log = RunLog.create(repo, plan, profile.name)
     print(f"run {log.directory.name}: {len(plan.steps)} steps, privacy {profile.name}")
-    results = asyncio.run(execute_plan(repo, plan, profile, log, args.opencode_arg))
+    results = asyncio.run(execute_plan(repo, plan, profile, log, args.opencode_arg, rules))
     log.finish(results)
     try:
         billing.record_run(
@@ -230,6 +272,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     check = commands.add_parser("validate", help="check a plan.json")
     check.add_argument("plan", type=Path)
+    check.add_argument("--config", type=Path, help="path to conductor.toml")
     check.set_defaults(handler=validate)
 
     execute = commands.add_parser("run", help="execute a plan.json")
@@ -289,7 +332,6 @@ def main(argv: list[str] | None = None) -> int:
     except (
         PlanError,
         ConfigError,
-        reviewer.ReviewerError,
         NotARepositoryError,
         settings.SettingsError,
     ) as error:

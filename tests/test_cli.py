@@ -1,6 +1,7 @@
 import json
 import os
 import stat
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -48,10 +49,55 @@ def install_fake_opencode(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
 
 
-def test_validate_accepts_the_example_plan(capsys: pytest.CaptureFixture[str]) -> None:
-    example = Path(__file__).parent.parent / "examples" / "plan.json"
-    assert cli.main(["validate", str(example)]) == 0
-    assert "ok:" in capsys.readouterr().out
+EXAMPLE_PLAN = Path(__file__).parent.parent / "examples" / "plan.json"
+
+
+def test_validate_accepts_the_example_plan(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(cli, "DEFAULT_CONFIG_PATHS", ())
+    assert cli.main(["validate", str(EXAMPLE_PLAN)]) == 0
+    assert capsys.readouterr().out == "ok: 3 steps\n"
+
+
+SINGLE_PROVIDER = """
+default_privacy = "medium"
+[privacy.medium]
+tiers = [["openrouter/a", "openrouter/a2"], ["openrouter/b", "deepseek/b2"]]
+reviewer = "openrouter/r"
+
+[privacy.medium.providers.openrouter]
+base_url = "https://openrouter.ai/api/v1"
+api_key_env = "OPENROUTER_API_KEY"
+
+[privacy.medium.providers.deepseek]
+base_url = "https://api.deepseek.com/v1"
+api_key_env = "DEEPSEEK_API_KEY"
+"""
+
+
+def test_validate_warns_about_levels_that_depend_on_one_provider(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config = tmp_path / "conductor.toml"
+    config.write_text(SINGLE_PROVIDER)
+    assert cli.main(["validate", str(EXAMPLE_PLAN), "--config", str(config)]) == 0
+    out = capsys.readouterr().out
+    assert "ok: 3 steps" in out
+    assert (
+        "warning: privacy.medium: level 1, the reviewer rely only on openrouter; "
+        "an outage there leaves them unavailable\n"
+    ) in out
+    assert "level 2" not in out
+
+
+def test_validate_does_not_warn_about_a_brain_reviewer(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config = tmp_path / "conductor.toml"
+    config.write_text(SINGLE_PROVIDER.replace('reviewer = "openrouter/r"', 'reviewer = "brain"'))
+    cli.main(["validate", str(EXAMPLE_PLAN), "--config", str(config)])
+    assert "reviewer" not in capsys.readouterr().out
 
 
 def test_run_executes_reviews_and_merges(
@@ -98,6 +144,7 @@ def test_run_executes_reviews_and_merges(
         "attempts": 2,
         "models": ["openrouter/cheap", "openrouter/strong"],
         "last_attempt": "step-a/attempt-2.json",
+        "question": None,
         "cost": pytest.approx(0.022),
     }
     assert run["cost"] == pytest.approx(0.033)
@@ -292,7 +339,7 @@ def test_config_export_and_import_round_trip_through_the_cli(
     assert cli.main(["config", "import", str(exported), "--config", str(target)]) == 0
     out = capsys.readouterr().out
     assert "medium" in out
-    assert Config.load(target).profile("medium").tiers[0] == "openrouter/cheap"
+    assert Config.load(target).profile("medium").tiers[0] == ("openrouter/cheap",)
 
     assert cli.main(["config", "import", str(exported), "--config", str(target)]) == 0
     assert "previous file kept" in capsys.readouterr().out
@@ -338,3 +385,70 @@ def test_config_import_refuses_a_broken_file(
     broken.write_text("not = [valid")
     assert cli.main(["config", "import", str(broken), "--config", str(tmp_path / "out.toml")]) == 2
     assert "cannot read" in capsys.readouterr().err
+
+
+def run_verified_plan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    plan_fields: dict[str, Any],
+    prepare: Callable[[Path], None] = lambda repo: None,
+) -> tuple[int, Path, list[dict[str, Any]]]:
+    repo = init_repo(tmp_path)
+    prepare(repo)
+    install_fake_opencode(tmp_path, monkeypatch)
+    monkeypatch.setenv("TEST_CLI_KEY", "k")
+    config = tmp_path / "conductor.toml"
+    config.write_text(CONFIG)
+    plan = tmp_path / "plan.json"
+    steps = [{"id": "a", "spec": "write output", "difficulty": 1}]
+    plan.write_text(json.dumps({"goal": "demo", "steps": steps, **plan_fields}))
+    requests: list[dict[str, Any]] = []
+
+    def fake_post(url: str, headers: dict[str, str], body: dict[str, Any]) -> dict[str, Any]:
+        requests.append(body)
+        content = json.dumps({"ok": True, "reason": "good"})
+        return {"choices": [{"message": {"content": content}}], "usage": {"cost": 0.001}}
+
+    monkeypatch.setattr(reviewer, "http_post", fake_post)
+    code = cli.main(["run", str(plan), "--config", str(config), "--repo", str(repo)])
+    return code, repo, requests
+
+
+def test_run_rejects_an_attempt_whose_checks_fail_without_calling_the_reviewer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    check = 'grep -q strong output.txt && test -d "$CONDUCTOR_REPO/.git"'
+    code, repo, requests = run_verified_plan(tmp_path, monkeypatch, {"verify": [check]})
+    assert code == 0
+    assert len(requests) == 1
+    run_dir = next((repo / ".conductor" / "runs").iterdir())
+    first = json.loads((run_dir / "step-a" / "attempt-1.json").read_text())
+    assert first["verify"][0]["exit_code"] == 1
+    assert first["review"] is None
+
+
+def test_run_sends_the_plan_rules_and_the_rules_file_to_the_reviewer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def write_rules(repo: Path) -> None:
+        (repo / "docs").mkdir()
+        (repo / "docs" / "rules.md").write_text("Orders own their lines.\n")
+        commit_work(repo, "rules")
+
+    fields = {"rules": ["Totals never go negative"], "rules_file": "docs/rules.md"}
+    code, _, requests = run_verified_plan(tmp_path, monkeypatch, fields, prepare=write_rules)
+    assert code == 0
+    prompt = requests[0]["messages"][-1]["content"]
+    assert "- Totals never go negative" in prompt
+    assert "Orders own their lines." in prompt
+
+
+def test_run_stops_before_any_attempt_when_the_rules_file_is_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code, repo, requests = run_verified_plan(
+        tmp_path, monkeypatch, {"rules_file": "docs/missing.md"}
+    )
+    assert code == 2
+    assert "docs/missing.md" in capsys.readouterr().err
+    assert not (repo / "output.txt").exists()

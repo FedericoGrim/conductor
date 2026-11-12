@@ -92,7 +92,7 @@ def test_import_accepts_a_plain_configuration_without_metadata(tmp_path: Path) -
     source.write_text(CONFIG)
     result = import_settings(source, tmp_path / "out.toml")
     assert result.profiles == ("medium",)
-    assert Config.load(tmp_path / "out.toml").profile("medium").tiers[0] == "openrouter/a"
+    assert Config.load(tmp_path / "out.toml").profile("medium").tiers[0] == ("openrouter/a",)
 
 
 def test_import_refuses_a_newer_schema(tmp_path: Path) -> None:

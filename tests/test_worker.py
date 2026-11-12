@@ -1,22 +1,31 @@
 import asyncio
 import json
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from conductor.worker import (
+from conductor.errors import TRANSIENT
+from conductor.harness import (
+    OPENCODE,
     build_command,
+    events_cost,
+    final_text,
+    is_retry,
+    session_id,
+    write_opencode_config,
+)
+from conductor.worker import (
     commit_work,
     create_worktree,
     diff_against,
-    events_cost,
     exclude_from_git,
     parse_events,
+    retry_limit,
     run_attempt,
     subprocess_runner,
-    write_opencode_config,
 )
 
 
@@ -57,9 +66,9 @@ def test_parse_events_keeps_json_lines_and_session_id() -> None:
             json.dumps({"type": "text", "sessionID": "ses_1", "text": "done"}),
         ]
     )
-    events, session_id = parse_events(raw)
+    events = parse_events(raw)
     assert [e["type"] for e in events] == ["step-start", "text"]
-    assert session_id == "ses_1"
+    assert session_id(events) == "ses_1"
 
 
 def test_worktree_config_commit_and_diff(tmp_path: Path) -> None:
@@ -75,10 +84,56 @@ def test_worktree_config_commit_and_diff(tmp_path: Path) -> None:
     assert "opencode.json" in (repo / ".git" / "info" / "exclude").read_text()
 
 
+def never_stop(line: str) -> bool:
+    return False
+
+
 def test_subprocess_runner_sets_pwd_to_the_working_directory(tmp_path: Path) -> None:
-    code, stdout, _ = asyncio.run(subprocess_runner(["sh", "-c", "echo $PWD"], tmp_path))
+    code, stdout, _ = asyncio.run(
+        subprocess_runner(["sh", "-c", "echo $PWD"], tmp_path, never_stop)
+    )
     assert code == 0
     assert stdout.strip() == str(tmp_path)
+
+
+def test_subprocess_runner_stops_the_process_when_asked(tmp_path: Path) -> None:
+    endless = "while true; do echo line; sleep 0.01; done"
+    seen: list[str] = []
+
+    def stop_on_third(line: str) -> bool:
+        seen.append(line)
+        return len(seen) == 3
+
+    code, stdout, _ = asyncio.run(
+        asyncio.wait_for(subprocess_runner(["sh", "-c", endless], tmp_path, stop_on_third), 10)
+    )
+    assert code != 0
+    assert stdout.splitlines()[:3] == ["line", "line", "line"]
+
+
+def test_subprocess_runner_keeps_stderr(tmp_path: Path) -> None:
+    code, _, stderr = asyncio.run(
+        subprocess_runner(["sh", "-c", "echo oops >&2; exit 3"], tmp_path, never_stop)
+    )
+    assert code == 3
+    assert stderr.strip() == "oops"
+
+
+def retry_line(kind: str = "provider.rate-limit") -> str:
+    return json.dumps({"type": "retry", "error": {"type": kind, "message": "slow down"}})
+
+
+def test_retry_limit_stops_after_more_retries_than_allowed() -> None:
+    should_stop = retry_limit(2, is_retry)
+    decisions = [should_stop(line) for line in ['{"type":"text"}', retry_line(), retry_line()]]
+    assert decisions == [False, False, False]
+    assert should_stop(retry_line()) is True
+
+
+def test_retry_limit_ignores_lines_that_are_not_json() -> None:
+    should_stop = retry_limit(0, is_retry)
+    assert should_stop("retry") is False
+    assert should_stop(retry_line()) is True
 
 
 def test_exclude_from_git_adds_pattern_once(tmp_path: Path) -> None:
@@ -113,7 +168,9 @@ def test_run_attempt_uses_injected_runner(tmp_path: Path) -> None:
     create_worktree(repo, worktree, branch="conductor/s1-1", base="main")
     seen: dict[str, object] = {}
 
-    async def fake_runner(cmd: list[str], cwd: Path) -> tuple[int, str, str]:
+    async def fake_runner(
+        cmd: list[str], cwd: Path, should_stop: Callable[[str], bool]
+    ) -> tuple[int, str, str]:
         seen["cmd"] = cmd
         seen["cwd"] = cwd
         (cwd / "made.txt").write_text("by model\n")
@@ -128,6 +185,8 @@ def test_run_attempt_uses_injected_runner(tmp_path: Path) -> None:
             prompt="do it",
             extra_args=[],
             commit_message="conductor: s1 attempt 1",
+            transient_attempts=3,
+            harness=OPENCODE,
             runner=fake_runner,
         )
     )
@@ -135,4 +194,55 @@ def test_run_attempt_uses_injected_runner(tmp_path: Path) -> None:
     assert output.exit_code == 0
     assert output.session_id == "ses_9"
     assert output.cost == 0.02
+    assert output.error is None
+    assert output.final_text == ""
     assert "+by model" in output.diff
+
+
+def test_run_attempt_stops_after_the_retry_limit_and_reports_a_transient_error(
+    tmp_path: Path,
+) -> None:
+    repo = init_repo(tmp_path)
+    worktree = tmp_path / "wt"
+    create_worktree(repo, worktree, branch="conductor/s1-1", base="main")
+
+    async def retrying_runner(
+        cmd: list[str], cwd: Path, should_stop: Callable[[str], bool]
+    ) -> tuple[int, str, str]:
+        lines: list[str] = []
+        while True:
+            line = retry_line("provider.internal")
+            lines.append(line)
+            if should_stop(line):
+                return -15, "\n".join(lines) + "\n", ""
+
+    output = asyncio.run(
+        run_attempt(
+            worktree,
+            base="main",
+            model="openrouter/a/b",
+            prompt="do it",
+            extra_args=[],
+            commit_message="conductor: s1 attempt 1",
+            transient_attempts=2,
+            harness=OPENCODE,
+            runner=retrying_runner,
+        )
+    )
+    assert len(output.events) == 3
+    assert output.error is not None
+    assert output.error.kind == TRANSIENT
+    assert output.error.type == "provider.internal"
+
+
+def text_event(text: str) -> dict[str, Any]:
+    return {"type": "text", "sessionID": "ses", "part": {"type": "text", "text": text}}
+
+
+def test_final_text_is_the_last_text_part() -> None:
+    events = [text_event("first"), step_finish(0.1), text_event("last"), step_finish(0.1)]
+    assert final_text(events) == "last"
+
+
+def test_final_text_is_empty_without_text_parts() -> None:
+    assert final_text([step_finish(0.1), {"type": "text", "part": "broken"}]) == ""

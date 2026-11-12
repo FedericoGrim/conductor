@@ -9,9 +9,31 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-OPENCODE_CONFIG_NAME = "opencode.json"
+from conductor.config import Profile
+from conductor.errors import ModelError
 
-Runner = Callable[[list[str], Path], Awaitable[tuple[int, str, str]]]
+EVENT_LINE_LIMIT = 64 * 1024 * 1024
+STOP_GRACE_SECONDS = 10
+
+StopCondition = Callable[[str], bool]
+Runner = Callable[[list[str], Path, StopCondition], Awaitable[tuple[int, str, str]]]
+Events = list[dict[str, Any]]
+EventCheck = Callable[[dict[str, Any]], bool]
+
+
+@dataclass(frozen=True)
+class Harness:
+    """The command-line agent that runs a worker, and how to read its event stream."""
+
+    name: str
+    prepare: Callable[[Path, Profile], None]
+    command: Callable[[str, str, list[str]], list[str]]
+    session_id: Callable[[Events], str | None]
+    is_retry: EventCheck
+    cost: Callable[[Events], float]
+    error: Callable[[Events, int, str], ModelError | None]
+    final_text: Callable[[Events], str]
+    subscription_cost: Callable[[Events], float] | None = None
 
 
 @dataclass
@@ -23,6 +45,9 @@ class AttemptOutput:
     stderr: str = ""
     command: list[str] = field(default_factory=list)
     cost: float = 0.0
+    error: ModelError | None = None
+    final_text: str = ""
+    subscription_cost: float = 0.0
 
 
 def git(cwd: Path, *args: str) -> str:
@@ -49,49 +74,16 @@ def exclude_from_git(repo: Path, pattern: str) -> None:
         exclude.write_text(existing.rstrip("\n") + f"\n{pattern}\n")
 
 
-def write_opencode_config(worktree: Path, config: dict[str, Any]) -> None:
-    (worktree / OPENCODE_CONFIG_NAME).write_text(json.dumps(config, indent=2) + "\n")
-    exclude_from_git(worktree, OPENCODE_CONFIG_NAME)
-
-
-def build_command(model: str, prompt: str, extra_args: list[str]) -> list[str]:
-    return [
-        "opencode",
-        "run",
-        "--format",
-        "json",
-        "-m",
-        model,
-        "--auto",
-        "--archived",
-        *extra_args,
-        prompt,
-    ]
-
-
-def parse_events(stdout: str) -> tuple[list[dict[str, Any]], str | None]:
-    events: list[dict[str, Any]] = []
-    session_id: str | None = None
+def parse_events(stdout: str) -> Events:
+    events: Events = []
     for line in stdout.splitlines():
         try:
             event = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if not isinstance(event, dict):
-            continue
-        events.append(event)
-        session_id = session_id or event.get("sessionID")
-    return events, session_id
-
-
-def events_cost(events: list[dict[str, Any]]) -> float:
-    total = 0.0
-    for event in events:
-        part = event.get("part")
-        cost = part.get("cost") if isinstance(part, dict) else None
-        if event.get("type") == "step_finish" and isinstance(cost, int | float):
-            total += cost
-    return total
+        if isinstance(event, dict):
+            events.append(event)
+    return events
 
 
 def commit_work(worktree: Path, message: str) -> bool:
@@ -116,7 +108,36 @@ def diff_against(worktree: Path, base: str) -> str:
     return git(worktree, "diff", f"{base}...HEAD")
 
 
-async def subprocess_runner(cmd: list[str], cwd: Path) -> tuple[int, str, str]:
+def retry_limit(
+    transient_attempts: int, is_retry: Callable[[dict[str, Any]], bool]
+) -> StopCondition:
+    retries = 0
+
+    def should_stop(line: str) -> bool:
+        nonlocal retries
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            return False
+        if isinstance(event, dict) and is_retry(event):
+            retries += 1
+        return retries > transient_attempts
+
+    return should_stop
+
+
+async def stop_process(process: asyncio.subprocess.Process) -> None:
+    process.terminate()
+    try:
+        await asyncio.wait_for(process.wait(), STOP_GRACE_SECONDS)
+    except TimeoutError:
+        process.kill()
+        await process.wait()
+
+
+async def subprocess_runner(
+    cmd: list[str], cwd: Path, should_stop: StopCondition
+) -> tuple[int, str, str]:
     # OpenCode resolves its project root from $PWD, not from the process cwd.
     process = await asyncio.create_subprocess_exec(
         *cmd,
@@ -125,9 +146,20 @@ async def subprocess_runner(cmd: list[str], cwd: Path) -> tuple[int, str, str]:
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        limit=EVENT_LINE_LIMIT,
     )
-    stdout, stderr = await process.communicate()
-    return process.returncode or 0, stdout.decode(errors="replace"), stderr.decode(errors="replace")
+    assert process.stdout is not None and process.stderr is not None
+    stderr_task = asyncio.create_task(process.stderr.read())
+    lines: list[str] = []
+    while raw := await process.stdout.readline():
+        line = raw.decode(errors="replace")
+        lines.append(line)
+        if should_stop(line.rstrip("\n")):
+            await stop_process(process)
+            break
+    await process.wait()
+    stderr = await stderr_task
+    return process.returncode or 0, "".join(lines), stderr.decode(errors="replace")
 
 
 async def run_attempt(
@@ -137,18 +169,24 @@ async def run_attempt(
     prompt: str,
     extra_args: list[str],
     commit_message: str,
+    transient_attempts: int,
+    harness: Harness,
     runner: Runner = subprocess_runner,
 ) -> AttemptOutput:
-    command = build_command(model, prompt, extra_args)
-    exit_code, stdout, stderr = await runner(command, worktree)
-    events, session_id = parse_events(stdout)
+    command = harness.command(model, prompt, extra_args)
+    should_stop = retry_limit(transient_attempts, harness.is_retry)
+    exit_code, stdout, stderr = await runner(command, worktree, should_stop)
+    events = parse_events(stdout)
     commit_work(worktree, commit_message)
     return AttemptOutput(
         exit_code=exit_code,
-        session_id=session_id,
+        session_id=harness.session_id(events),
         events=events,
         diff=diff_against(worktree, base),
         stderr=stderr,
         command=command,
-        cost=events_cost(events),
+        cost=harness.cost(events),
+        error=harness.error(events, exit_code, stderr),
+        final_text=harness.final_text(events),
+        subscription_cost=harness.subscription_cost(events) if harness.subscription_cost else 0.0,
     )

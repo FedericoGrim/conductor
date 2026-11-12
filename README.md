@@ -8,11 +8,15 @@ Conductor takes a `plan.json` produced by a planning model (Claude in Claude Cod
 
 1. The brain writes `plan.json`: steps with a spec, the files to touch, a difficulty from 1 (trivial) to 5 (hard), and dependencies.
 2. `conductor run plan.json --privacy medium` picks the profile from `conductor.toml`.
-3. Every step whose dependencies are approved starts, up to `max_parallel` at once, in its own worktree branched from the current branch. The step runs `opencode run --format json --auto` on the model of its difficulty level, `tiers[difficulty - 1]`.
-4. The reviewer model receives the spec and the diff and answers `{"ok": bool, "reason": str}`.
-5. Rejected: the step restarts on the next difficulty level with the reason in the prompt, possibly on a different provider. Rejected on level 5: `failed`, and its dependents are `skipped`.
-6. Approved: the branch is merged into the current branch; a conflict is reported as `conflict` and the branch is kept for the brain.
-7. `.conductor/runs/<timestamp>/run.json` summarises the run; `step-<id>/attempt-<n>.json` holds the prompt, the full OpenCode event transcript, the diff and the reviewer's verdict of every attempt.
+3. Every step whose dependencies are approved starts, up to `max_parallel` at once, in its own worktree branched from the current branch. The step runs its provider's harness on the first model of its difficulty level, `tiers[difficulty - 1]`: `opencode run --format json --auto`, or `claude -p --output-format stream-json` for a `claude-code` provider (isolated from your personal Claude settings, confined to the worktree). A level may list fallback models after the first one.
+4. Verification: the step's `verify` commands (from the plan) run in the worktree with `sh -c`, `$CONDUCTOR_REPO` pointing at the main repository. The first failure rejects the attempt with the command's output as the reason, without calling the reviewer.
+5. The reviewer model receives the spec, the plan's domain rules, the verification results and the diff, and approves only if the spec is complete, new behaviour has tests in the diff, the domain rules hold and there is no obvious bug; it answers `{"ok": bool, "reason": str}`. `reviewer` may also list fallbacks.
+6. Rejected: the step restarts on the first usable model of the next difficulty level with the reason in the prompt, possibly on a different provider. Rejected on level 5: `failed`, and its dependents are `skipped`.
+   - Model or provider error: the step never escalates on an error. OpenCode retries rate limits, server and network errors by itself; after `retry.transient_attempts` of those retries (default 3, per profile) Conductor stops the worker. A transient error or an unsuitable model (context exceeded, unknown model) moves to the next model of the same level, on a fresh worktree; an unusable provider (bad key, no credit) is also excluded for the rest of the run. When no model of the level is left, the step is `unavailable`; an unclassified error ends it as `failed` at once. Each fallback is its own attempt, with the classified error in its `error`.
+   - Reviewer error: an HTTP or network failure, a missing key or an unparseable verdict moves to the next reviewer without costing the worker a level, and an unusable reviewer provider is excluded for the run (separately from the workers, whose keys live in OpenCode). The failed reviewers are listed in the attempt's `review_fallbacks`. When every reviewer fails, the diff goes to the brain as `needs_brain_review`, with the error in `review.error`; the run goes on and the step is never approved.
+7. Question: when the spec leaves open a decision with different consequences, the worker stops before changing files and ends its reply with a `QUESTION:` block. The step becomes `needs_answer` (not reviewed, not escalated, nothing merged), the question is in `run.json`, and its dependents are `skipped`. The brain answers it, or asks the user, and reruns the step with `answers`.
+8. Approved: the branch is merged into the current branch; a conflict is reported as `conflict` and the branch is kept for the brain.
+9. `.conductor/runs/<timestamp>/run.json` summarises the run; `step-<id>/attempt-<n>.json` holds the prompt, the full OpenCode event transcript, the diff and the reviewer's verdict of every attempt.
 
 ## Privacy levels
 
@@ -46,11 +50,11 @@ Other providers are listed with "no balance API known". Amounts are never conver
 
 ## Setup
 
-`conductor setup` is a terminal UI for `conductor.toml`, meant to be reopened whenever a provider changes its catalog or prices. Conductor ships three complete profiles (`low`, `medium`, `high`), so the UI opens on something that already works: you change a model, not the structure. The shipped ladders pick the strongest model per dollar at each difficulty level (SWE-bench Verified and Pro, plus measured cost per task); the reasoning is in decision 008.
+`conductor setup` is a terminal UI for `conductor.toml`, meant to be reopened whenever a provider changes its catalog or prices. Conductor ships three complete profiles (`low`, `medium`, `high`), so the UI opens on something that already works: you change a model, not the structure. The shipped ladders pick the strongest model per dollar at each difficulty level (SWE-bench Verified and Pro, plus measured cost per task); the reasoning is in decision 008. Every paid level and reviewer also falls back on a second provider that keeps the profile's data policy — the DeepSeek API for `low`, Vercel AI Gateway without prompt training for `medium`, Scaleway in Paris for `high` — so an OpenRouter outage does not stop a run (decision 014). Those fallbacks need `DEEPSEEK_API_KEY`, `AI_GATEWAY_API_KEY` or `SCALEWAY_API_KEY`; without the key a fallback is simply skipped.
 
 - profiles per privacy level: the three built-in ones plus any you add, with one marked as default;
-- per profile: **five difficulty levels**, one model each, and the reviewer (one of those models or `brain`);
-- providers: OpenRouter, OpenRouter EU, Vercel AI Gateway, Scaleway, OpenCode Zen, DeepSeek, or one typed by hand, each with its own `base_url` and key variable. A profile may use several of them, so level 1 can run on OpenRouter, level 3 on Scaleway and level 5 on Vercel;
+- per profile: **five difficulty levels**, each a model or an ordered list of a model and its fallbacks (`f`/`F` add a fallback from the catalog or typed, `x` drops the last one), and the reviewer (a model, a list — `v` adds a fallback, `V` clears them — or `brain`; a model reviewer needs an `https` base URL, because Conductor sends it the API key);
+- providers: OpenRouter, OpenRouter EU, Vercel AI Gateway, Scaleway, OpenCode Zen, DeepSeek, or one typed by hand, each with its own `base_url` and key variable. A profile may use several of them, so level 1 can run on OpenRouter, level 3 on Scaleway and level 5 on Vercel. A provider may instead name a `harness` (default `opencode`; `claude-code` runs the Claude subscription through Claude Code) and then has neither `base_url` nor a key; it is not billed and cannot review;
 - models: picked from the providers' own catalogs, filtered by typing, or an id typed by hand;
 - API keys: type one and it is stored, masked, in `~/.local/share/conductor/auth.json` (mode `600`).
 
@@ -65,7 +69,7 @@ OpenRouter picks an upstream provider for each model. To pin one for a single mo
 request_options = { provider = { order = ["relace"], allow_fallbacks = true } }
 ```
 
-These options are merged over the provider's `request_options` (the model wins) and apply to both the worker and the reviewer when that model is chosen. The slug comes from `https://openrouter.ai/api/v1/models/<author>/<model>/endpoints` (`relace`, `deepinfra`, `morph`, ...). Prefer `order` with fallbacks over `only` with `allow_fallbacks = false`: Conductor does not retry a step when a model call fails, so a single pinned upstream turning down a request turns into a failed step. Pinning does not bypass `data_collection = "deny"`: if the pinned upstream does not meet the policy, the request is refused.
+These options are merged over the provider's `request_options` (the model wins) and apply to both the worker and the reviewer when that model is chosen. The slug comes from `https://openrouter.ai/api/v1/models/<author>/<model>/endpoints` (`relace`, `deepinfra`, `morph`, ...). Prefer `order` with fallbacks over `only` with `allow_fallbacks = false`: Conductor stops the worker after the retry limit and never escalates on an error, so a single pinned upstream turning down requests turns into an `unavailable` step. The provider's own `request_options` are also written at provider level in each worktree's `opencode.json`, and OpenCode's small model (titles, summaries) is pinned to the first model of level 1, so requests OpenCode makes on its own keep the profile's data policy. Pinning does not bypass `data_collection = "deny"`: if the pinned upstream does not meet the policy, the request is refused.
 
 Keys are read from the environment first and from that file second. Saving rewrites the file and keeps the previous one as `conductor.toml.bak`; comments written by hand are lost, which is why the generated file carries a warning. The UI needs an interactive terminal; `--config` chooses another file.
 
@@ -99,7 +103,7 @@ Refresh the model lists from the command line with `python scripts/list-models.p
 - **Claude Code**: copy `integrations/claude-code/conductor/` to `~/.claude/skills/conductor/`. The skill declares itself for multi-step changes, so it can load without being named; it stays out of one-line fixes and exploratory work.
 - **OpenCode**: copy `integrations/opencode/conductor.md` to `~/.config/opencode/command/conductor.md`. A command is always explicit: invoke it with `/conductor`.
 
-Both tell the brain to write `plan.json`, call `conductor run`, read `run.json`, and deal with `failed`, `conflict` and `needs_brain_review` steps (set `reviewer = "brain"` in a profile to review diffs yourself instead of paying a reviewer model).
+Both tell the brain to write `plan.json`, call `conductor run`, read `run.json`, and deal with `failed`, `unavailable`, `needs_answer`, `conflict` and `needs_brain_review` steps (set `reviewer = "brain"` in a profile to review diffs yourself instead of paying a reviewer model).
 
 No skill can force the agent to delegate. To make it reliable, add a line to the repository's instructions (for example `CLAUDE.md`):
 
@@ -112,14 +116,19 @@ Multi-step changes (two or more steps, or several files) go through the `conduct
 ```json
 {
   "goal": "one line",
+  "rules": ["Order totals never go negative"],
+  "rules_file": "docs/domain-rules.md",
+  "verify": ["$CONDUCTOR_REPO/.venv/bin/pytest -q"],
+  "verify_timeout": 600,
   "steps": [
     {"id": "core", "title": "...", "spec": "detailed instructions", "files": ["a.py"], "difficulty": 1, "depends_on": []},
-    {"id": "cli", "spec": "...", "difficulty": 2, "depends_on": ["core"]}
+    {"id": "cli", "spec": "...", "difficulty": 2, "depends_on": ["core"],
+     "answers": [{"question": "Exit code on bad input?", "answer": "2, message on stderr"}]}
   ]
 }
 ```
 
-`difficulty` is 1 to 5 and picks the level of the chosen profile. Check it with `conductor validate plan.json`. Parallel steps must not touch the same files, or they will conflict at merge time.
+`difficulty` is 1 to 5 and picks the level of the chosen profile. `rules`, `rules_file`, `verify` and `verify_timeout` are optional: `verify` applies to every step unless a step sets its own (`[]` drops it), and `rules_file` is read from the repository when the run starts. `answers` is optional: the brain adds it when it reruns a step that stopped with a question, and the worker receives it in its prompt. Check it with `conductor validate plan.json`; when a `conductor.toml` is found (or given with `--config`), it also warns about levels and reviewers that rely on a single provider. Parallel steps must not touch the same files, or they will conflict at merge time.
 
 ## Development
 

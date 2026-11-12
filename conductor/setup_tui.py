@@ -32,12 +32,18 @@ KEYPROVIDER = "keyprovider"
 KEY = "key"
 
 BRAIN = "brain"
+LEVEL_MODEL = "level"
+FALLBACK = "fallback"
+REVIEWER_FALLBACK = "reviewer_fallback"
 
 HINTS = {
     PROFILES: "a add  d delete  p default  enter edit  s save  q quit",
     PROVIDER: "enter choose  esc back",
     NAME: "enter confirm  esc back",
-    EDITOR: "a model  t type  d clear  P providers  k key  r reviewer  m/M parallel  esc back",
+    EDITOR: (
+        "a model  t type  d clear  f/F fallback  x drop fallback  esc back\n"
+        "P providers  k key  r reviewer  v/V reviewer fallback  m/M parallel"
+    ),
     PROVIDERS: "a add  d delete  b base_url  e key variable  esc back",
     PROVIDERADD: "enter add  esc back",
     BASED: "enter confirm  esc back",
@@ -83,6 +89,7 @@ class Editor:
     models: list[CatalogModel] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
     target: str = ""
+    choosing: str = LEVEL_MODEL
     saved: bool = False
 
     def handle_key(self, key: str) -> bool:
@@ -162,13 +169,19 @@ class Editor:
             self.slot_cursor = min(self.slot_cursor + 1, DIFFICULTY_LEVELS - 1)
         elif key in ("up", "K"):
             self.slot_cursor = max(self.slot_cursor - 1, 0)
-        elif key == "a":
+        elif key in ("a", "f", "v"):
+            self.choosing = {"a": LEVEL_MODEL, "f": FALLBACK, "v": REVIEWER_FALLBACK}[key]
             self.open_catalog()
-        elif key == "t":
+        elif key in ("t", "F"):
+            self.choosing = LEVEL_MODEL if key == "t" else FALLBACK
             self.screen = MODEL
             self.text = ""
         elif key == "d":
             self.apply(lambda: self.state.clear_tier(self.level))
+        elif key == "x":
+            self.apply(lambda: self.state.remove_fallback(self.level))
+        elif key == "V":
+            self.state.clear_reviewer_fallbacks()
         elif key == "P":
             self.screen = PROVIDERS
             self.provider_cursor = 0
@@ -192,7 +205,17 @@ class Editor:
             index = choices.index(profile.reviewer)
         except ValueError:
             index = -1
-        profile.reviewer = choices[(index + 1) % len(choices)]
+        self.apply(lambda: self.state.set_reviewer(choices[(index + 1) % len(choices)]))
+
+    def choose(self, model: str) -> None:
+        actions = {
+            LEVEL_MODEL: lambda: self.state.set_tier(self.level, model),
+            FALLBACK: lambda: self.state.add_fallback(self.level, model),
+            REVIEWER_FALLBACK: lambda: self.state.add_reviewer_fallback(model),
+        }
+        self.apply(actions[self.choosing])
+        if not self.message:
+            self.screen = EDITOR
 
     def open_catalog(self) -> None:
         self.screen = CATALOG
@@ -206,6 +229,8 @@ class Editor:
         self.notes = []
         broken: list[str] = []
         for name, provider in profile.providers.items():
+            if not provider.base_url:
+                continue
             try:
                 fetched = self.catalog(provider.base_url)
             except CatalogError as error:
@@ -238,9 +263,7 @@ class Editor:
         elif key in ("up", "k"):
             self.model_cursor = max(self.model_cursor - 1, 0)
         elif key == "enter" and self.models:
-            self.apply(lambda: self.state.set_tier(self.level, self.models[self.model_cursor].id))
-            if not self.message:
-                self.screen = EDITOR
+            self.choose(self.models[self.model_cursor].id)
         elif key == "backspace":
             self.query = self.query[:-1]
             self.filter_models()
@@ -253,9 +276,7 @@ class Editor:
         if key == "esc":
             self.screen = EDITOR
         elif key == "enter":
-            self.apply(lambda: self.state.set_tier(self.level, self.text.strip()))
-            if not self.message:
-                self.screen = EDITOR
+            self.choose(self.text.strip())
         else:
             self.typed(key)
         return False
@@ -277,9 +298,13 @@ class Editor:
             if key == "d":
                 self.apply(lambda: self.state.remove_provider(name))
             else:
-                self.target = name
-                self.text = ""
-                self.screen = BASED if key == "b" else KEYENV
+                provider = profile.providers[name]
+                if not provider.base_url:
+                    self.message = f"{name} is managed by {provider.harness}: no base_url or key"
+                else:
+                    self.target = name
+                    self.text = ""
+                    self.screen = BASED if key == "b" else KEYENV
         return False
 
     def provideradd_key(self, key: str) -> bool:
@@ -392,12 +417,17 @@ def profile_rows(state: SetupState) -> list[str]:
     return rows
 
 
+def with_fallbacks(model: str, fallbacks: list[str]) -> str:
+    return f"{model} → {', '.join(fallbacks)}" if fallbacks else model
+
+
 def difficulty_rows(view: Editor) -> list[str]:
     profile = view.state.draft()
     rows = []
-    for level, model in enumerate(profile.tiers, start=1):
+    levels = zip(profile.tiers, profile.fallbacks, strict=True)
+    for level, (model, fallbacks) in enumerate(levels, start=1):
         marker = ">" if level == view.level else " "
-        rows.append(f"{marker} {level}. {model or '(no model yet)'}")
+        rows.append(f"{marker} {level}. {with_fallbacks(model or '(no model yet)', fallbacks)}")
     return rows
 
 
@@ -413,13 +443,14 @@ def render(view: Editor) -> list[str]:
         rows.append(f"new profile name: {view.text}")
     elif view.screen == EDITOR and view.state.selected_profile() is not None:
         profile = view.state.draft()
+        reviewer = profile.reviewer or "(not set)"
         rows.extend(
             [
                 f"profile   {profile.name}"
                 + ("  (default)" if profile.name == view.state.default_privacy else ""),
                 f"providers {', '.join(profile.providers) or '(none)'}",
                 f"parallel  {profile.max_parallel}",
-                f"reviewer  {profile.reviewer or '(not set)'}",
+                "reviewer  " + with_fallbacks(reviewer, profile.reviewer_fallbacks),
                 "",
                 "difficulty, easiest first:",
                 *difficulty_rows(view),
@@ -430,8 +461,11 @@ def render(view: Editor) -> list[str]:
         for index, name in enumerate(names):
             marker = ">" if index == view.provider_cursor else " "
             provider = view.state.draft().providers[name]
-            rows.append(f"{marker} {name:12} {provider.base_url}")
-            rows.append(f"  {'':12} {provider.api_key_env}")
+            if provider.base_url:
+                rows.append(f"{marker} {name:12} {provider.base_url}")
+                rows.append(f"  {'':12} {provider.api_key_env}")
+            else:
+                rows.append(f"{marker} {name:12} (managed by {provider.harness})")
         if not names:
             rows.append("(no providers yet: press a)")
     elif view.screen in (BASED, KEYENV):
@@ -459,7 +493,7 @@ def render(view: Editor) -> list[str]:
         rows.append(f"{view.target}: {'*' * len(view.text)}")
     if view.message:
         rows.extend(["", view.message])
-    rows.append(HINTS[view.screen])
+    rows.extend(HINTS[view.screen].splitlines())
     return rows
 
 

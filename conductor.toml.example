@@ -4,12 +4,27 @@
 # Every [privacy.<level>] is a profile: a difficulty ladder from 1 (trivial) to 5 (hard).
 # A step with difficulty N starts at tiers[N-1]; a rejected step escalates to the next tier.
 #
-#   tiers           exactly five model ids, one per difficulty level, cheapest first
-#   reviewer        model judging each diff, or "brain" to hand diffs back to the planning model
+#   tiers           exactly five levels, cheapest first; each is a model id, or a list of a model
+#                   and its fallbacks, tried in order on model or provider errors:
+#                   ["openrouter/a", "deepseek/a"]
+#   reviewer        model judging each diff, a list of them tried in order on reviewer errors,
+#                   or "brain" to hand diffs back to the planning model
 #   max_parallel    concurrent steps
+#   retry           optional, { transient_attempts = 3 }: how many times OpenCode may retry a
+#                   rate limit, server or network error before Conductor stops the worker and
+#                   the step ends as "unavailable" (it never escalates on an error)
 #
 # A model id is "<provider>/<model>", and the provider is one of the [..providers.<provider>]
-# tables of the same profile. A profile may use several providers, so escalation can cross them:
+# tables of the same profile. A profile may use several providers, so escalation can cross them.
+#
+# A provider may declare "harness" (default "opencode"). A provider managed by its harness has
+# neither base_url nor api_key_env: it is not written to the worktree opencode.json, is skipped
+# by `conductor billing` and cannot be the reviewer. This runs a level on the Claude subscription
+# through Claude Code:
+#
+#   [privacy.medium.providers.claude-code]
+#   harness = "claude-code"
+#   # then, in [privacy.medium], tiers = ["claude-code/sonnet", "openrouter/..."]
 #
 #   [privacy.medium.providers.openrouter]
 #   base_url = "https://openrouter.ai/api/v1"
@@ -30,67 +45,87 @@
 #   [privacy.medium.providers.openrouter.models."deepseek/deepseek-v4.1-flash"]
 #   request_options = { provider = { order = ["relace"], allow_fallbacks = true } }
 #
-# Keep allow_fallbacks on: Conductor does not retry a step when the pinned upstream fails, so
-# pinning with only/allow_fallbacks = false turns an outage into a failed step.
+# Keep allow_fallbacks on: when the pinned upstream fails, Conductor stops the worker after the
+# retry limit, so pinning with only/allow_fallbacks = false turns an outage into an unavailable
+# step.
 #
 # `conductor billing` reads the balance of the account behind each base_url (OpenRouter, Vercel
 # AI Gateway, Scaleway Generative APIs) with the key in api_key_env; see "Billing" in the README.
 #
-# Model ids and prices checked on 2026-11-11, chosen on capability per cost (SWE-bench Verified
+# Model ids and prices checked on 2026-11-12, chosen on capability per cost (SWE-bench Verified
 # and Pro, plus measured cost per task); refresh them with `conductor setup` or
 # `python scripts/list-models.py --privacy <level>`. Every listed model supports tool calling.
+# Each paid level falls back on a second provider, preferably the same model there, so an
+# OpenRouter outage does not stop a run (decision 014). A fallback whose key is missing is
+# skipped for the run.
 #
 # low: free and cheap models, providers may train on your prompts. OpenRouter needs "free model
-# training" enabled for the free tiers; they are rate limited, so parallelism stays low.
+# training" enabled for the free tiers; they are rate limited, so parallelism stays low. Free
+# levels fall back on other free models; paid ones on the DeepSeek API (DEEPSEEK_API_KEY).
 #
-# medium: paid models, providers are asked not to retain or train on prompts.
+# medium: paid models, providers are asked not to retain or train on prompts. Fallbacks run on
+# Vercel AI Gateway with disallowPromptTraining (AI_GATEWAY_API_KEY), at a higher price.
 #
 # high: EU data residency through eu.openrouter.ai (OpenRouter Business plan, +8% on credits).
+# Fallbacks run on Scaleway in Paris (SCALEWAY_API_KEY), which has no GPT-5.6 Luna or Opus.
 
 default_privacy = "medium"
 
 [privacy.low]
 max_parallel = 2
 tiers = [
-  "openrouter/thinkingmachines/inkling-2-small:free",
-  "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
-  "openrouter/z-ai/glm-5.3-flash",
-  "openrouter/deepseek/deepseek-v4-flash-0731",
-  "openrouter/openai/gpt-5.6-luna",
+  ["openrouter/thinkingmachines/inkling-2-small:free", "openrouter/dots-studio/dots-3-note-preview:free"],
+  ["openrouter/nvidia/nemotron-3-ultra-550b-a55b:free", "openrouter/recursive/flint-v1.0:free"],
+  ["openrouter/z-ai/glm-5.3-flash", "deepseek/deepseek-flash"],
+  ["openrouter/deepseek/deepseek-v4-flash-0731", "deepseek/deepseek-flash"],
+  ["openrouter/openai/gpt-5.6-luna", "deepseek/deepseek-v4-pro"],
 ]
-reviewer = "openrouter/z-ai/glm-5.3-flash"
+reviewer = ["openrouter/z-ai/glm-5.3-flash", "deepseek/deepseek-flash"]
 
 [privacy.low.providers.openrouter]
 base_url = "https://openrouter.ai/api/v1"
 api_key_env = "OPENROUTER_API_KEY"
 
+[privacy.low.providers.deepseek]
+base_url = "https://api.deepseek.com/v1"
+api_key_env = "DEEPSEEK_API_KEY"
+
 [privacy.medium]
 max_parallel = 4
 tiers = [
-  "openrouter/deepseek/deepseek-v4-flash-0731",
-  "openrouter/z-ai/glm-5.3-flash",
-  "openrouter/openai/gpt-5.6-luna",
-  "openrouter/z-ai/glm-5.3",
-  "openrouter/deepseek/deepseek-v4-pro-0813",
+  ["openrouter/deepseek/deepseek-v4-flash-0731", "vercel/deepseek/deepseek-v4-flash-0731"],
+  ["openrouter/z-ai/glm-5.3-flash", "vercel/zai/glm-5.3-flash"],
+  ["openrouter/openai/gpt-5.6-luna", "vercel/openai/gpt-5.6-luna"],
+  ["openrouter/z-ai/glm-5.3", "vercel/zai/glm-5.3"],
+  ["openrouter/deepseek/deepseek-v4-pro-0813", "vercel/deepseek/deepseek-v4-pro"],
 ]
-reviewer = "openrouter/openai/gpt-5.6-luna"
+reviewer = ["openrouter/openai/gpt-5.6-luna", "vercel/openai/gpt-5.6-luna"]
 
 [privacy.medium.providers.openrouter]
 base_url = "https://openrouter.ai/api/v1"
 api_key_env = "OPENROUTER_API_KEY"
 request_options = { provider = { data_collection = "deny" } }
 
+[privacy.medium.providers.vercel]
+base_url = "https://ai-gateway.vercel.sh/v1"
+api_key_env = "AI_GATEWAY_API_KEY"
+request_options = { providerOptions = { gateway = { disallowPromptTraining = true } } }
+
 [privacy.high]
 max_parallel = 4
 tiers = [
-  "openrouter/z-ai/glm-5.3-flash",
-  "openrouter/deepseek/deepseek-v4-flash-0731",
-  "openrouter/openai/gpt-5.6-luna",
-  "openrouter/z-ai/glm-5.3",
-  "openrouter/anthropic/claude-opus-5.5",
+  ["openrouter/z-ai/glm-5.3-flash", "scaleway/deepseek-v4-flash-0731"],
+  ["openrouter/deepseek/deepseek-v4-flash-0731", "scaleway/deepseek-v4-flash-0731"],
+  ["openrouter/openai/gpt-5.6-luna", "scaleway/deepseek-v4.1-flash-1017"],
+  ["openrouter/z-ai/glm-5.3", "scaleway/glm-5.3"],
+  ["openrouter/anthropic/claude-opus-5.5", "scaleway/glm-5.3"],
 ]
-reviewer = "openrouter/openai/gpt-5.6-luna"
+reviewer = ["openrouter/openai/gpt-5.6-luna", "scaleway/deepseek-v4.1-flash-1017"]
 
 [privacy.high.providers.openrouter]
 base_url = "https://eu.openrouter.ai/api/v1"
 api_key_env = "OPENROUTER_API_KEY"
+
+[privacy.high.providers.scaleway]
+base_url = "https://api.scaleway.ai/v1"
+api_key_env = "SCALEWAY_API_KEY"

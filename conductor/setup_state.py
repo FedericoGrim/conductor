@@ -4,7 +4,14 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from conductor.config import Config, Profile, Provider, provider_of
+from conductor.config import (
+    DEFAULT_HARNESS,
+    DEFAULT_TRANSIENT_ATTEMPTS,
+    Config,
+    Profile,
+    Provider,
+    provider_of,
+)
 from conductor.defaults import DIFFICULTY_LEVELS, default_config
 
 PROFILE_NAME = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
@@ -22,6 +29,11 @@ class KnownProvider:
     name: str
     base_url: str
     api_key_env: str
+    harness: str = DEFAULT_HARNESS
+
+    @property
+    def is_managed(self) -> bool:
+        return not self.base_url
 
 
 KNOWN_PROVIDERS: tuple[KnownProvider, ...] = (
@@ -35,6 +47,7 @@ KNOWN_PROVIDERS: tuple[KnownProvider, ...] = (
     KnownProvider("Scaleway (EU)", "scaleway", "https://api.scaleway.ai/v1", "SCALEWAY_API_KEY"),
     KnownProvider("OpenCode Zen", "opencode", "https://opencode.ai/zen/v1", "OPENCODE_API_KEY"),
     KnownProvider("DeepSeek", "deepseek", "https://api.deepseek.com/v1", "DEEPSEEK_API_KEY"),
+    KnownProvider("Claude Code (subscription)", "claude-code", "", "", "claude-code"),
 )
 
 
@@ -45,6 +58,7 @@ class ProviderDraft:
     api_key_env: str
     request_options: dict[str, Any] = field(default_factory=dict)
     model_options: dict[str, dict[str, Any]] = field(default_factory=dict)
+    harness: str = DEFAULT_HARNESS
 
     @classmethod
     def from_provider(cls, provider: Provider) -> ProviderDraft:
@@ -54,6 +68,7 @@ class ProviderDraft:
             provider.api_key_env,
             dict(provider.request_options),
             {model: dict(options) for model, options in provider.model_options.items()},
+            provider.harness,
         )
 
     def to_provider(self) -> Provider:
@@ -63,7 +78,12 @@ class ProviderDraft:
             self.api_key_env,
             dict(self.request_options),
             {model: dict(options) for model, options in self.model_options.items()},
+            self.harness,
         )
+
+
+def no_fallbacks(levels: int) -> list[list[str]]:
+    return [[] for _ in range(levels)]
 
 
 @dataclass
@@ -73,11 +93,16 @@ class ProfileDraft:
     tiers: list[str] = field(default_factory=lambda: [EMPTY_SLOT] * DIFFICULTY_LEVELS)
     reviewer: str = ""
     max_parallel: int = 4
+    transient_attempts: int = DEFAULT_TRANSIENT_ATTEMPTS
+    fallbacks: list[list[str]] = field(default_factory=lambda: no_fallbacks(DIFFICULTY_LEVELS))
+    reviewer_fallbacks: list[str] = field(default_factory=list)
 
     @classmethod
     def from_profile(cls, profile: Profile) -> ProfileDraft:
-        tiers = list(profile.tiers)[:DIFFICULTY_LEVELS]
-        tiers += [EMPTY_SLOT] * (DIFFICULTY_LEVELS - len(tiers))
+        levels = list(profile.tiers)[:DIFFICULTY_LEVELS]
+        missing = DIFFICULTY_LEVELS - len(levels)
+        tiers = [level[0] for level in levels] + [EMPTY_SLOT] * missing
+        fallbacks = [list(level[1:]) for level in levels] + no_fallbacks(missing)
         return cls(
             name=profile.name,
             providers={
@@ -85,17 +110,25 @@ class ProfileDraft:
                 for name, provider in profile.providers.items()
             },
             tiers=tiers,
-            reviewer=profile.reviewer,
+            reviewer=profile.reviewers[0],
             max_parallel=profile.max_parallel,
+            transient_attempts=profile.transient_attempts,
+            fallbacks=fallbacks,
+            reviewer_fallbacks=list(profile.reviewers[1:]),
         )
 
     def to_profile(self) -> Profile:
         return Profile(
             name=self.name,
             providers={name: provider.to_provider() for name, provider in self.providers.items()},
-            tiers=tuple(tier for tier in self.tiers if tier != EMPTY_SLOT),
-            reviewer=self.reviewer,
+            tiers=tuple(
+                (tier, *fallbacks)
+                for tier, fallbacks in zip(self.tiers, self.fallbacks, strict=True)
+                if tier != EMPTY_SLOT
+            ),
+            reviewers=(self.reviewer, *self.reviewer_fallbacks),
             max_parallel=self.max_parallel,
+            transient_attempts=self.transient_attempts,
         )
 
     def filled(self) -> list[str]:
@@ -146,7 +179,10 @@ class SetupState:
             raise SetupError(f"profile '{name}' already exists")
         profile = ProfileDraft(name)
         profile.providers[provider_name or known.name] = ProviderDraft(
-            provider_name or known.name, known.base_url, known.api_key_env
+            provider_name or known.name,
+            known.base_url,
+            known.api_key_env,
+            harness=known.harness,
         )
         self.profiles.append(profile)
         self.selected = len(self.profiles) - 1
@@ -167,7 +203,9 @@ class SetupState:
             raise SetupError("provider names must be lower-case letters, digits or '-'")
         if provider_name in profile.providers:
             raise SetupError(f"provider '{provider_name}' already exists in {profile.name}")
-        provider = ProviderDraft(provider_name, known.base_url, known.api_key_env)
+        provider = ProviderDraft(
+            provider_name, known.base_url, known.api_key_env, harness=known.harness
+        )
         profile.providers[provider_name] = provider
         return provider
 
@@ -181,6 +219,12 @@ class SetupState:
         ]
         if profile.reviewer != "brain" and provider_of(profile.reviewer) == name:
             profile.reviewer = ""
+        profile.fallbacks = [
+            [model for model in level if provider_of(model) != name] for level in profile.fallbacks
+        ]
+        profile.reviewer_fallbacks = [
+            model for model in profile.reviewer_fallbacks if provider_of(model) != name
+        ]
         return profile
 
     def provider(self, name: str) -> ProviderDraft:
@@ -205,12 +249,8 @@ class SetupState:
 
     def set_tier(self, level: int, model: str) -> ProfileDraft:
         profile = self.draft()
-        if not 1 <= level <= DIFFICULTY_LEVELS:
-            raise SetupError(f"difficulty must be between 1 and {DIFFICULTY_LEVELS}")
-        if not model.strip():
-            raise SetupError("model must not be empty")
-        if provider_of(model) not in profile.providers:
-            raise SetupError(f"add provider '{provider_of(model) or '?'}' first")
+        self.check_level(level)
+        self.check_model(profile, model)
         if model in profile.tiers:
             raise SetupError(f"'{model}' is already a tier")
         profile.tiers[level - 1] = model
@@ -218,10 +258,55 @@ class SetupState:
 
     def clear_tier(self, level: int) -> ProfileDraft:
         profile = self.draft()
-        if not 1 <= level <= DIFFICULTY_LEVELS:
-            raise SetupError(f"difficulty must be between 1 and {DIFFICULTY_LEVELS}")
+        self.check_level(level)
         profile.tiers[level - 1] = EMPTY_SLOT
         return profile
+
+    def add_fallback(self, level: int, model: str) -> ProfileDraft:
+        profile = self.draft()
+        self.check_level(level)
+        self.check_model(profile, model)
+        if profile.tiers[level - 1] == EMPTY_SLOT:
+            raise SetupError(f"difficulty {level} has no model: set it before its fallbacks")
+        if model in (profile.tiers[level - 1], *profile.fallbacks[level - 1]):
+            raise SetupError(f"'{model}' is already in difficulty {level}")
+        profile.fallbacks[level - 1].append(model)
+        return profile
+
+    def remove_fallback(self, level: int) -> ProfileDraft:
+        profile = self.draft()
+        self.check_level(level)
+        if not profile.fallbacks[level - 1]:
+            raise SetupError(f"difficulty {level} has no fallback")
+        profile.fallbacks[level - 1].pop()
+        return profile
+
+    def add_reviewer_fallback(self, model: str) -> ProfileDraft:
+        profile = self.draft()
+        if profile.reviewer in (EMPTY_SLOT, "brain"):
+            raise SetupError("set a model reviewer first: the brain has no fallbacks")
+        self.check_model(profile, model)
+        if model in (profile.reviewer, *profile.reviewer_fallbacks):
+            raise SetupError(f"'{model}' is already a reviewer")
+        profile.reviewer_fallbacks.append(model)
+        return profile
+
+    def clear_reviewer_fallbacks(self) -> ProfileDraft:
+        profile = self.draft()
+        profile.reviewer_fallbacks = []
+        return profile
+
+    @staticmethod
+    def check_level(level: int) -> None:
+        if not 1 <= level <= DIFFICULTY_LEVELS:
+            raise SetupError(f"difficulty must be between 1 and {DIFFICULTY_LEVELS}")
+
+    @staticmethod
+    def check_model(profile: ProfileDraft, model: str) -> None:
+        if not model.strip():
+            raise SetupError("model must not be empty")
+        if provider_of(model) not in profile.providers:
+            raise SetupError(f"add provider '{provider_of(model) or '?'}' first")
 
     def set_reviewer(self, model: str) -> ProfileDraft:
         profile = self.draft()
@@ -230,6 +315,8 @@ class SetupState:
         if model != "brain" and provider_of(model) not in profile.providers:
             raise SetupError(f"reviewer '{model}' has no provider in {profile.name}")
         profile.reviewer = model.strip()
+        if profile.reviewer == "brain":
+            profile.reviewer_fallbacks = []
         return profile
 
     def set_default_privacy(self, name: str) -> None:
@@ -254,6 +341,14 @@ class SetupState:
             ):
                 problems.append(
                     f"profiles.{profile.name}: reviewer '{profile.reviewer}' has no provider"
+                )
+            elif (
+                profile.reviewer != "brain"
+                and not profile.providers[provider_of(profile.reviewer)].base_url
+            ):
+                problems.append(
+                    f"profiles.{profile.name}: reviewer '{profile.reviewer}' has no endpoint; "
+                    "use 'brain' or a model of another provider"
                 )
         if not any(profile.name == self.default_privacy for profile in self.profiles):
             problems.append(f"default_privacy references unknown profile '{self.default_privacy}'")

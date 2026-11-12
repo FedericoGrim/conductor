@@ -132,6 +132,8 @@ def balances(profiles: Iterable[Profile], get: Get | None = None) -> list[Balanc
     report: list[Balance] = []
     for profile in profiles:
         for provider in profile.providers.values():
+            if not provider.has_endpoint:
+                continue
             url = urllib.parse.urlsplit(provider.base_url)
             host = url.hostname or provider.base_url
             known = balance_reader(host)
