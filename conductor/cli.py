@@ -16,7 +16,7 @@ from conductor.merge import merge_branch
 from conductor.plan import Plan, PlanError, Step
 from conductor.privacy import opencode_config
 from conductor.scheduler import APPROVED, CONFLICT, StepResult, run_plan
-from conductor.verify import CheckResult
+from conductor.verify import CheckResult, run_checks
 from conductor.worker import (
     AttemptOutput,
     create_worktree,
@@ -27,6 +27,7 @@ from conductor.worker import (
     write_opencode_config,
 )
 
+RULES_FILE_LIMIT = 20_000
 DEFAULT_CONFIG_PATHS = (
     Path("conductor.toml"),
     Path.home() / ".config" / "conductor" / "conductor.toml",
@@ -55,8 +56,27 @@ def validate(args: argparse.Namespace) -> int:
     return 0
 
 
+def domain_rules(repo: Path, plan: Plan) -> tuple[str, ...]:
+    if plan.rules_file is None:
+        return plan.rules
+    path = repo / plan.rules_file
+    if not path.is_file():
+        raise PlanError(f"rules_file '{plan.rules_file}' does not exist in {repo}")
+    text = path.read_text(errors="replace").strip()
+    if len(text) > RULES_FILE_LIMIT:
+        raise PlanError(
+            f"rules_file '{plan.rules_file}' is longer than {RULES_FILE_LIMIT} characters"
+        )
+    return (*plan.rules, text) if text else plan.rules
+
+
 async def execute_plan(
-    repo: Path, plan: Plan, profile: Profile, log: RunLog, extra_args: list[str]
+    repo: Path,
+    plan: Plan,
+    profile: Profile,
+    log: RunLog,
+    extra_args: list[str],
+    rules: tuple[str, ...] = (),
 ) -> dict[str, StepResult]:
     base = git(repo, "rev-parse", "--abbrev-ref", "HEAD").strip()
     run_name = log.directory.name
@@ -80,11 +100,15 @@ async def execute_plan(
         )
 
     def judge(model: str, spec: str, diff: str, checks: list[CheckResult]) -> reviewer.Verdict:
-        return reviewer.review(profile, model, spec, diff, checks=checks)
+        return reviewer.review(profile, model, spec, diff, rules=rules, checks=checks)
+
+    async def check(step: Step, number: int) -> list[CheckResult]:
+        path = worktrees / f"{step.id}-{number}"
+        return await run_checks(plan.verify_for(step), path, repo, plan.verify_timeout)
 
     async def execute(step: Step) -> StepResult:
         result = await run_step(
-            step, profile, attempt, judge, log.attempt, goal=plan.goal, state=state
+            step, profile, attempt, judge, log.attempt, goal=plan.goal, state=state, check=check
         )
         print(f"[{step.id}] {result.status}: {result.detail}", flush=True)
         numbers = [a["attempt"] for a in result.attempts]
@@ -112,13 +136,14 @@ def run(args: argparse.Namespace) -> int:
     config = Config.load(find_config(args.config))
     profile = config.profile(args.privacy)
     plan = Plan.load(args.plan)
+    rules = domain_rules(repo, plan)
     exclude_from_git(repo, ".conductor/")
     if git(repo, "status", "--porcelain").strip():
         print("error: repository has uncommitted changes; commit or stash them first")
         return 2
     log = RunLog.create(repo, plan, profile.name)
     print(f"run {log.directory.name}: {len(plan.steps)} steps, privacy {profile.name}")
-    results = asyncio.run(execute_plan(repo, plan, profile, log, args.opencode_arg))
+    results = asyncio.run(execute_plan(repo, plan, profile, log, args.opencode_arg, rules))
     log.finish(results)
     try:
         billing.record_run(
