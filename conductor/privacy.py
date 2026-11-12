@@ -6,6 +6,7 @@ from typing import Any
 from conductor.config import Profile, Provider
 
 VERCEL_GATEWAY_HOST = "ai-gateway.vercel.sh"
+OPENCODE = "opencode"
 
 
 def api_model_id(provider: str, model: str) -> str:
@@ -23,17 +24,29 @@ def opencode_options(provider: Provider, options: dict[str, Any]) -> dict[str, A
 
 
 def opencode_config(profile: Profile) -> dict[str, Any]:
-    models: dict[str, dict[str, Any]] = {name: {} for name in profile.providers}
+    written = {
+        name: provider
+        for name, provider in profile.providers.items()
+        if provider.harness == OPENCODE and provider.has_endpoint
+    }
+    models: dict[str, dict[str, Any]] = {name: {} for name in written}
     for model in (model for tier in profile.tiers for model in tier):
         provider = profile.provider_for(model)
-        models[provider.name][api_model_id(provider.name, model)] = {
-            "options": opencode_options(provider, profile.options_for(model))
-        }
-    return {
+        if provider.name in written:
+            models[provider.name][api_model_id(provider.name, model)] = {
+                "options": opencode_options(provider, profile.options_for(model))
+            }
+    small_model = next(
+        (
+            model
+            for tier in profile.tiers
+            for model in tier
+            if profile.provider_for(model).harness == OPENCODE
+        ),
+        None,
+    )
+    config: dict[str, Any] = {
         "$schema": "https://opencode.ai/config.json",
-        # OpenCode sends title and summary requests to a model of its own choosing: pin it to
-        # the profile, and put the provider options at provider level so they reach it anyway.
-        "small_model": profile.tiers[0][0],
         "provider": {
             name: {
                 "options": {
@@ -42,6 +55,11 @@ def opencode_config(profile: Profile) -> dict[str, Any]:
                 },
                 "models": models[name],
             }
-            for name, provider in profile.providers.items()
+            for name, provider in written.items()
         },
     }
+    # OpenCode sends title and summary requests to a model of its own choosing: pin it to
+    # the profile, and put the provider options at provider level so they reach it anyway.
+    if small_model is not None:
+        config["small_model"] = small_model
+    return config
