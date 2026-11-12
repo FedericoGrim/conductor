@@ -245,3 +245,17 @@ def test_dump_round_trips_the_retry_table(tmp_path: Path) -> None:
     written.write_text(config.dump())
     assert Config.load(written) == config
     assert "retry = { transient_attempts = 1 }" in written.read_text()
+
+
+def test_rejects_a_reviewer_whose_provider_is_not_https() -> None:
+    text = MULTI_PROVIDER.replace("https://openrouter.ai/api/v1", "http://openrouter.ai/api/v1")
+    with pytest.raises(ConfigError, match="reviewer .* https"):
+        Profile.from_dict("medium", tomllib.loads(text)["privacy"]["medium"])
+
+
+def test_a_brain_reviewer_does_not_need_an_https_provider() -> None:
+    text = MULTI_PROVIDER.replace(
+        "https://openrouter.ai/api/v1", "http://localhost:11434/v1"
+    ).replace('reviewer = "openrouter/a"', 'reviewer = "brain"')
+    profile = Profile.from_dict("medium", tomllib.loads(text)["privacy"]["medium"])
+    assert profile.reviewer == "brain"
