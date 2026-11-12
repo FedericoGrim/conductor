@@ -61,6 +61,7 @@ Rule: no module imports OpenCode or provider specifics except `worker.py`, `revi
 - Plan steps run with `opencode run --auto --archived`: workers may do anything inside their worktree, nothing outside.
 - Worktrees are created and merged by Conductor (`git worktree add`), never with OpenCode's own `--worktree` flag.
 - Routing options are written to a per-worktree `opencode.json`, excluded from the diff via `.git/info/exclude`.
+- That `opencode.json` sets `small_model` to the first model of level 1 and repeats each provider's `request_options` at provider level: OpenCode sends title and summary requests to a model of its own choosing, and the profile's data policy must reach it too.
 
 ## Security & constraints
 - Settings export never includes keys, only provider names and the variables that hold them.
