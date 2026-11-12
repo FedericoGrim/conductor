@@ -228,12 +228,8 @@ class SetupState:
 
     def set_tier(self, level: int, model: str) -> ProfileDraft:
         profile = self.draft()
-        if not 1 <= level <= DIFFICULTY_LEVELS:
-            raise SetupError(f"difficulty must be between 1 and {DIFFICULTY_LEVELS}")
-        if not model.strip():
-            raise SetupError("model must not be empty")
-        if provider_of(model) not in profile.providers:
-            raise SetupError(f"add provider '{provider_of(model) or '?'}' first")
+        self.check_level(level)
+        self.check_model(profile, model)
         if model in profile.tiers:
             raise SetupError(f"'{model}' is already a tier")
         profile.tiers[level - 1] = model
@@ -241,10 +237,55 @@ class SetupState:
 
     def clear_tier(self, level: int) -> ProfileDraft:
         profile = self.draft()
-        if not 1 <= level <= DIFFICULTY_LEVELS:
-            raise SetupError(f"difficulty must be between 1 and {DIFFICULTY_LEVELS}")
+        self.check_level(level)
         profile.tiers[level - 1] = EMPTY_SLOT
         return profile
+
+    def add_fallback(self, level: int, model: str) -> ProfileDraft:
+        profile = self.draft()
+        self.check_level(level)
+        self.check_model(profile, model)
+        if profile.tiers[level - 1] == EMPTY_SLOT:
+            raise SetupError(f"difficulty {level} has no model: set it before its fallbacks")
+        if model in (profile.tiers[level - 1], *profile.fallbacks[level - 1]):
+            raise SetupError(f"'{model}' is already in difficulty {level}")
+        profile.fallbacks[level - 1].append(model)
+        return profile
+
+    def remove_fallback(self, level: int) -> ProfileDraft:
+        profile = self.draft()
+        self.check_level(level)
+        if not profile.fallbacks[level - 1]:
+            raise SetupError(f"difficulty {level} has no fallback")
+        profile.fallbacks[level - 1].pop()
+        return profile
+
+    def add_reviewer_fallback(self, model: str) -> ProfileDraft:
+        profile = self.draft()
+        if profile.reviewer in (EMPTY_SLOT, "brain"):
+            raise SetupError("set a model reviewer first: the brain has no fallbacks")
+        self.check_model(profile, model)
+        if model in (profile.reviewer, *profile.reviewer_fallbacks):
+            raise SetupError(f"'{model}' is already a reviewer")
+        profile.reviewer_fallbacks.append(model)
+        return profile
+
+    def clear_reviewer_fallbacks(self) -> ProfileDraft:
+        profile = self.draft()
+        profile.reviewer_fallbacks = []
+        return profile
+
+    @staticmethod
+    def check_level(level: int) -> None:
+        if not 1 <= level <= DIFFICULTY_LEVELS:
+            raise SetupError(f"difficulty must be between 1 and {DIFFICULTY_LEVELS}")
+
+    @staticmethod
+    def check_model(profile: ProfileDraft, model: str) -> None:
+        if not model.strip():
+            raise SetupError("model must not be empty")
+        if provider_of(model) not in profile.providers:
+            raise SetupError(f"add provider '{provider_of(model) or '?'}' first")
 
     def set_reviewer(self, model: str) -> ProfileDraft:
         profile = self.draft()

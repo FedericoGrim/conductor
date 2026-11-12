@@ -262,3 +262,44 @@ def test_a_brain_reviewer_drops_the_reviewer_fallbacks() -> None:
     model = SetupState.from_config(fallback_config())
     model.set_reviewer("brain")
     assert model.to_config().profile("medium").reviewers == ("brain",)
+
+
+def test_a_level_takes_fallbacks_in_order_and_drops_the_last_one() -> None:
+    model = state()
+    model.add_provider(scaleway())
+    model.add_fallback(2, "scaleway/glm-5.3")
+    model.add_fallback(2, "openrouter/m1")
+    assert model.draft().fallbacks[1] == ["scaleway/glm-5.3", "openrouter/m1"]
+    model.remove_fallback(2)
+    assert model.to_config().profile("low").tiers[1] == ("openrouter/m2", "scaleway/glm-5.3")
+
+
+def test_a_fallback_needs_a_level_model_a_known_provider_and_no_duplicate() -> None:
+    model = state()
+    with pytest.raises(SetupError, match="add provider 'scaleway' first"):
+        model.add_fallback(1, "scaleway/glm-5.3")
+    with pytest.raises(SetupError, match="already in difficulty 1"):
+        model.add_fallback(1, "openrouter/m1")
+    model.add_fallback(1, "openrouter/m2")
+    with pytest.raises(SetupError, match="already in difficulty 1"):
+        model.add_fallback(1, "openrouter/m2")
+    model.clear_tier(3)
+    with pytest.raises(SetupError, match="difficulty 3 has no model"):
+        model.add_fallback(3, "openrouter/x")
+    with pytest.raises(SetupError, match="between 1 and 5"):
+        model.add_fallback(6, "openrouter/x")
+    with pytest.raises(SetupError, match="no fallback"):
+        model.remove_fallback(4)
+
+
+def test_the_reviewer_takes_fallbacks_unless_it_is_the_brain() -> None:
+    model = state()
+    model.add_reviewer_fallback("openrouter/m4")
+    assert model.to_config().profile("low").reviewers == ("openrouter/m5", "openrouter/m4")
+    with pytest.raises(SetupError, match="already a reviewer"):
+        model.add_reviewer_fallback("openrouter/m5")
+    model.clear_reviewer_fallbacks()
+    assert model.to_config().profile("low").reviewers == ("openrouter/m5",)
+    model.set_reviewer("brain")
+    with pytest.raises(SetupError, match="brain"):
+        model.add_reviewer_fallback("openrouter/m4")
