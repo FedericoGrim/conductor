@@ -15,6 +15,31 @@ class PlanError(ValueError):
 
 
 @dataclass(frozen=True)
+class Answer:
+    question: str
+    answer: str
+
+
+def parse_answers(step_id: str, data: object) -> tuple[Answer, ...]:
+    problem = PlanError(
+        f"step '{step_id}': answers must be a list of {{question, answer}} non-empty strings"
+    )
+    if not isinstance(data, list):
+        raise problem
+    answers = []
+    for entry in data:
+        if not isinstance(entry, dict):
+            raise problem
+        question, answer = entry.get("question"), entry.get("answer")
+        if not (isinstance(question, str) and question.strip()):
+            raise problem
+        if not (isinstance(answer, str) and answer.strip()):
+            raise problem
+        answers.append(Answer(question, answer))
+    return tuple(answers)
+
+
+@dataclass(frozen=True)
 class Step:
     id: str
     title: str
@@ -22,6 +47,7 @@ class Step:
     files: tuple[str, ...]
     difficulty: int
     depends_on: tuple[str, ...]
+    answers: tuple[Answer, ...] = ()
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Step:
@@ -32,6 +58,7 @@ class Step:
             files=tuple(str(f) for f in data.get("files", [])),
             difficulty=int(data.get("difficulty", 1)),
             depends_on=tuple(str(d) for d in data.get("depends_on", [])),
+            answers=parse_answers(str(data["id"]), data.get("answers", [])),
         )
         if not step.spec.strip():
             raise PlanError(f"step '{step.id}' has an empty spec")

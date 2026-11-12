@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -12,7 +13,7 @@ from conductor.errors import (
     ModelError,
 )
 from conductor.escalation import RunState, build_prompt, run_step
-from conductor.plan import Step
+from conductor.plan import Answer, Step
 from conductor.reviewer import Verdict
 from conductor.worker import AttemptOutput
 from tests.factories import make_profile
@@ -357,3 +358,65 @@ def test_no_usable_reviewer_hands_the_diff_to_the_brain_without_a_call() -> None
     assert reviewed == []
     assert "excluded" in result.detail
     assert recorded[0]["review"] is None
+
+
+QUESTION = "QUESTION: Should names be case-sensitive?\nA) yes: simpler\nB) no: fold case"
+
+
+def asking(question: str = QUESTION) -> AttemptOutput:
+    answer = output(diff="+partial")
+    answer.final_text = f"I read parser.py and the tests.\n\n{question}"
+    return answer
+
+
+def test_a_worker_question_stops_the_step_without_review_or_escalation() -> None:
+    reviewed: list[str] = []
+    result, calls, recorded = run([], outputs=[asking()], reviewed=reviewed)
+    assert result.status == "needs_answer"
+    assert result.detail == QUESTION
+    assert len(calls) == 1
+    assert reviewed == []
+    assert recorded[0]["question"] == QUESTION
+    assert recorded[0]["review"] is None
+
+
+def test_a_question_wins_over_the_brain_review() -> None:
+    profile = make_profile(name="low", api_key_env="K", tiers=("openrouter/t0",), reviewer="brain")
+    result, _, _ = run([], outputs=[asking()], profile=profile)
+    assert result.status == "needs_answer"
+
+
+def test_a_question_that_is_not_the_final_text_does_not_stop_the_step() -> None:
+    finished = output()
+    finished.final_text = "Done. Earlier I wondered (QUESTION: inline) but the spec settles it."
+    result, _, _ = run([Verdict(True, "ok", "{}")], outputs=[finished])
+    assert result.status == "approved"
+
+
+def test_a_step_with_answers_puts_them_in_the_prompt_and_reaches_the_reviewer() -> None:
+    answered = replace(STEP, answers=(Answer("Should names be case-sensitive?", "No, fold case."),))
+    reviewed: list[str] = []
+    calls: list[str] = []
+
+    async def attempt(step: Step, number: int, model: str, prompt: str) -> AttemptOutput:
+        calls.append(prompt)
+        return output()
+
+    def judge(model: str, spec: str, diff: str) -> Verdict:
+        reviewed.append(model)
+        return Verdict(True, "ok", "{}")
+
+    result = asyncio.run(
+        run_step(answered, PROFILE, attempt=attempt, judge=judge, record=lambda s, d: None)
+    )
+    assert result.status == "approved"
+    assert reviewed == ["openrouter/r"]
+    assert "Should names be case-sensitive?" in calls[0]
+    assert "No, fold case." in calls[0]
+
+
+def test_the_prompt_asks_for_a_question_instead_of_a_guess() -> None:
+    prompt = build_prompt("ship v1", STEP)
+    assert "Do not ask questions" not in prompt
+    assert "QUESTION:" in prompt
+    assert "Answers to your earlier questions" not in prompt

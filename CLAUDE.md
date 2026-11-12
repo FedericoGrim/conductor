@@ -10,14 +10,14 @@ CLI that executes a `plan.json` written by a "brain" model (Claude in Claude Cod
 
 ## Architecture
 Simple layering, no tactical DDD: a small tool with little business logic.
-- `conductor/plan.py` — `Plan`, `Step` models and validation (unique ids, known `depends_on`, no cycles, difficulty between 1 and `DIFFICULTY_LEVELS`).
+- `conductor/plan.py` — `Plan`, `Step` models and validation (unique ids, known `depends_on`, no cycles, difficulty between 1 and `DIFFICULTY_LEVELS`, optional `answers` to earlier questions).
 - `conductor/config.py` — `conductor.toml`: privacy profiles, each with five difficulty levels (a model or an ordered list with fallbacks, cheapest first), one or more providers, reviewers (a model, a list, or `brain`), `max_parallel`, `retry`. A model id is `<provider>/<model>`.
 - `conductor/defaults.py` — the built-in `low`/`medium`/`high` profiles (five levels each, with fallbacks on a second provider: DeepSeek, Vercel, Scaleway) and `DIFFICULTY_LEVELS`.
 - `conductor/privacy.py` — a profile → the `opencode.json` written in each worktree (one entry per provider) and the reviewer request options.
 - `conductor/scheduler.py` — asyncio DAG scheduler bounded by `max_parallel`.
 - `conductor/worker.py` — worktree creation, `opencode run --format json` with streamed events (stopped after the retry limit), OpenCode error classification, diff capture.
 - `conductor/reviewer.py` — direct OpenAI-compatible chat call, returns `{ok, reason}`.
-- `conductor/escalation.py` — rejected step → next tier with the reason in the prompt; beyond last tier → `failed`. Classified model errors → next model of the level (an unusable provider is excluded for the run), level exhausted → `unavailable`, unclassified → `failed`; reviewer errors → next reviewer, all failed → `needs_brain_review`; never escalates on an error.
+- `conductor/escalation.py` — rejected step → next tier with the reason in the prompt; beyond last tier → `failed`. A worker question → `needs_answer` (no review, no escalation). Classified model errors → next model of the level (an unusable provider is excluded for the run), level exhausted → `unavailable`, unclassified → `failed`; reviewer errors → next reviewer, all failed → `needs_brain_review`; never escalates on an error.
 - `conductor/errors.py` — the error classes (transient, provider unusable, model unsuitable, unclassified) shared by worker and reviewer.
 - `conductor/log.py` — `.conductor/runs/<ts>/run.json` and `step-<id>/attempt-N.json`, with cost totals per step, model and run.
 - `conductor/merge.py` — merge approved worktree branches; conflicts are reported, not resolved.
@@ -47,7 +47,8 @@ Rule: no module imports OpenCode or provider specifics except `worker.py`, `revi
 
 ## Domain glossary
 - **Brain** — the planning model; writes `plan.json`, reviews failures, resolves conflicts.
-- **Step** — one unit of the plan: id, spec, files, difficulty, depends_on.
+- **Step** — one unit of the plan: id, spec, files, difficulty, depends_on, answers.
+- **Question** — a worker's `QUESTION:` block at the end of its reply, for a decision the spec leaves open; the step becomes `needs_answer` and the brain answers it (or asks the user) through `answers`.
 - **Difficulty level** — 1 (trivial) to 5 (hard); a step picks one and escalation goes up. Also called a tier in `tiers`.
 - **Profile** — one privacy level: five difficulty levels, the reviewers, and one or more providers.
 - **Fallback** — another model of the same level (or another reviewer), tried after a model or provider error; never a step up in difficulty.

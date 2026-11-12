@@ -83,6 +83,7 @@ class RunLog:
                 "attempts": count,
                 "models": [a.get("model") for a in result.attempts],
                 "last_attempt": f"step-{step_id}/attempt-{count}.json" if count else None,
+                "question": result.attempts[-1].get("question") if count else None,
                 "cost": sum(step_totals.values()),
             }
         self.run["cost"] = sum(run_totals.values())

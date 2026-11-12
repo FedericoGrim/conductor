@@ -1,6 +1,6 @@
 import pytest
 
-from conductor.plan import Plan, PlanError, Step
+from conductor.plan import Answer, Plan, PlanError, Step
 
 
 def step(id: str, depends_on: list[str] | None = None, difficulty: int = 1) -> dict[str, object]:
@@ -53,3 +53,31 @@ def test_ready_steps_follow_dependencies() -> None:
     plan = Plan.from_dict({"goal": "g", "steps": [step("a"), step("b", ["a"]), step("c")]})
     assert [s.id for s in plan.ready(done=set())] == ["a", "c"]
     assert [s.id for s in plan.ready(done={"a"})] == ["b", "c"]
+
+
+def test_a_step_carries_the_answers_to_earlier_questions() -> None:
+    answered = step("a")
+    answered["answers"] = [{"question": "Case-sensitive names?", "answer": "No, fold case."}]
+    plan = Plan.from_dict({"goal": "g", "steps": [answered]})
+    assert plan.steps[0].answers == (Answer("Case-sensitive names?", "No, fold case."),)
+
+
+def test_answers_default_to_none() -> None:
+    assert Plan.from_dict({"goal": "g", "steps": [step("a")]}).steps[0].answers == ()
+
+
+@pytest.mark.parametrize(
+    "answers",
+    [
+        "not a list",
+        ["not an object"],
+        [{"question": "q"}],
+        [{"question": " ", "answer": "a"}],
+        [{"question": "q", "answer": 3}],
+    ],
+)
+def test_rejects_malformed_answers(answers: object) -> None:
+    bad = step("a")
+    bad["answers"] = answers
+    with pytest.raises(PlanError, match="step 'a': answers"):
+        Plan.from_dict({"goal": "g", "steps": [bad]})

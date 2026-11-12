@@ -15,7 +15,10 @@
       "spec": "Create greet/cli.py exposing `main(argv)` using argparse with one positional `name` argument; it prints greet(name) and returns 0, or prints the ValueError message to stderr and returns 2. Add tests in tests/test_cli.py using capsys.",
       "files": ["greet/cli.py", "tests/test_cli.py"],
       "difficulty": 2,
-      "depends_on": ["greet-core"]
+      "depends_on": ["greet-core"],
+      "answers": [
+        {"question": "Should a name with inner spaces be one argument or several?", "answer": "One argument: the user quotes it, e.g. greet \"Ada Lovelace\"."}
+      ]
     },
     {
       "id": "readme",

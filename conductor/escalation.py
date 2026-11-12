@@ -8,7 +8,14 @@ from conductor.config import Profile, provider_of
 from conductor.errors import PROVIDER_UNUSABLE, UNCLASSIFIED, ModelError
 from conductor.plan import Step
 from conductor.reviewer import Verdict
-from conductor.scheduler import APPROVED, FAILED, NEEDS_BRAIN_REVIEW, UNAVAILABLE, StepResult
+from conductor.scheduler import (
+    APPROVED,
+    FAILED,
+    NEEDS_ANSWER,
+    NEEDS_BRAIN_REVIEW,
+    UNAVAILABLE,
+    StepResult,
+)
 from conductor.worker import AttemptOutput
 
 Attempt = Callable[[Step, int, str, str], Awaitable[AttemptOutput]]
@@ -19,15 +26,40 @@ NO_CHANGES = Verdict(False, "no changes produced", "")
 NO_REVIEWER = "every reviewer provider is excluded for this run"
 
 
+QUESTION_MARKER = "QUESTION:"
+QUESTION_LIMIT = 4000
+WORKING_RULES = (
+    "# How to work\n"
+    "Work only inside the current repository. Do not commit.\n"
+    "Make mechanical choices yourself (names, formatting, local structure), and any choice "
+    "that the spec, the existing code or the answers below already settle.\n"
+    "If the task needs a decision that none of them settles and whose options have different "
+    "consequences (behaviour, interfaces, data, security), do not guess. Stop before changing "
+    "files and end your reply with a block whose first line is "
+    f"`{QUESTION_MARKER} <the question>`, followed by the options with their consequences and "
+    "what you have already established."
+)
+
+
+def question_in(final_text: str) -> str | None:
+    lines = final_text.strip().splitlines()
+    starts = [i for i, line in enumerate(lines) if line.lstrip("*#> ").startswith(QUESTION_MARKER)]
+    if not starts:
+        return None
+    return "\n".join(lines[starts[-1] :]).strip()[:QUESTION_LIMIT]
+
+
 def build_prompt(goal: str, step: Step, feedback: str | None = None) -> str:
     files = "\n".join(f"- {f}" for f in step.files) or "- (not specified)"
     parts = [
         f"# Overall goal\n{goal}",
         f"# Your task: {step.title}\n{step.spec}",
         f"# Files expected to change\n{files}",
-        "Work only inside the current repository. Do not ask questions; make reasonable "
-        "choices and finish the task. Do not commit.",
+        WORKING_RULES,
     ]
+    if step.answers:
+        answered = "\n\n".join(f"Q: {a.question}\nA: {a.answer}" for a in step.answers)
+        parts.append(f"# Answers to your earlier questions\n{answered}")
     if feedback:
         parts.append(
             "# Review feedback on a previous attempt\n"
@@ -71,6 +103,7 @@ def attempt_entry(
         "stderr": output.stderr,
         "diff": output.diff,
         "error": None,
+        "question": None,
         "review": None,
         "review_fallbacks": [],
         "cost": {"worker": output.cost, "reviewer": None},
@@ -125,7 +158,7 @@ class StepRun:
             entry = attempt_entry(number, tier, model, prompt, output)
             self.result.attempts.append(entry)
             if output.exit_code == 0:
-                return self.review(model, output, entry)
+                return self.question_or_review(model, output, entry)
             error = output.error or ModelError.of(
                 UNCLASSIFIED, f"exit {output.exit_code}", output.stderr
             )
@@ -139,6 +172,18 @@ class StepRun:
                 self.state.excluded_worker_providers.add(provider_of(model))
         self.result.status = UNAVAILABLE
         self.result.detail = last_error
+        return None
+
+    def question_or_review(
+        self, model: str, output: AttemptOutput, entry: dict[str, Any]
+    ) -> str | None:
+        question = question_in(output.final_text)
+        if question is None:
+            return self.review(model, output, entry)
+        entry["question"] = question
+        self.record(self.step, entry)
+        self.result.status = NEEDS_ANSWER
+        self.result.detail = question
         return None
 
     def review(self, model: str, output: AttemptOutput, entry: dict[str, Any]) -> str | None:

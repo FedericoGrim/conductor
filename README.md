@@ -13,8 +13,9 @@ Conductor takes a `plan.json` produced by a planning model (Claude in Claude Cod
 5. Rejected: the step restarts on the first usable model of the next difficulty level with the reason in the prompt, possibly on a different provider. Rejected on level 5: `failed`, and its dependents are `skipped`.
    - Model or provider error: the step never escalates on an error. OpenCode retries rate limits, server and network errors by itself; after `retry.transient_attempts` of those retries (default 3, per profile) Conductor stops the worker. A transient error or an unsuitable model (context exceeded, unknown model) moves to the next model of the same level, on a fresh worktree; an unusable provider (bad key, no credit) is also excluded for the rest of the run. When no model of the level is left, the step is `unavailable`; an unclassified error ends it as `failed` at once. Each fallback is its own attempt, with the classified error in its `error`.
    - Reviewer error: an HTTP or network failure, a missing key or an unparseable verdict moves to the next reviewer without costing the worker a level, and an unusable reviewer provider is excluded for the run (separately from the workers, whose keys live in OpenCode). The failed reviewers are listed in the attempt's `review_fallbacks`. When every reviewer fails, the diff goes to the brain as `needs_brain_review`, with the error in `review.error`; the run goes on and the step is never approved.
-6. Approved: the branch is merged into the current branch; a conflict is reported as `conflict` and the branch is kept for the brain.
-7. `.conductor/runs/<timestamp>/run.json` summarises the run; `step-<id>/attempt-<n>.json` holds the prompt, the full OpenCode event transcript, the diff and the reviewer's verdict of every attempt.
+6. Question: when the spec leaves open a decision with different consequences, the worker stops before changing files and ends its reply with a `QUESTION:` block. The step becomes `needs_answer` (not reviewed, not escalated, nothing merged), the question is in `run.json`, and its dependents are `skipped`. The brain answers it, or asks the user, and reruns the step with `answers`.
+7. Approved: the branch is merged into the current branch; a conflict is reported as `conflict` and the branch is kept for the brain.
+8. `.conductor/runs/<timestamp>/run.json` summarises the run; `step-<id>/attempt-<n>.json` holds the prompt, the full OpenCode event transcript, the diff and the reviewer's verdict of every attempt.
 
 ## Privacy levels
 
@@ -101,7 +102,7 @@ Refresh the model lists from the command line with `python scripts/list-models.p
 - **Claude Code**: copy `integrations/claude-code/conductor/` to `~/.claude/skills/conductor/`. The skill declares itself for multi-step changes, so it can load without being named; it stays out of one-line fixes and exploratory work.
 - **OpenCode**: copy `integrations/opencode/conductor.md` to `~/.config/opencode/command/conductor.md`. A command is always explicit: invoke it with `/conductor`.
 
-Both tell the brain to write `plan.json`, call `conductor run`, read `run.json`, and deal with `failed`, `unavailable`, `conflict` and `needs_brain_review` steps (set `reviewer = "brain"` in a profile to review diffs yourself instead of paying a reviewer model).
+Both tell the brain to write `plan.json`, call `conductor run`, read `run.json`, and deal with `failed`, `unavailable`, `needs_answer`, `conflict` and `needs_brain_review` steps (set `reviewer = "brain"` in a profile to review diffs yourself instead of paying a reviewer model).
 
 No skill can force the agent to delegate. To make it reliable, add a line to the repository's instructions (for example `CLAUDE.md`):
 
@@ -116,12 +117,13 @@ Multi-step changes (two or more steps, or several files) go through the `conduct
   "goal": "one line",
   "steps": [
     {"id": "core", "title": "...", "spec": "detailed instructions", "files": ["a.py"], "difficulty": 1, "depends_on": []},
-    {"id": "cli", "spec": "...", "difficulty": 2, "depends_on": ["core"]}
+    {"id": "cli", "spec": "...", "difficulty": 2, "depends_on": ["core"],
+     "answers": [{"question": "Exit code on bad input?", "answer": "2, message on stderr"}]}
   ]
 }
 ```
 
-`difficulty` is 1 to 5 and picks the level of the chosen profile. Check it with `conductor validate plan.json`; when a `conductor.toml` is found (or given with `--config`), it also warns about levels and reviewers that rely on a single provider. Parallel steps must not touch the same files, or they will conflict at merge time.
+`difficulty` is 1 to 5 and picks the level of the chosen profile. `answers` is optional: the brain adds it when it reruns a step that stopped with a question, and the worker receives it in its prompt. Check it with `conductor validate plan.json`; when a `conductor.toml` is found (or given with `--config`), it also warns about levels and reviewers that rely on a single provider. Parallel steps must not touch the same files, or they will conflict at merge time.
 
 ## Development
 
