@@ -12,7 +12,7 @@ def api_model_id(provider: str, model: str) -> str:
 
 def opencode_config(profile: Profile) -> dict[str, Any]:
     models: dict[str, dict[str, Any]] = {name: {} for name in profile.providers}
-    for model in (tier[0] for tier in profile.tiers):
+    for model in (model for tier in profile.tiers for model in tier):
         provider = profile.provider_for(model)
         models[provider.name][api_model_id(provider.name, model)] = {
             "options": profile.options_for(model)

@@ -82,3 +82,20 @@ def test_model_options_are_merged_over_the_provider_options() -> None:
         "provider": {"data_collection": "deny", "order": ["relace"], "allow_fallbacks": True}
     }
     assert provider["models"]["other/model"]["options"] == {"provider": {"data_collection": "deny"}}
+
+
+def test_opencode_config_includes_the_fallback_models_of_every_level() -> None:
+    from conductor.config import Profile, Provider
+
+    profile = Profile(
+        "medium",
+        {
+            "openrouter": Provider("openrouter", "https://openrouter.ai/api/v1", "A"),
+            "deepseek": Provider("deepseek", "https://api.deepseek.com/v1", "B"),
+        },
+        (("openrouter/a",), ("openrouter/b", "deepseek/b2")),
+        ("openrouter/a",),
+    )
+    config = opencode_config(profile)
+    assert set(config["provider"]["openrouter"]["models"]) == {"a", "b"}
+    assert set(config["provider"]["deepseek"]["models"]) == {"b2"}
