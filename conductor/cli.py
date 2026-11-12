@@ -62,7 +62,13 @@ async def execute_plan(
         write_opencode_config(path, opencode_config(profile))
         print(f"[{step.id}] attempt {number} on {model}", flush=True)
         return await run_attempt(
-            path, base, model, prompt, extra_args, f"conductor: {step.id} attempt {number}"
+            path,
+            base,
+            model,
+            prompt,
+            extra_args,
+            f"conductor: {step.id} attempt {number}",
+            transient_attempts=profile.transient_attempts,
         )
 
     def judge(spec: str, diff: str) -> reviewer.Verdict:
@@ -289,7 +295,6 @@ def main(argv: list[str] | None = None) -> int:
     except (
         PlanError,
         ConfigError,
-        reviewer.ReviewerError,
         NotARepositoryError,
         settings.SettingsError,
     ) as error:

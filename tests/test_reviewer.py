@@ -1,10 +1,20 @@
+import io
 import json
+from email.message import Message
 from typing import Any
+from urllib.error import HTTPError, URLError
 
 import pytest
 
 from conductor.credentials import store_key
-from conductor.reviewer import ReviewerError, Verdict, review
+from conductor.errors import (
+    MODEL_UNSUITABLE,
+    PROVIDER_UNUSABLE,
+    TRANSIENT,
+    UNCLASSIFIED,
+    ModelError,
+)
+from conductor.reviewer import Verdict, review
 from tests.factories import make_profile
 
 PROFILE = make_profile(
@@ -50,6 +60,7 @@ def test_unparseable_verdict_is_a_rejection(monkeypatch: pytest.MonkeyPatch) -> 
     assert verdict.ok is False
     assert verdict.reason == "unparseable verdict"
     assert verdict.raw == "Looks fine to me!"
+    assert verdict.error == ModelError(MODEL_UNSUITABLE, "unparseable-verdict", "Looks fine to me!")
 
 
 def test_fenced_json_is_accepted(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -61,14 +72,72 @@ def test_fenced_json_is_accepted(monkeypatch: pytest.MonkeyPatch) -> None:
     assert review(PROFILE, spec="s", diff="d", post=fake_post).ok is True
 
 
-def test_missing_api_key_fails_before_any_request(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_missing_api_key_makes_the_provider_unusable_before_any_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("TEST_REVIEW_KEY", raising=False)
 
     def fake_post(url: str, headers: dict[str, str], body: dict[str, Any]) -> dict[str, Any]:
         raise AssertionError("must not be called")
 
-    with pytest.raises(ReviewerError, match="TEST_REVIEW_KEY"):
-        review(PROFILE, spec="s", diff="d", post=fake_post)
+    verdict = review(PROFILE, spec="s", diff="d", post=fake_post)
+    assert verdict.ok is False
+    assert verdict.error is not None
+    assert verdict.error.kind == PROVIDER_UNUSABLE
+    assert "TEST_REVIEW_KEY" in verdict.reason
+
+
+def http_error(code: int, body: str = '{"error": {"message": "nope"}}') -> HTTPError:
+    return HTTPError("https://x", code, "status", Message(), io.BytesIO(body.encode()))
+
+
+@pytest.mark.parametrize(
+    ("failure", "kind", "error_type"),
+    [
+        (http_error(429), TRANSIENT, "http-429"),
+        (http_error(503), TRANSIENT, "http-503"),
+        (http_error(401), PROVIDER_UNUSABLE, "http-401"),
+        (http_error(402), PROVIDER_UNUSABLE, "http-402"),
+        (http_error(404), MODEL_UNSUITABLE, "http-404"),
+        (http_error(400, "maximum context length exceeded"), MODEL_UNSUITABLE, "http-400"),
+        (http_error(400), UNCLASSIFIED, "http-400"),
+        (URLError("connection refused"), TRANSIENT, "network"),
+        (TimeoutError("timed out"), TRANSIENT, "network"),
+    ],
+)
+def test_request_failures_become_classified_errors_instead_of_raising(
+    monkeypatch: pytest.MonkeyPatch, failure: Exception, kind: str, error_type: str
+) -> None:
+    monkeypatch.setenv("TEST_REVIEW_KEY", "k")
+
+    def fake_post(url: str, headers: dict[str, str], body: dict[str, Any]) -> dict[str, Any]:
+        raise failure
+
+    verdict = review(PROFILE, spec="s", diff="d", post=fake_post)
+    assert verdict.ok is False
+    assert verdict.error is not None
+    assert (verdict.error.kind, verdict.error.type) == (kind, error_type)
+
+
+def test_a_malformed_response_is_an_unclassified_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TEST_REVIEW_KEY", "k")
+
+    def fake_post(url: str, headers: dict[str, str], body: dict[str, Any]) -> dict[str, Any]:
+        return {"unexpected": True}
+
+    verdict = review(PROFILE, spec="s", diff="d", post=fake_post)
+    assert verdict.ok is False
+    assert verdict.error is not None
+    assert verdict.error.kind == UNCLASSIFIED
+
+
+def test_a_parsed_verdict_has_no_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TEST_REVIEW_KEY", "k")
+
+    def fake_post(url: str, headers: dict[str, str], body: dict[str, Any]) -> dict[str, Any]:
+        return completion('{"ok": false, "reason": "no tests"}')
+
+    assert review(PROFILE, spec="s", diff="d", post=fake_post).error is None
 
 
 def test_verdict_cost_comes_from_the_usage_reported_by_the_provider() -> None:

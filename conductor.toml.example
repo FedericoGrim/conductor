@@ -7,6 +7,9 @@
 #   tiers           exactly five model ids, one per difficulty level, cheapest first
 #   reviewer        model judging each diff, or "brain" to hand diffs back to the planning model
 #   max_parallel    concurrent steps
+#   retry           optional, { transient_attempts = 3 }: how many times OpenCode may retry a
+#                   rate limit, server or network error before Conductor stops the worker and
+#                   the step ends as "unavailable" (it never escalates on an error)
 #
 # A model id is "<provider>/<model>", and the provider is one of the [..providers.<provider>]
 # tables of the same profile. A profile may use several providers, so escalation can cross them:
@@ -30,8 +33,9 @@
 #   [privacy.medium.providers.openrouter.models."deepseek/deepseek-v4.1-flash"]
 #   request_options = { provider = { order = ["relace"], allow_fallbacks = true } }
 #
-# Keep allow_fallbacks on: Conductor does not retry a step when the pinned upstream fails, so
-# pinning with only/allow_fallbacks = false turns an outage into a failed step.
+# Keep allow_fallbacks on: when the pinned upstream fails, Conductor stops the worker after the
+# retry limit, so pinning with only/allow_fallbacks = false turns an outage into an unavailable
+# step.
 #
 # `conductor billing` reads the balance of the account behind each base_url (OpenRouter, Vercel
 # AI Gateway, Scaleway Generative APIs) with the key in api_key_env; see "Billing" in the README.

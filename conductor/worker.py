@@ -9,9 +9,23 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-OPENCODE_CONFIG_NAME = "opencode.json"
+from conductor.errors import (
+    MODEL_UNSUITABLE,
+    PROVIDER_UNUSABLE,
+    TRANSIENT,
+    UNCLASSIFIED,
+    ModelError,
+    mentions_context_limit,
+)
 
-Runner = Callable[[list[str], Path], Awaitable[tuple[int, str, str]]]
+OPENCODE_CONFIG_NAME = "opencode.json"
+ERROR_EVENT = "error"
+RETRY_EVENT = "retry"
+EVENT_LINE_LIMIT = 64 * 1024 * 1024
+STOP_GRACE_SECONDS = 10
+
+StopCondition = Callable[[str], bool]
+Runner = Callable[[list[str], Path, StopCondition], Awaitable[tuple[int, str, str]]]
 
 
 @dataclass
@@ -23,6 +37,7 @@ class AttemptOutput:
     stderr: str = ""
     command: list[str] = field(default_factory=list)
     cost: float = 0.0
+    error: ModelError | None = None
 
 
 def git(cwd: Path, *args: str) -> str:
@@ -94,6 +109,38 @@ def events_cost(events: list[dict[str, Any]]) -> float:
     return total
 
 
+ERROR_KINDS = {
+    "provider.rate-limit": TRANSIENT,
+    "provider.internal": TRANSIENT,
+    "provider.transport": TRANSIENT,
+    "provider.auth": PROVIDER_UNUSABLE,
+    "provider.quota": PROVIDER_UNUSABLE,
+    "provider.no-route": MODEL_UNSUITABLE,
+}
+
+
+def classify_opencode_error(error: dict[str, Any]) -> ModelError:
+    error_type = str(error.get("type", ""))
+    message = str(error.get("message", ""))
+    kind = ERROR_KINDS.get(error_type, UNCLASSIFIED)
+    if error_type == "provider.invalid-request" and mentions_context_limit(message):
+        kind = MODEL_UNSUITABLE
+    return ModelError.of(kind, error_type, message)
+
+
+def attempt_error(events: list[dict[str, Any]], exit_code: int, stderr: str) -> ModelError | None:
+    if exit_code == 0:
+        return None
+    reported = [
+        event["error"]
+        for event in events
+        if event.get("type") in (ERROR_EVENT, RETRY_EVENT) and isinstance(event.get("error"), dict)
+    ]
+    if reported:
+        return classify_opencode_error(reported[-1])
+    return ModelError.of(UNCLASSIFIED, f"exit {exit_code}", stderr)
+
+
 def commit_work(worktree: Path, message: str) -> bool:
     git(worktree, "add", "-A")
     if not git(worktree, "status", "--porcelain").strip():
@@ -116,7 +163,34 @@ def diff_against(worktree: Path, base: str) -> str:
     return git(worktree, "diff", f"{base}...HEAD")
 
 
-async def subprocess_runner(cmd: list[str], cwd: Path) -> tuple[int, str, str]:
+def retry_limit(transient_attempts: int) -> StopCondition:
+    retries = 0
+
+    def should_stop(line: str) -> bool:
+        nonlocal retries
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            return False
+        if isinstance(event, dict) and event.get("type") == RETRY_EVENT:
+            retries += 1
+        return retries > transient_attempts
+
+    return should_stop
+
+
+async def stop_process(process: asyncio.subprocess.Process) -> None:
+    process.terminate()
+    try:
+        await asyncio.wait_for(process.wait(), STOP_GRACE_SECONDS)
+    except TimeoutError:
+        process.kill()
+        await process.wait()
+
+
+async def subprocess_runner(
+    cmd: list[str], cwd: Path, should_stop: StopCondition
+) -> tuple[int, str, str]:
     # OpenCode resolves its project root from $PWD, not from the process cwd.
     process = await asyncio.create_subprocess_exec(
         *cmd,
@@ -125,9 +199,20 @@ async def subprocess_runner(cmd: list[str], cwd: Path) -> tuple[int, str, str]:
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        limit=EVENT_LINE_LIMIT,
     )
-    stdout, stderr = await process.communicate()
-    return process.returncode or 0, stdout.decode(errors="replace"), stderr.decode(errors="replace")
+    assert process.stdout is not None and process.stderr is not None
+    stderr_task = asyncio.create_task(process.stderr.read())
+    lines: list[str] = []
+    while raw := await process.stdout.readline():
+        line = raw.decode(errors="replace")
+        lines.append(line)
+        if should_stop(line.rstrip("\n")):
+            await stop_process(process)
+            break
+    await process.wait()
+    stderr = await stderr_task
+    return process.returncode or 0, "".join(lines), stderr.decode(errors="replace")
 
 
 async def run_attempt(
@@ -137,10 +222,11 @@ async def run_attempt(
     prompt: str,
     extra_args: list[str],
     commit_message: str,
+    transient_attempts: int,
     runner: Runner = subprocess_runner,
 ) -> AttemptOutput:
     command = build_command(model, prompt, extra_args)
-    exit_code, stdout, stderr = await runner(command, worktree)
+    exit_code, stdout, stderr = await runner(command, worktree, retry_limit(transient_attempts))
     events, session_id = parse_events(stdout)
     commit_work(worktree, commit_message)
     return AttemptOutput(
@@ -151,4 +237,5 @@ async def run_attempt(
         stderr=stderr,
         command=command,
         cost=events_cost(events),
+        error=attempt_error(events, exit_code, stderr),
     )

@@ -15,9 +15,10 @@ Simple layering, no tactical DDD: a small tool with little business logic.
 - `conductor/defaults.py` — the built-in `low`/`medium`/`high` profiles (five levels each) and `DIFFICULTY_LEVELS`.
 - `conductor/privacy.py` — a profile → the `opencode.json` written in each worktree (one entry per provider) and the reviewer request options.
 - `conductor/scheduler.py` — asyncio DAG scheduler bounded by `max_parallel`.
-- `conductor/worker.py` — worktree creation, `opencode run --format json`, diff capture.
+- `conductor/worker.py` — worktree creation, `opencode run --format json` with streamed events (stopped after the retry limit), OpenCode error classification, diff capture.
 - `conductor/reviewer.py` — direct OpenAI-compatible chat call, returns `{ok, reason}`.
-- `conductor/escalation.py` — rejected step → next tier with the reason in the prompt; beyond last tier → `failed`.
+- `conductor/escalation.py` — rejected step → next tier with the reason in the prompt; beyond last tier → `failed`. Classified model errors → `unavailable`, unclassified → `failed`, reviewer errors → `needs_brain_review`; never escalates on an error.
+- `conductor/errors.py` — the error classes (transient, provider unusable, model unsuitable, unclassified) shared by worker and reviewer.
 - `conductor/log.py` — `.conductor/runs/<ts>/run.json` and `step-<id>/attempt-N.json`, with cost totals per step, model and run.
 - `conductor/merge.py` — merge approved worktree branches; conflicts are reported, not resolved.
 - `conductor/catalog.py` — provider model lists (`/models`), prices per million tokens, filtering and search.
@@ -65,7 +66,7 @@ Rule: no module imports OpenCode or provider specifics except `worker.py`, `revi
 - API keys come from the environment or from `auth.json` (mode `600`, directory `700`, written atomically by `conductor setup` only); never written to logs, `opencode.json`, `run.json`, the ledger or billing output. The environment wins over the file.
 - A key is never sent to a `base_url` that is not `https`.
 - Worker output (transcripts, diffs, reviewer replies) is untrusted data: never executed, never fed to a shell.
-- Reviewer verdict must be parsed strictly as JSON; anything else counts as a rejection with reason "unparseable verdict".
+- Reviewer verdict must be parsed strictly as JSON; anything else is a reviewer error with reason "unparseable verdict": never approved, handed to the brain.
 
 ## Definition of Done (extra)
 - `conductor validate` still accepts `examples/plan.json`.
@@ -80,4 +81,4 @@ See [docs/decisions.md](docs/decisions.md).
 ## Do not
 - Add runtime dependencies.
 - Resolve merge conflicts automatically.
-- Retry on model errors other than a reviewer rejection (network/rate-limit handling is explicit per profile, not implicit).
+- Retry or escalate on model errors outside decision 011: only OpenCode's own retries, capped by the profile's `retry.transient_attempts`; a reviewer rejection is the only thing that escalates.

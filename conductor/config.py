@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 BARE_KEY = re.compile(r"[A-Za-z0-9_-]+")
+DEFAULT_TRANSIENT_ATTEMPTS = 3
 DUMP_HEADER = "# Written by `conductor setup`. Comments added by hand are lost on the next save."
 
 
@@ -96,6 +97,7 @@ class Profile:
     tiers: tuple[str, ...]
     reviewer: str
     max_parallel: int = 4
+    transient_attempts: int = DEFAULT_TRANSIENT_ATTEMPTS
 
     @classmethod
     def from_dict(cls, name: str, data: dict[str, Any]) -> Profile:
@@ -113,11 +115,22 @@ class Profile:
                 tiers=tuple(str(t) for t in tiers),
                 reviewer=str(data["reviewer"]),
                 max_parallel=int(data.get("max_parallel", 4)),
+                transient_attempts=cls.parse_transient_attempts(name, data),
             )
         except KeyError as error:
             raise ConfigError(f"privacy.{name}: missing key {error}") from error
         profile.validate()
         return profile
+
+    @staticmethod
+    def parse_transient_attempts(name: str, data: dict[str, Any]) -> int:
+        retry = data.get("retry", {})
+        if not isinstance(retry, dict):
+            raise ConfigError(f"privacy.{name}: retry must be a table")
+        attempts = retry.get("transient_attempts", DEFAULT_TRANSIENT_ATTEMPTS)
+        if isinstance(attempts, bool) or not isinstance(attempts, int) or attempts < 0:
+            raise ConfigError(f"privacy.{name}: retry.transient_attempts must be a count >= 0")
+        return attempts
 
     @staticmethod
     def parse_providers(name: str, data: dict[str, Any]) -> dict[str, Provider]:
@@ -180,6 +193,8 @@ class Profile:
             "]",
             f"reviewer = {toml_value(self.reviewer)}",
         ]
+        if self.transient_attempts != DEFAULT_TRANSIENT_ATTEMPTS:
+            lines.append(f"retry = {toml_value({'transient_attempts': self.transient_attempts})}")
         for name, provider in self.providers.items():
             prefix = f"privacy.{toml_key(self.name)}.providers.{toml_key(name)}"
             lines.extend(["", f"[{prefix}]"])

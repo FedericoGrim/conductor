@@ -11,6 +11,8 @@ Conductor takes a `plan.json` produced by a planning model (Claude in Claude Cod
 3. Every step whose dependencies are approved starts, up to `max_parallel` at once, in its own worktree branched from the current branch. The step runs `opencode run --format json --auto` on the model of its difficulty level, `tiers[difficulty - 1]`.
 4. The reviewer model receives the spec and the diff and answers `{"ok": bool, "reason": str}`.
 5. Rejected: the step restarts on the next difficulty level with the reason in the prompt, possibly on a different provider. Rejected on level 5: `failed`, and its dependents are `skipped`.
+   - Model or provider error: the step never escalates on an error. OpenCode retries rate limits, server and network errors by itself; after `retry.transient_attempts` of those retries (default 3, per profile) Conductor stops the worker. A transient error, an unusable provider (bad key, no credit) or an unsuitable model (context exceeded, unknown model) ends the step as `unavailable`; any other error ends it as `failed`. The classified error is in the attempt's `error`.
+   - Reviewer error: an HTTP or network failure, a missing key or an unparseable verdict hands the diff to the brain as `needs_brain_review`, with the error in the attempt's `review.error`; the run goes on and the step is never approved.
 6. Approved: the branch is merged into the current branch; a conflict is reported as `conflict` and the branch is kept for the brain.
 7. `.conductor/runs/<timestamp>/run.json` summarises the run; `step-<id>/attempt-<n>.json` holds the prompt, the full OpenCode event transcript, the diff and the reviewer's verdict of every attempt.
 
@@ -65,7 +67,7 @@ OpenRouter picks an upstream provider for each model. To pin one for a single mo
 request_options = { provider = { order = ["relace"], allow_fallbacks = true } }
 ```
 
-These options are merged over the provider's `request_options` (the model wins) and apply to both the worker and the reviewer when that model is chosen. The slug comes from `https://openrouter.ai/api/v1/models/<author>/<model>/endpoints` (`relace`, `deepinfra`, `morph`, ...). Prefer `order` with fallbacks over `only` with `allow_fallbacks = false`: Conductor does not retry a step when a model call fails, so a single pinned upstream turning down a request turns into a failed step. Pinning does not bypass `data_collection = "deny"`: if the pinned upstream does not meet the policy, the request is refused.
+These options are merged over the provider's `request_options` (the model wins) and apply to both the worker and the reviewer when that model is chosen. The slug comes from `https://openrouter.ai/api/v1/models/<author>/<model>/endpoints` (`relace`, `deepinfra`, `morph`, ...). Prefer `order` with fallbacks over `only` with `allow_fallbacks = false`: Conductor stops the worker after the retry limit and never escalates on an error, so a single pinned upstream turning down requests turns into an `unavailable` step. Pinning does not bypass `data_collection = "deny"`: if the pinned upstream does not meet the policy, the request is refused.
 
 Keys are read from the environment first and from that file second. Saving rewrites the file and keeps the previous one as `conductor.toml.bak`; comments written by hand are lost, which is why the generated file carries a warning. The UI needs an interactive terminal; `--config` chooses another file.
 
@@ -99,7 +101,7 @@ Refresh the model lists from the command line with `python scripts/list-models.p
 - **Claude Code**: copy `integrations/claude-code/conductor/` to `~/.claude/skills/conductor/`. The skill declares itself for multi-step changes, so it can load without being named; it stays out of one-line fixes and exploratory work.
 - **OpenCode**: copy `integrations/opencode/conductor.md` to `~/.config/opencode/command/conductor.md`. A command is always explicit: invoke it with `/conductor`.
 
-Both tell the brain to write `plan.json`, call `conductor run`, read `run.json`, and deal with `failed`, `conflict` and `needs_brain_review` steps (set `reviewer = "brain"` in a profile to review diffs yourself instead of paying a reviewer model).
+Both tell the brain to write `plan.json`, call `conductor run`, read `run.json`, and deal with `failed`, `unavailable`, `conflict` and `needs_brain_review` steps (set `reviewer = "brain"` in a profile to review diffs yourself instead of paying a reviewer model).
 
 No skill can force the agent to delegate. To make it reliable, add a line to the repository's instructions (for example `CLAUDE.md`):
 
