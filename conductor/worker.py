@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import re
 import subprocess
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -16,6 +15,7 @@ from conductor.errors import (
     TRANSIENT,
     UNCLASSIFIED,
     ModelError,
+    mentions_context_limit,
 )
 
 OPENCODE_CONFIG_NAME = "opencode.json"
@@ -117,14 +117,13 @@ ERROR_KINDS = {
     "provider.quota": PROVIDER_UNUSABLE,
     "provider.no-route": MODEL_UNSUITABLE,
 }
-CONTEXT_EXCEEDED = re.compile(r"context (length|window)|too many tokens", re.IGNORECASE)
 
 
 def classify_opencode_error(error: dict[str, Any]) -> ModelError:
     error_type = str(error.get("type", ""))
     message = str(error.get("message", ""))
     kind = ERROR_KINDS.get(error_type, UNCLASSIFIED)
-    if error_type == "provider.invalid-request" and CONTEXT_EXCEEDED.search(message):
+    if error_type == "provider.invalid-request" and mentions_context_limit(message):
         kind = MODEL_UNSUITABLE
     return ModelError.of(kind, error_type, message)
 
