@@ -15,14 +15,14 @@ Simple layering, no tactical DDD: a small tool with little business logic.
 - `conductor/defaults.py` — the built-in `low`/`medium`/`high` profiles (five levels each, with fallbacks on a second provider: DeepSeek, Vercel, Scaleway) and `DIFFICULTY_LEVELS`.
 - `conductor/privacy.py` — a profile → the `opencode.json` written in each worktree (one entry per provider) and the reviewer request options.
 - `conductor/scheduler.py` — asyncio DAG scheduler bounded by `max_parallel`.
-- `conductor/worker.py` — worktree creation, the streaming runner (stopped after the retry limit), `run_attempt` with a `Harness`, diff capture.
+- `conductor/worker.py` — worktree creation, the streaming runner (stopped after the retry limit), `run_attempt` with a `Harness`, the commit of the worker's changes through the repository's git hooks (a refusal becomes `commit_rejection`), diff capture.
 - `conductor/harness.py` — the worker harnesses, each the command, its event stream (retries, cost, classified errors, final text) and its worktree configuration: OpenCode, and Claude Code (`claude -p`, isolated with `--setting-sources project`, confined to the worktree with `--permission-mode acceptEdits`). `harness_for` picks by the provider of the chosen model.
 - `conductor/verify.py` — runs a step's `verify` commands with `sh -c` in its worktree (`CONDUCTOR_REPO` set, timeout, output tail).
 - `conductor/reviewer.py` — direct OpenAI-compatible chat call with explicit criteria (spec, tests in the diff, domain rules, bugs), the plan's rules and the verification results; returns `{ok, reason}`.
-- `conductor/escalation.py` — rejected step → next tier with the reason in the prompt; beyond last tier → `failed`. A worker question → `needs_answer` (no review, no escalation). Classified model errors → next model of the level (an unusable provider is excluded for the run), level exhausted → `unavailable`, unclassified → `failed`; reviewer errors → next reviewer, all failed → `needs_brain_review`; never escalates on an error.
+- `conductor/escalation.py` — rejected step → next tier with the reason in the prompt; beyond last tier → `failed`. A worker question → `needs_answer` (no review, no escalation). A commit refused by the git hooks → rejected with the hook output, like a failed verification. Classified model errors → next model of the level (an unusable provider is excluded for the run), level exhausted → `unavailable`, unclassified → `failed`; reviewer errors → next reviewer, all failed → `needs_brain_review`; never escalates on an error.
 - `conductor/errors.py` — the error classes (transient, provider unusable, model unsuitable, unclassified) shared by worker and reviewer.
 - `conductor/log.py` — `.conductor/runs/<ts>/run.json` and `step-<id>/attempt-N.json`, with cost totals per step, model and run.
-- `conductor/merge.py` — merge approved worktree branches; conflicts are reported, not resolved.
+- `conductor/merge.py` — merge approved worktree branches; conflicts and hooks refusing the merge are reported, not resolved.
 - `conductor/catalog.py` — provider model lists (`/models`), prices per million tokens, filtering and search.
 - `conductor/setup_state.py` — editable profiles, providers, five difficulty levels and validation for the setup UI.
 - `conductor/setup_tui.py` — `curses` screens, keys and rendering of `conductor setup`, starting from `defaults.py` when no file exists.
@@ -62,6 +62,7 @@ Rule: no module imports OpenCode or provider specifics except `harness.py`, `rev
 
 ## Project conventions
 - OpenCode steps run with `opencode run --auto --archived`; Claude Code steps run with `claude -p --setting-sources project --disable-slash-commands --permission-mode acceptEdits --allowedTools=Bash`, isolated from the user's personal Claude settings and skills and confined to the worktree, never with `--dangerously-skip-permissions`. Either way, workers may do anything inside their worktree, nothing outside.
+- Conductor's commits and merges use Conventional Commit messages (`chore(conductor): ...`) and never bypass the target repository's git hooks (decision 018).
 - Worktrees are created and merged by Conductor (`git worktree add`), never with OpenCode's own `--worktree` flag.
 - Routing options are written to a per-worktree `opencode.json`, excluded from the diff via `.git/info/exclude`.
 - That `opencode.json` sets `small_model` to the first model of level 1 and repeats each provider's `request_options` at provider level: OpenCode sends title and summary requests to a model of its own choosing, and the profile's data policy must reach it too.
