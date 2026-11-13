@@ -30,7 +30,8 @@ Simple layering, no tactical DDD: a small tool with little business logic.
 - `conductor/settings.py` — export and import of the instance settings, with a `[conductor]` metadata table and no keys.
 - `conductor/billing.py` — provider balances (chosen by the profile's `base_url` host), the cross-project spend ledger and its totals.
 - `conductor/brain.py` — the brain's token usage per model, read from `opencode session export` (numbers and model names only, never message text).
-- `conductor/cli.py` — `conductor run plan.json --privacy low|medium|high`, `conductor validate plan.json [--config]` (warns about levels relying on one provider), `conductor billing [project|projects]`, `conductor setup`.
+- `conductor/stats.py` — per-run and per-step statistics from run.json, git (hand commits after a run) and the brain's session.
+- `conductor/cli.py` — `conductor run plan.json --privacy low|medium|high`, `conductor validate plan.json [--config]` (warns about levels relying on one provider), `conductor billing [project|projects]`, `conductor stats`, `conductor setup`.
 Rule: no module imports OpenCode or provider specifics except `harness.py`, `reviewer.py`, `privacy.py`, `catalog.py`, `billing.py` and `brain.py`.
 
 ## Commands
