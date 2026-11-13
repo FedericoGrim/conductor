@@ -12,6 +12,7 @@ from conductor import billing, cli, reviewer
 from conductor.billing import read_ledger, record_run
 from conductor.config import Config
 from conductor.worker import commit_work, git
+from tests.factories import CONVENTIONAL_COMMIT_HOOK, install_git_hook
 
 FAKE_OPENCODE = """#!/bin/sh
 printf '{"type":"text","sessionID":"ses_fake","text":"hello"}\\n'
@@ -164,9 +165,37 @@ def test_run_executes_reviews_and_merges(
     ]
     assert run["steps"]["b"]["attempts"] == 1
     assert (runs[0] / "step-a" / "attempt-1.json").exists()
-    assert "conductor: merge" in git(repo, "log", "--oneline")
+    assert "chore(conductor): merge" in git(repo, "log", "--oneline")
     assert git(repo, "status", "--porcelain") == ""
     assert git(repo, "worktree", "list").count("\n") == 1
+
+
+def test_run_works_in_a_repository_that_enforces_conventional_commits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = init_repo(tmp_path)
+    install_git_hook(repo, "commit-msg", CONVENTIONAL_COMMIT_HOOK)
+    install_fake_opencode(tmp_path, monkeypatch)
+    monkeypatch.setenv("TEST_CLI_KEY", "k")
+    config = tmp_path / "conductor.toml"
+    config.write_text(CONFIG)
+    plan = tmp_path / "plan.json"
+    plan.write_text(json.dumps({"goal": "g", "steps": [{"id": "a", "spec": "write output"}]}))
+
+    def fake_post(url: str, headers: dict[str, str], body: dict[str, Any]) -> dict[str, Any]:
+        content = json.dumps({"ok": True, "reason": "good"})
+        return {"choices": [{"message": {"content": content}}]}
+
+    monkeypatch.setattr(reviewer, "http_post", fake_post)
+
+    code = cli.main(["run", str(plan), "--config", str(config), "--repo", str(repo)])
+
+    assert code == 0, capsys.readouterr().out
+    assert git(repo, "log", "-1", "--format=%s", "HEAD").startswith("chore(conductor): merge ")
+    assert git(repo, "log", "-1", "--format=%s", "HEAD^2") == (
+        "chore(conductor): apply step a attempt 1\n"
+    )
+    assert (repo / "output.txt").exists()
 
 
 def test_run_refuses_a_dirty_repository(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
