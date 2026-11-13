@@ -143,3 +143,9 @@ def test_providers_without_url_are_left_to_the_harness() -> None:
     )
     config = opencode_config(profile)
     assert set(config["provider"]) == {"openrouter"}
+
+
+def test_opencode_config_hides_every_skill_from_the_worker() -> None:
+    assert opencode_config(PROFILE)["permissions"] == [
+        {"action": "skill", "resource": "*", "effect": "deny"}
+    ]
