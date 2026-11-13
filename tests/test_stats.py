@@ -167,6 +167,18 @@ def test_invalid_run_json_is_skipped(tmp_path: Path) -> None:
     assert [run.name for run in runs] == ["2026-11-13T15-32-28"]
 
 
+def test_a_run_json_that_is_not_utf8_is_skipped(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    write_run(repo, "2026-11-13T15-32-28", make_run())
+    bad = repo / ".conductor" / "runs" / "2026-11-13T15-32-29"
+    bad.mkdir(parents=True)
+    (bad / "run.json").write_bytes(b"\xff\xfe{}")
+
+    runs = collect(repo, hand=zero_hand, tokens=no_tokens)
+
+    assert [run.name for run in runs] == ["2026-11-13T15-32-28"]
+
+
 def test_session_tokens_are_cached_per_id(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     calls: list[str] = []
