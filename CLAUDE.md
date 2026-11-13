@@ -5,7 +5,7 @@ CLI that executes a `plan.json` written by a "brain" model (Claude in Claude Cod
 
 ## Tech stack
 - Python 3.12, standard library only at runtime (`asyncio`, `subprocess`, `urllib`, `tomllib`, `json`).
-- OpenCode 2.x CLI (`@opencode/cli`) as the worker harness; any provider OpenCode supports.
+- Workers run on one of two harnesses, chosen by the `harness` field of the provider of the step's model: the OpenCode 2.x CLI (`@opencode/cli`, any provider OpenCode supports), the default, or the Claude Code CLI (`claude -p`) for a provider with `harness = "claude-code"` (the Claude subscription).
 - Dev: pytest, ruff, mypy (strict), pre-commit.
 
 ## Architecture
@@ -61,7 +61,7 @@ Rule: no module imports OpenCode or provider specifics except `harness.py`, `rev
 - **Ledger** — `~/.local/share/conductor/ledger.jsonl`, one line per finished run with its project and cost.
 
 ## Project conventions
-- Plan steps run with `opencode run --auto --archived`: workers may do anything inside their worktree, nothing outside.
+- OpenCode steps run with `opencode run --auto --archived`; Claude Code steps run with `claude -p --setting-sources project --disable-slash-commands --permission-mode acceptEdits --allowedTools=Bash`, isolated from the user's personal Claude settings and skills and confined to the worktree, never with `--dangerously-skip-permissions`. Either way, workers may do anything inside their worktree, nothing outside.
 - Worktrees are created and merged by Conductor (`git worktree add`), never with OpenCode's own `--worktree` flag.
 - Routing options are written to a per-worktree `opencode.json`, excluded from the diff via `.git/info/exclude`.
 - That `opencode.json` sets `small_model` to the first model of level 1 and repeats each provider's `request_options` at provider level: OpenCode sends title and summary requests to a model of its own choosing, and the profile's data policy must reach it too.
