@@ -49,6 +49,8 @@ Balances come from the provider behind each profile's `base_url`:
 
 Other providers are listed with "no balance API known". Amounts are never converted between currencies.
 
+Whether Conductor pays off is measured with the protocol in [docs/measurements.md](docs/measurements.md), which also holds the results.
+
 ## Setup
 
 `conductor setup` is a terminal UI for `conductor.toml`, meant to be reopened whenever a provider changes its catalog or prices. Conductor ships three complete profiles (`low`, `medium`, `high`), so the UI opens on something that already works: you change a model, not the structure. The shipped ladders pick the strongest model per dollar at each difficulty level (SWE-bench Verified and Pro, plus measured cost per task); the reasoning is in decision 008. Every paid level and reviewer also falls back on a second provider that keeps the profile's data policy — the DeepSeek API for `low`, Vercel AI Gateway without prompt training for `medium`, Scaleway in Paris for `high` — so an OpenRouter outage does not stop a run (decision 014). Those fallbacks need `DEEPSEEK_API_KEY`, `AI_GATEWAY_API_KEY` or `SCALEWAY_API_KEY`; without the key a fallback is simply skipped.
