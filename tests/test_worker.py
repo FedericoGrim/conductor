@@ -18,6 +18,7 @@ from conductor.harness import (
     write_opencode_config,
 )
 from conductor.worker import (
+    attempt_commit_message,
     commit_work,
     create_worktree,
     diff_against,
@@ -27,6 +28,7 @@ from conductor.worker import (
     run_attempt,
     subprocess_runner,
 )
+from tests.factories import install_git_hook
 
 
 def git(repo: Path, *args: str) -> str:
@@ -246,3 +248,70 @@ def test_final_text_is_the_last_text_part() -> None:
 
 def test_final_text_is_empty_without_text_parts() -> None:
     assert final_text([step_finish(0.1), {"type": "text", "part": "broken"}]) == ""
+
+
+def test_commit_work_reports_the_output_of_a_hook_that_rejects_the_commit(tmp_path: Path) -> None:
+    repo = init_repo(tmp_path)
+    install_git_hook(repo, "pre-commit", "echo 'lint failed: unused import'\nexit 1\n")
+    (repo / "new.py").write_text("import os\n")
+
+    rejection = commit_work(repo, "chore(conductor): apply step s1 attempt 1")
+
+    assert rejection is not None and "lint failed: unused import" in rejection
+    assert git(repo, "log", "--oneline").count("\n") == 1
+
+
+def test_commit_work_retries_once_when_a_hook_fixes_the_files(tmp_path: Path) -> None:
+    repo = init_repo(tmp_path)
+    fixer = (
+        "if grep -q ' $' new.py; then\n"
+        "  sed -i 's/ *$//' new.py; echo 'fixed whitespace'; exit 1\n"
+        "fi\n"
+    )
+    install_git_hook(repo, "pre-commit", fixer)
+    (repo / "new.py").write_text("x = 1   \n")
+
+    assert commit_work(repo, "chore(conductor): apply step s1 attempt 1") is None
+    assert git(repo, "show", "HEAD:new.py") == "x = 1\n"
+    assert git(repo, "status", "--porcelain") == ""
+
+
+def test_commit_work_without_changes_commits_nothing(tmp_path: Path) -> None:
+    repo = init_repo(tmp_path)
+    assert commit_work(repo, "chore(conductor): apply step s1 attempt 1") is None
+    assert git(repo, "log", "--oneline").count("\n") == 1
+
+
+def test_attempt_commit_message_is_a_conventional_commit() -> None:
+    assert attempt_commit_message("parse-input", 2) == (
+        "chore(conductor): apply step parse-input attempt 2"
+    )
+
+
+def test_run_attempt_reports_a_commit_rejected_by_a_hook(tmp_path: Path) -> None:
+    repo = init_repo(tmp_path)
+    install_git_hook(repo, "pre-commit", "echo 'mypy: error'\nexit 1\n")
+    worktree = tmp_path / "wt"
+    create_worktree(repo, worktree, branch="conductor/s1-1", base="main")
+
+    async def writing_runner(
+        cmd: list[str], cwd: Path, should_stop: Callable[[str], bool]
+    ) -> tuple[int, str, str]:
+        (cwd / "made.py").write_text("x: int = 'a'\n")
+        return 0, "", ""
+
+    output = asyncio.run(
+        run_attempt(
+            worktree,
+            base="main",
+            model="openrouter/a/b",
+            prompt="do it",
+            extra_args=[],
+            commit_message="chore(conductor): apply step s1 attempt 1",
+            transient_attempts=3,
+            harness=OPENCODE,
+            runner=writing_runner,
+        )
+    )
+    assert output.commit_rejection is not None and "mypy: error" in output.commit_rejection
+    assert output.diff == ""
