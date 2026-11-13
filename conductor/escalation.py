@@ -112,6 +112,7 @@ def attempt_entry(
         "diff": output.diff,
         "error": None,
         "question": None,
+        "commit_rejection": output.commit_rejection,
         "verify": [],
         "review": None,
         "review_fallbacks": [],
@@ -191,7 +192,7 @@ class StepRun:
     async def judge_attempt(
         self, number: int, model: str, output: AttemptOutput, entry: dict[str, Any]
     ) -> str | None:
-        """Question, then verification, then review; return the rejection reason, if any."""
+        """Question, git hooks, verification, then review; return the rejection reason, if any."""
         question = question_in(output.final_text)
         if question is not None:
             entry["question"] = question
@@ -199,6 +200,11 @@ class StepRun:
             self.result.status = NEEDS_ANSWER
             self.result.detail = question
             return None
+        if output.commit_rejection is not None:
+            self.record(self.step, entry)
+            reason = f"git hooks rejected the commit:\n{output.commit_rejection}"
+            self.result.detail = f"rejected on {model}: {reason}"
+            return reason
         checks = await self.check(self.step, number)
         entry["verify"] = [asdict(result) for result in checks]
         failed = next((result for result in checks if not result.ok), None)
