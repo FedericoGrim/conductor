@@ -51,6 +51,18 @@ Other providers are listed with "no balance API known". Amounts are never conver
 
 Whether Conductor pays off is measured with the protocol in [docs/measurements.md](docs/measurements.md), which also holds the results.
 
+## Statistics
+
+`conductor stats [--repo PATH]` reads the run logs under `.conductor/runs` of a repository and reports, per run and per step: the status, the attempts, the models, the cost, whether the step was approved on the first try, the hand commits (human commits on the step's files since the run finished) and the brain's token usage. It backs the measurement protocol in [docs/measurements.md](docs/measurements.md).
+
+```
+$ conductor stats
+run 2026-11-13T15-32-28  privacy dogfood  finished 2026-11-13T15:32:37+00:00
+  step hello-script  approved  attempts 1  first try yes  models claude-code/sonnet  cost 0.0000 USD  subscription 0.0497 USD  hand commits 0
+  total  cost 0.0000 USD  subscription 0.0497 USD
+  brain ses_abc  claude-agent/opus  replies 12  output 3400  reasoning 900  input 50  cache write 12000  cache read 45000
+```
+
 ## Setup
 
 `conductor setup` is a terminal UI for `conductor.toml`, meant to be reopened whenever a provider changes its catalog or prices. Conductor ships three complete profiles (`low`, `medium`, `high`), so the UI opens on something that already works: you change a model, not the structure. The shipped ladders pick the strongest model per dollar at each difficulty level (SWE-bench Verified and Pro, plus measured cost per task); the reasoning is in decision 008. Every paid level and reviewer also falls back on a second provider that keeps the profile's data policy — the DeepSeek API for `low`, Vercel AI Gateway without prompt training for `medium`, Scaleway in Paris for `high` — so an OpenRouter outage does not stop a run (decision 014). Those fallbacks need `DEEPSEEK_API_KEY`, `AI_GATEWAY_API_KEY` or `SCALEWAY_API_KEY`; without the key a fallback is simply skipped.

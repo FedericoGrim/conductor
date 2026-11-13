@@ -9,7 +9,7 @@ import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from conductor import billing, reviewer, settings, setup_tui
+from conductor import billing, reviewer, settings, setup_tui, stats
 from conductor.config import Config, ConfigError, Profile
 from conductor.escalation import RunState, run_step
 from conductor.harness import harness_for
@@ -223,6 +223,13 @@ def show_projects_spend(args: argparse.Namespace) -> int:
     return 0
 
 
+def show_stats(args: argparse.Namespace) -> int:
+    project = project_root(args.repo.resolve())
+    for line in stats.format_report(stats.collect(project)):
+        print(line)
+    return 0
+
+
 def config_path(explicit: Path | None) -> Path:
     return explicit or next(
         (candidate for candidate in DEFAULT_CONFIG_PATHS if candidate.exists()),
@@ -330,6 +337,14 @@ def build_parser() -> argparse.ArgumentParser:
     projects = reports.add_parser("projects", help="spend of the last days, split by project")
     projects.add_argument("--days", type=int, default=30, help="length of the period in days")
     projects.set_defaults(handler=show_projects_spend)
+
+    statistics = commands.add_parser(
+        "stats",
+        help="per run and per step: status, attempts, cost, first-try approval, "
+        "hand commits and brain tokens",
+    )
+    statistics.add_argument("--repo", type=Path, default=Path("."), help="repository to report on")
+    statistics.set_defaults(handler=show_stats)
     return parser
 
 

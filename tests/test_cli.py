@@ -324,6 +324,62 @@ def test_billing_project_outside_a_repository_is_an_error(
     assert "not a git repository" in capsys.readouterr().err
 
 
+def test_stats_prints_the_run_and_step_lines(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = init_repo(tmp_path)
+    run = {
+        "started_at": "2026-11-13T15:32:28+00:00",
+        "finished_at": "2026-11-13T15:32:37+00:00",
+        "privacy": "medium",
+        "plan": {"steps": [{"id": "a", "files": ["output.txt"]}]},
+        "steps": {
+            "a": {
+                "status": "approved",
+                "attempts": 1,
+                "models": ["openrouter/cheap"],
+                "cost": 0.01,
+                "subscription": 0.02,
+            }
+        },
+        "cost": 0.01,
+        "subscription": 0.02,
+    }
+    run_dir = repo / ".conductor" / "runs" / "2026-11-13T15-32-28"
+    run_dir.mkdir(parents=True)
+    (run_dir / "run.json").write_text(json.dumps(run))
+
+    assert cli.main(["stats", "--repo", str(repo)]) == 0
+
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0] == (
+        "run 2026-11-13T15-32-28  privacy medium  finished 2026-11-13T15:32:37+00:00"
+    )
+    assert lines[1] == (
+        "  step a  approved  attempts 1  first try yes  models openrouter/cheap  "
+        "cost 0.0100 USD  subscription 0.0200 USD  hand commits 0"
+    )
+    assert lines[2] == "  total  cost 0.0100 USD  subscription 0.0200 USD"
+    assert lines[3] == "  brain n/a"
+
+
+def test_stats_says_when_there_are_no_runs(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = init_repo(tmp_path)
+
+    assert cli.main(["stats", "--repo", str(repo)]) == 0
+
+    assert capsys.readouterr().out == "no runs recorded\n"
+
+
+def test_stats_outside_a_repository_is_an_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert cli.main(["stats", "--repo", str(tmp_path)]) == 2
+    assert "not a git repository" in capsys.readouterr().err
+
+
 def test_a_ledger_that_cannot_be_written_does_not_fail_the_run(
     tmp_path: Path,
     isolated_data_home: Path,
