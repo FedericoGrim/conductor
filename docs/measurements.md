@@ -50,3 +50,10 @@ One row per task with Conductor, from the first counted run on.
 
 | Task | Active user time | Elapsed to PR | Brain tokens (output + reasoning) | Brain tokens (cache read) | Workers + reviewer | Steps (first try / total) | Hand fixes | Size |
 |---|---|---|---|---|---|---|---|---|
+| #37: protocol and `conductor stats` (2026-11-13) | 33 min (16:51–17:24) | 38 min | 38,148 (26,924 + 11,224), 50 replies of Claude Opus | 8,025,162 | $1.068 in 3 runs | 1 / 4 (10 attempts) | 2 commits (a missing case in `stats-report`), 2 reruns of `stats-cli` with a sharper spec | 7 commits, 13 files, +1,469 / −7, tests +625 |
+
+Notes on the #37 row:
+- The brain tokens cover the task from its start to the PR; the cache read is the brain re-reading its context, not new work.
+- 3 of the 10 attempts were wasted by #61 (the worker loaded the user's personal `dev-workflow` skill and stopped to present a plan or ask for approval): $0.023 directly, plus the escalations they caused.
+- One rejection was wrong: run alone, `stats-cli` was reviewed on its diff only, without knowing that `conductor/stats.py` already existed (#36).
+- The worker commits were renamed by hand from `chore(conductor): apply step ...` to `feat(...)` so that release-please sees them (#62).
