@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.5.1](https://github.com/FedericoGrim/conductor/compare/conductor-v0.5.0...conductor-v0.5.1) (2026-11-13)
+
+
+### Bug Fixes
+
+* **escalation:** reject an attempt whose commit the git hooks refuse ([e24c682](https://github.com/FedericoGrim/conductor/commit/e24c68281f5ffac177d6a63cc889de8068bf5b24)), closes [#31](https://github.com/FedericoGrim/conductor/issues/31)
+* **merge:** use a conventional merge message and report hook rejections ([869e003](https://github.com/FedericoGrim/conductor/commit/869e003cbdf3b6b623ae7f77af0851ebb778955e)), closes [#31](https://github.com/FedericoGrim/conductor/issues/31)
+* run through the target repository's git hooks instead of crashing ([73ca1fe](https://github.com/FedericoGrim/conductor/commit/73ca1fe47c722d0cf98ca29d442c41603be5ec14))
+* **scheduler:** fail a step that raises instead of stopping the run ([cf988fa](https://github.com/FedericoGrim/conductor/commit/cf988fa4cad7a9414d3543e0912a4e7b9ff3ce40)), closes [#31](https://github.com/FedericoGrim/conductor/issues/31)
+* **worker:** commit with a conventional message and report hook rejections ([62a7f7e](https://github.com/FedericoGrim/conductor/commit/62a7f7efa18392c2697bd2c4797a551c4084865f)), closes [#31](https://github.com/FedericoGrim/conductor/issues/31)
+
+
+### Documentation
+
+* describe both worker harnesses in CLAUDE.md ([5f42f6c](https://github.com/FedericoGrim/conductor/commit/5f42f6c0f994afb4f7172ed14dcb6efd0531d104))
+* describe both worker harnesses in CLAUDE.md ([d9979e9](https://github.com/FedericoGrim/conductor/commit/d9979e940da597fa38cd3d40b5c3c0255d0e4abf)), closes [#31](https://github.com/FedericoGrim/conductor/issues/31)
+* describe how runs meet the target repository's git hooks ([228245b](https://github.com/FedericoGrim/conductor/commit/228245b06f5075ebea67f89b2852e851fd836cb4)), closes [#31](https://github.com/FedericoGrim/conductor/issues/31)
+
 ## [0.5.0](https://github.com/FedericoGrim/conductor/compare/conductor-v0.4.0...conductor-v0.5.0) (2026-11-12)
 
 
