@@ -14,6 +14,7 @@ from conductor.errors import ModelError
 
 EVENT_LINE_LIMIT = 64 * 1024 * 1024
 STOP_GRACE_SECONDS = 10
+HOOK_OUTPUT_LIMIT = 4000
 
 StopCondition = Callable[[str], bool]
 Runner = Callable[[list[str], Path, StopCondition], Awaitable[tuple[int, str, str]]]
@@ -48,6 +49,7 @@ class AttemptOutput:
     error: ModelError | None = None
     final_text: str = ""
     subscription_cost: float = 0.0
+    commit_rejection: str | None = None
 
 
 def git(cwd: Path, *args: str) -> str:
@@ -86,22 +88,38 @@ def parse_events(stdout: str) -> Events:
     return events
 
 
-def commit_work(worktree: Path, message: str) -> bool:
-    git(worktree, "add", "-A")
-    if not git(worktree, "status", "--porcelain").strip():
-        return False
-    git(
-        worktree,
-        "-c",
-        "user.name=conductor",
-        "-c",
-        "user.email=conductor@local",
-        "commit",
-        "-q",
-        "-m",
-        message,
-    )
-    return True
+def attempt_commit_message(step_id: str, number: int) -> str:
+    return f"chore(conductor): apply step {step_id} attempt {number}"
+
+
+def commit_work(worktree: Path, message: str) -> str | None:
+    """Commit every change; return the hooks' output when they reject the commit, else None."""
+    rejection: str | None = None
+    # A hook may fix the files (formatters) and still fail: stage its fixes and try once more.
+    for _ in range(2):
+        git(worktree, "add", "-A")
+        if not git(worktree, "status", "--porcelain").strip():
+            return None
+        completed = subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=conductor",
+                "-c",
+                "user.email=conductor@local",
+                "commit",
+                "-q",
+                "-m",
+                message,
+            ],
+            cwd=worktree,
+            capture_output=True,
+            text=True,
+        )
+        if completed.returncode == 0:
+            return None
+        rejection = (completed.stdout + completed.stderr).strip()[-HOOK_OUTPUT_LIMIT:]
+    return rejection
 
 
 def diff_against(worktree: Path, base: str) -> str:
@@ -177,7 +195,7 @@ async def run_attempt(
     should_stop = retry_limit(transient_attempts, harness.is_retry)
     exit_code, stdout, stderr = await runner(command, worktree, should_stop)
     events = parse_events(stdout)
-    commit_work(worktree, commit_message)
+    commit_rejection = commit_work(worktree, commit_message)
     return AttemptOutput(
         exit_code=exit_code,
         session_id=harness.session_id(events),
@@ -189,4 +207,5 @@ async def run_attempt(
         error=harness.error(events, exit_code, stderr),
         final_text=harness.final_text(events),
         subscription_cost=harness.subscription_cost(events) if harness.subscription_cost else 0.0,
+        commit_rejection=commit_rejection,
     )

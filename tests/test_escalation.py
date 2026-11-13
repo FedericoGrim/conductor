@@ -24,10 +24,20 @@ STEP = Step("s1", "Parser", "write a parser", ("parser.py",), 2, ())
 
 
 def output(
-    diff: str = "+code", exit_code: int = 0, cost: float = 0.0, error: ModelError | None = None
+    diff: str = "+code",
+    exit_code: int = 0,
+    cost: float = 0.0,
+    error: ModelError | None = None,
+    commit_rejection: str | None = None,
 ) -> AttemptOutput:
     return AttemptOutput(
-        exit_code=exit_code, session_id="ses", events=[], diff=diff, cost=cost, error=error
+        exit_code=exit_code,
+        session_id="ses",
+        events=[],
+        diff=diff,
+        cost=cost,
+        error=error,
+        commit_rejection=commit_rejection,
     )
 
 
@@ -508,3 +518,28 @@ def test_a_subscription_cost_is_recorded_apart_from_the_billed_cost() -> None:
         "reviewer": None,
         "subscription": pytest.approx(0.012),
     }
+
+
+def test_a_commit_rejected_by_a_hook_rejects_the_attempt_with_the_hook_output() -> None:
+    reviewed: list[str] = []
+    checked: list[int] = []
+    result, calls, recorded = run(
+        [Verdict(True, "ok", "{}")],
+        outputs=[output(diff="", commit_rejection="ruff: F401 unused import"), output()],
+        reviewed=reviewed,
+        checked=checked,
+    )
+    assert result.status == "approved"
+    assert [c[1] for c in calls] == ["openrouter/t1", "openrouter/t2"]
+    assert reviewed == ["openrouter/r"]
+    assert checked == [2]
+    assert recorded[0]["commit_rejection"] == "ruff: F401 unused import"
+    assert "git hooks rejected the commit" in calls[1][2]
+    assert "ruff: F401 unused import" in calls[1][2]
+
+
+def test_a_commit_rejected_on_the_last_level_fails_the_step() -> None:
+    rejected = output(diff="", commit_rejection="mypy: error")
+    result, _, _ = run([], outputs=[rejected, rejected])
+    assert result.status == "failed"
+    assert "git hooks rejected the commit" in result.detail

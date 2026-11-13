@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from conductor.config import Profile, Provider
@@ -22,3 +23,16 @@ def make_profile(
         (reviewer,),
         max_parallel,
     )
+
+
+def install_git_hook(repo: Path, name: str, script: str) -> None:
+    hook = repo / ".git" / "hooks" / name
+    hook.parent.mkdir(parents=True, exist_ok=True)
+    hook.write_text("#!/bin/sh\n" + script)
+    hook.chmod(0o755)
+
+
+CONVENTIONAL_COMMIT_HOOK = (
+    "grep -qE '^(build|chore|ci|docs|feat|fix|perf|refactor|style|test)(\\(.+\\))?!?: ' \"$1\""
+    " || { echo 'Bad commit message'; exit 1; }\n"
+)

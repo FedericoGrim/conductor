@@ -35,7 +35,11 @@ async def run_plan(plan: Plan, max_parallel: int, execute: Executor) -> dict[str
 
     async def guarded(step: Step) -> StepResult:
         async with gate:
-            return await execute(step)
+            try:
+                return await execute(step)
+            except Exception as error:
+                detail = f"internal error: {type(error).__name__}: {error}"
+                return StepResult(step.id, FAILED, detail)
 
     while len(results) < len(plan.steps):
         for step in plan.ready(done=results):
