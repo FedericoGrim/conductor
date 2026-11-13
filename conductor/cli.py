@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import subprocess
 import sys
 from datetime import UTC, datetime, timedelta
@@ -143,7 +144,8 @@ def run(args: argparse.Namespace) -> int:
     if git(repo, "status", "--porcelain").strip():
         print("error: repository has uncommitted changes; commit or stash them first")
         return 2
-    log = RunLog.create(repo, plan, profile.name)
+    brain_session = args.session or os.environ.get("OPENCODE_SESSION_ID") or None
+    log = RunLog.create(repo, plan, profile.name, brain_session=brain_session)
     print(f"run {log.directory.name}: {len(plan.steps)} steps, privacy {profile.name}")
     results = asyncio.run(execute_plan(repo, plan, profile, log, args.opencode_arg, rules))
     log.finish(results)
@@ -286,6 +288,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         help="extra argument passed to every `opencode run` (repeatable)",
+    )
+    execute.add_argument(
+        "--session",
+        help=(
+            "the brain's OpenCode session id, recorded in run.json (default: $OPENCODE_SESSION_ID)"
+        ),
     )
     execute.set_defaults(handler=run)
 

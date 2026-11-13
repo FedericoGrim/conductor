@@ -147,7 +147,10 @@ def test_run_executes_reviews_and_merges(
         "last_attempt": "step-a/attempt-2.json",
         "question": None,
         "cost": pytest.approx(0.022),
+        "subscription": None,
     }
+    assert run["brain_session"] is None
+    assert run["subscription"] is None
     assert run["cost"] == pytest.approx(0.033)
     assert read_ledger() == [
         {
@@ -421,6 +424,7 @@ def run_verified_plan(
     monkeypatch: pytest.MonkeyPatch,
     plan_fields: dict[str, Any],
     prepare: Callable[[Path], None] = lambda repo: None,
+    extra_args: tuple[str, ...] = (),
 ) -> tuple[int, Path, list[dict[str, Any]]]:
     repo = init_repo(tmp_path)
     prepare(repo)
@@ -439,7 +443,7 @@ def run_verified_plan(
         return {"choices": [{"message": {"content": content}}], "usage": {"cost": 0.001}}
 
     monkeypatch.setattr(reviewer, "http_post", fake_post)
-    code = cli.main(["run", str(plan), "--config", str(config), "--repo", str(repo)])
+    code = cli.main(["run", str(plan), "--config", str(config), "--repo", str(repo), *extra_args])
     return code, repo, requests
 
 
@@ -481,3 +485,24 @@ def test_run_stops_before_any_attempt_when_the_rules_file_is_missing(
     assert code == 2
     assert "docs/missing.md" in capsys.readouterr().err
     assert not (repo / "output.txt").exists()
+
+
+def test_run_records_the_brain_session_option_in_run_json(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    code, repo, _ = run_verified_plan(tmp_path, monkeypatch, {}, extra_args=("--session", "ses_x"))
+    assert code == 0
+    run_dir = next((repo / ".conductor" / "runs").iterdir())
+    run = json.loads((run_dir / "run.json").read_text())
+    assert run["brain_session"] == {"harness": "opencode", "id": "ses_x"}
+
+
+def test_run_takes_the_brain_session_from_the_environment_without_the_option(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OPENCODE_SESSION_ID", "ses_env")
+    code, repo, _ = run_verified_plan(tmp_path, monkeypatch, {})
+    assert code == 0
+    run_dir = next((repo / ".conductor" / "runs").iterdir())
+    run = json.loads((run_dir / "run.json").read_text())
+    assert run["brain_session"] == {"harness": "opencode", "id": "ses_env"}
