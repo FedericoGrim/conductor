@@ -17,7 +17,7 @@ Conductor takes a `plan.json` produced by a planning model (Claude in Claude Cod
    - Reviewer error: an HTTP or network failure, a missing key or an unparseable verdict moves to the next reviewer without costing the worker a level, and an unusable reviewer provider is excluded for the run (separately from the workers, whose keys live in OpenCode). The failed reviewers are listed in the attempt's `review_fallbacks`. When every reviewer fails, the diff goes to the brain as `needs_brain_review`, with the error in `review.error`; the run goes on and the step is never approved.
 8. Question: when the spec leaves open a decision with different consequences, the worker stops before changing files and ends its reply with a `QUESTION:` block. The step becomes `needs_answer` (not reviewed, not escalated, nothing merged), the question is in `run.json`, and its dependents are `skipped`. The brain answers it, or asks the user, and reruns the step with `answers`.
 9. Approved: the branch is merged into the current branch; a conflict, or a hook refusing the merge commit `chore(conductor): merge <branch>`, is reported as `conflict` and the branch is kept for the brain. An unexpected error inside a step ends that step as `failed` and the run goes on.
-10. `.conductor/runs/<timestamp>/run.json` summarises the run; `step-<id>/attempt-<n>.json` holds the prompt, the full OpenCode event transcript, the diff, any hook output that refused the commit (`commit_rejection`) and the reviewer's verdict of every attempt.
+10. `.conductor/runs/<timestamp>/run.json` summarises the run, records the brain's session (`--session`, default `$OPENCODE_SESSION_ID`) and totals the subscription estimate of the attempts apart from the billed cost; `step-<id>/attempt-<n>.json` holds the prompt, the full OpenCode event transcript, the diff, any hook output that refused the commit (`commit_rejection`) and the reviewer's verdict of every attempt.
 
 ## Privacy levels
 
@@ -48,6 +48,20 @@ Balances come from the provider behind each profile's `base_url`:
 | Scaleway Generative APIs | consumption of the current month in EUR (pay as you go, no prepaid balance) | `SCW_ORGANIZATION_ID`, and a key allowed to read billing |
 
 Other providers are listed with "no balance API known". Amounts are never converted between currencies.
+
+Whether Conductor pays off is measured with the protocol in [docs/measurements.md](docs/measurements.md), which also holds the results.
+
+## Statistics
+
+`conductor stats [--repo PATH]` reads the run logs under `.conductor/runs` of a repository and reports, per run and per step: the status, the attempts, the models, the cost, whether the step was approved on the first try, the hand commits (human commits on the step's files since the run finished) and the brain's token usage. It backs the measurement protocol in [docs/measurements.md](docs/measurements.md).
+
+```
+$ conductor stats
+run 2026-11-13T15-32-28  privacy dogfood  finished 2026-11-13T15:32:37+00:00
+  step hello-script  approved  attempts 1  first try yes  models claude-code/sonnet  cost 0.0000 USD  subscription 0.0497 USD  hand commits 0
+  total  cost 0.0000 USD  subscription 0.0497 USD
+  brain ses_abc  claude-agent/opus  replies 12  output 3400  reasoning 900  input 50  cache write 12000  cache read 45000
+```
 
 ## Setup
 
