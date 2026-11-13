@@ -7,7 +7,7 @@ from conductor.worker import HOOK_OUTPUT_LIMIT, git
 
 
 def merge_branch(repo: Path, branch: str, into: str) -> str | None:
-    """Merge `branch` into `into` inside `repo`; returns the conflict description or None."""
+    """Merge `branch` into `into`; return why it could not (conflict, hook), or None."""
     git(repo, "checkout", "-q", into)
     completed = subprocess.run(
         [
