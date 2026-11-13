@@ -77,7 +77,7 @@ def collect(
     token_cache: dict[str, dict[str, TokenUsage] | None] = {}
     runs: list[RunStats] = []
     for run_dir in run_dirs:
-        run = _read_json_object((run_dir / "run.json").read_text())
+        run = _read_run(run_dir / "run.json")
         if run is None:
             continue
         runs.append(_run_stats(repo, run_dir.name, run, hand, tokens, token_cache))
@@ -93,10 +93,10 @@ def format_report(runs: list[RunStats]) -> list[str]:
     return lines
 
 
-def _read_json_object(text: str) -> dict[str, Any] | None:
+def _read_run(path: Path) -> dict[str, Any] | None:
     try:
-        data = json.loads(text)
-    except json.JSONDecodeError:
+        data = json.loads(path.read_text())
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return None
     return data if isinstance(data, dict) else None
 
