@@ -79,3 +79,18 @@ def test_dependents_of_a_step_waiting_for_an_answer_are_skipped() -> None:
 
     results = asyncio.run(run_plan(plan, max_parallel=4, execute=execute))
     assert results["b"].status == "skipped"
+
+
+def test_an_unexpected_error_in_a_step_fails_it_and_the_run_goes_on() -> None:
+    plan = make_plan(("a", []), ("b", ["a"]), ("c", []))
+
+    async def execute(step: Step) -> StepResult:
+        if step.id == "a":
+            raise RuntimeError("git exploded")
+        return StepResult(step.id, "approved")
+
+    results = asyncio.run(run_plan(plan, max_parallel=4, execute=execute))
+    assert results["a"].status == "failed"
+    assert results["a"].detail == "internal error: RuntimeError: git exploded"
+    assert results["b"].status == "skipped"
+    assert results["c"].status == "approved"
