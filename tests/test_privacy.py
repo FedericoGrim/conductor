@@ -244,6 +244,8 @@ def test_write_pi_config_writes_models_json_and_excludes_the_agent_dir(tmp_path:
     repo = tmp_path / "repo"
     repo.mkdir()
     git(repo, "init", "-q", "-b", "main")
+    git(repo, "config", "user.name", "test")
+    git(repo, "config", "user.email", "test@example.com")
     (repo / "README.md").write_text("hi\n")
     git(repo, "add", ".")
     git(repo, "commit", "-q", "-m", "init")
