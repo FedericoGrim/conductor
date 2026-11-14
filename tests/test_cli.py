@@ -125,7 +125,7 @@ def test_run_executes_reviews_and_merges(
 
     def fake_post(url: str, headers: dict[str, str], body: dict[str, Any]) -> dict[str, Any]:
         ok, reason = next(verdicts)
-        content = json.dumps({"ok": ok, "reason": reason})
+        content = json.dumps({"ok": ok, "category": "logic" if not ok else None, "reason": reason})
         return {"choices": [{"message": {"content": content}}], "usage": {"cost": 0.001}}
 
     monkeypatch.setattr(reviewer, "http_post", fake_post)
