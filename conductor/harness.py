@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from conductor import credentials
 from conductor.config import Profile, provider_of
 from conductor.errors import (
     MODEL_UNSUITABLE,
@@ -19,6 +20,7 @@ from conductor.privacy import (
     api_model_id,
     opencode_config,
     pi_config,
+    pi_key_variables,
     write_pi_config,
 )
 from conductor.worker import Events, Harness, exclude_from_git, no_environment
@@ -230,6 +232,7 @@ PI_RETRY_START = "auto_retry_start"
 PI_RETRY_END = "auto_retry_end"
 PI_ASSISTANT = "assistant"
 PI_TEXT_BLOCK = "text"
+PI_STOP_ERROR = "error"
 # Pi reports API errors as strings, and the OpenAI-compatible client prefixes the HTTP
 # status to the text ("401 Incorrect API key provided", "Connection error.").
 PI_STATUS_CODE = re.compile(r"\b[45]\d{2}\b")
@@ -257,7 +260,19 @@ def pi_command(model: str, prompt: str, extra_args: list[str]) -> list[str]:
 
 
 def pi_environment(worktree: Path) -> dict[str, str]:
-    return {"PI_CODING_AGENT_DIR": str(worktree / PI_AGENT_DIR)}
+    """Pi's process environment: its agent directory, and the keys its config references.
+
+    `models.json` names each provider's key variable, not the key; Pi reads the value from
+    the environment, so it never reaches a file. OpenCode and Claude Code keep their own
+    stored credentials and need none of this.
+    """
+    agent_dir = worktree / PI_AGENT_DIR
+    environment = {"PI_CODING_AGENT_DIR": str(agent_dir)}
+    for name in pi_key_variables(agent_dir):
+        key = credentials.api_key(name)
+        if key:
+            environment[name] = key
+    return environment
 
 
 def pi_prepare(worktree: Path, profile: Profile) -> None:
@@ -346,12 +361,10 @@ def pi_kind(status: Any, message: str) -> str:
 def pi_error(events: Events, exit_code: int, stderr: str) -> ModelError | None:
     """Classify a failed attempt from the final error text in its stream.
 
-    Pi reports errors as strings that carry the HTTP status in their text when there is
-    one: the last auto_retry_end's finalError first, then the last assistant messages'
-    stopReason/errorMessage; nothing at all is an unclassified exit.
+    Pi exits 0 even when the provider refused the request, reporting the failure as the last
+    assistant message's `stopReason`/`errorMessage`, so the stream is read whatever the exit
+    code; only an exit with nothing to classify is an unclassified error.
     """
-    if exit_code == 0:
-        return None
     retry_end = next(
         (event for event in reversed(events) if event.get("type") == PI_RETRY_END),
         None,
@@ -359,15 +372,17 @@ def pi_error(events: Events, exit_code: int, stderr: str) -> ModelError | None:
     reported: list[str] = []
     if retry_end is not None and retry_end.get("finalError"):
         reported.append(str(retry_end["finalError"]))
-    reported.extend(
-        str(message.get("errorMessage") or message.get("stopReason") or "")
-        for message in pi_assistant_messages(events)
-    )
-    for message in reported:
-        if not message:
-            continue
-        status = pi_status(message)
-        return ModelError.of(pi_kind(status, message), f"pi-{status or 'error'}", message)
+    for message in pi_assistant_messages(events):
+        failure = message.get("errorMessage")
+        if not failure and message.get("stopReason") == PI_STOP_ERROR:
+            failure = PI_STOP_ERROR
+        if failure:
+            reported.append(str(failure))
+    for reason in reported:
+        status = pi_status(reason)
+        return ModelError.of(pi_kind(status, reason), f"pi-{status or 'error'}", reason)
+    if exit_code == 0:
+        return None
     return ModelError.of(UNCLASSIFIED, f"exit {exit_code}", stderr)
 
 

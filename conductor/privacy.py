@@ -122,3 +122,21 @@ def write_pi_config(worktree: Path, config: dict[str, Any]) -> None:
     agent_dir.mkdir(parents=True, exist_ok=True)
     (agent_dir / PI_CONFIG_NAME).write_text(json.dumps(config, indent=2) + "\n")
     exclude_from_git(worktree, PI_AGENT_DIR + "/")
+
+
+def pi_key_variables(agent_dir: Path) -> tuple[str, ...]:
+    """The key variables the written models.json references, in order and without duplicates."""
+    try:
+        config = json.loads((agent_dir / PI_CONFIG_NAME).read_text())
+    except (OSError, json.JSONDecodeError):
+        return ()
+    providers = config.get("providers") if isinstance(config, dict) else None
+    if not isinstance(providers, dict):
+        return ()
+    return tuple(
+        dict.fromkeys(
+            entry["apiKey"]
+            for entry in providers.values()
+            if isinstance(entry, dict) and isinstance(entry.get("apiKey"), str) and entry["apiKey"]
+        )
+    )

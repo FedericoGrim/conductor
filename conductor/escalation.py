@@ -224,7 +224,7 @@ class StepRun:
             output = await self.attempt(self.step, number, model, prompt)
             entry = attempt_entry(number, tier, model, prompt, output)
             self.result.attempts.append(entry)
-            if output.exit_code == 0:
+            if output.exit_code == 0 and output.error is None:
                 return await self.judge_attempt(number, model, output, entry)
             error = output.error or ModelError.of(
                 UNCLASSIFIED, f"exit {output.exit_code}", output.stderr
