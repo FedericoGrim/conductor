@@ -20,7 +20,6 @@ from conductor.scheduler import APPROVED, CONFLICT, StepResult, run_plan
 from conductor.verify import CheckResult, run_checks
 from conductor.worker import (
     AttemptOutput,
-    attempt_commit_message,
     create_worktree,
     exclude_from_git,
     git,
@@ -97,9 +96,11 @@ async def execute_plan(
             model,
             prompt,
             extra_args,
-            attempt_commit_message(step.id, number),
             transient_attempts=profile.transient_attempts,
             harness=harness,
+            step_id=step.id,
+            number=number,
+            planned=step.commit,
         )
 
     def judge(model: str, spec: str, diff: str, checks: list[CheckResult]) -> reviewer.Verdict:

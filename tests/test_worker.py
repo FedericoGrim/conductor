@@ -18,7 +18,6 @@ from conductor.harness import (
     write_opencode_config,
 )
 from conductor.worker import (
-    attempt_commit_message,
     commit_work,
     create_worktree,
     diff_against,
@@ -280,12 +279,6 @@ def test_commit_work_without_changes_commits_nothing(tmp_path: Path) -> None:
     repo = init_repo(tmp_path)
     assert commit_work(repo, "chore(conductor): apply step s1 attempt 1") is None
     assert git(repo, "log", "--oneline").count("\n") == 1
-
-
-def test_attempt_commit_message_is_a_conventional_commit() -> None:
-    assert attempt_commit_message("parse-input", 2) == (
-        "chore(conductor): apply step parse-input attempt 2"
-    )
 
 
 def test_run_attempt_reports_a_commit_rejected_by_a_hook(tmp_path: Path) -> None:

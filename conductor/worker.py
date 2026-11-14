@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from conductor.commits import choose_commit_message
 from conductor.config import Profile
 from conductor.errors import ModelError
 
@@ -86,10 +87,6 @@ def parse_events(stdout: str) -> Events:
         if isinstance(event, dict):
             events.append(event)
     return events
-
-
-def attempt_commit_message(step_id: str, number: int) -> str:
-    return f"chore(conductor): apply step {step_id} attempt {number}"
 
 
 def commit_work(worktree: Path, message: str) -> str | None:
@@ -186,15 +183,23 @@ async def run_attempt(
     model: str,
     prompt: str,
     extra_args: list[str],
-    commit_message: str,
     transient_attempts: int,
     harness: Harness,
     runner: Runner = subprocess_runner,
+    *,
+    step_id: str | None = None,
+    number: int | None = None,
+    planned: str | None = None,
+    commit_message: str | None = None,
 ) -> AttemptOutput:
     command = harness.command(model, prompt, extra_args)
     should_stop = retry_limit(transient_attempts, harness.is_retry)
     exit_code, stdout, stderr = await runner(command, worktree, should_stop)
     events = parse_events(stdout)
+    worker_text = harness.final_text(events)
+    if commit_message is None:
+        assert step_id is not None and number is not None
+        commit_message = choose_commit_message(step_id, number, model, worker_text, planned)
     commit_rejection = commit_work(worktree, commit_message)
     return AttemptOutput(
         exit_code=exit_code,
@@ -205,7 +210,7 @@ async def run_attempt(
         command=command,
         cost=harness.cost(events),
         error=harness.error(events, exit_code, stderr),
-        final_text=harness.final_text(events),
+        final_text=worker_text,
         subscription_cost=harness.subscription_cost(events) if harness.subscription_cost else 0.0,
         commit_rejection=commit_rejection,
     )
