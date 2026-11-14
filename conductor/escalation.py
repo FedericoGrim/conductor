@@ -4,6 +4,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from conductor.commits import COMMIT_MARKER
 from conductor.config import Profile, provider_of
 from conductor.errors import PROVIDER_UNUSABLE, UNCLASSIFIED, ModelError
 from conductor.plan import Step
@@ -30,17 +31,46 @@ NO_REVIEWER = "every reviewer provider is excluded for this run"
 
 QUESTION_MARKER = "QUESTION:"
 QUESTION_LIMIT = 4000
-WORKING_RULES = (
-    "# How to work\n"
-    "Work only inside the current repository. Do not commit.\n"
-    "Make mechanical choices yourself (names, formatting, local structure), and any choice "
-    "that the spec, the existing code or the answers below already settle.\n"
-    "If the task needs a decision that none of them settles and whose options have different "
-    "consequences (behaviour, interfaces, data, security), do not guess. Stop before changing "
-    "files and end your reply with a block whose first line is "
+BRIEF = (
+    "# Context\n"
+    "The plan is already approved; do the work now: do not present a plan and do not ask for "
+    "approval. Do not load skills or personal instructions: follow only this repository's own "
+    "instructions (AGENTS.md / CLAUDE.md). Work only inside the current repository. Do not "
+    "commit: Conductor commits your changes.\n"
+    "# Method\n"
+    "Read the files listed and the code around them first. Follow the existing style and "
+    "conventions. Write the tests for new or changed behaviour first, then the code. Stay "
+    "within this task's scope and do not touch files it does not need.\n"
+    "# Before you finish\n"
+    "Conductor commits through the repository's git hooks (for example pre-commit: linters, "
+    "formatters, type checks) and rejects the attempt if they fail. Run them yourself on the "
+    "files you changed, if the repository has any, and fix every error.\n"
+    "# Questions\n"
+    "Make mechanical choices yourself, and any choice that the spec, the existing code or the "
+    "answers below already settle. If the task needs a decision that nothing settles and whose "
+    "options have different consequences (behaviour, interfaces, data, security), do not "
+    "guess. Stop before changing files and end your reply with a block whose first line is "
     f"`{QUESTION_MARKER} <the question>`, followed by the options with their consequences and "
-    "what you have already established."
+    "what you have already established.\n"
+    "# Finish\n"
+    "When the work is done, end your reply with one line "
+    f"`{COMMIT_MARKER} <message>`: a Conventional Commit subject in English, imperative mood, "
+    "at most 72 characters, `type(optional-scope): subject`, the type matching the change "
+    "(feat new behaviour, fix bug fix, test tests only, docs documentation only, refactor no "
+    "behaviour change, perf, build, ci, style, chore)."
 )
+
+
+def verification_section(verify: tuple[str, ...]) -> str:
+    commands = "\n".join(f"- `{command}`" for command in verify)
+    return (
+        "# Verification\n"
+        "Conductor runs these commands in your worktree after you finish and rejects the "
+        "attempt if any fails; run them yourself before finishing. `$CONDUCTOR_REPO` stands "
+        "for the main repository (where the virtualenv lives) and is set only when Conductor "
+        "runs them, so set it yourself to the first path printed by `git worktree list` "
+        f"before running them.\n{commands}"
+    )
 
 
 def question_in(final_text: str) -> str | None:
@@ -51,14 +81,21 @@ def question_in(final_text: str) -> str | None:
     return "\n".join(lines[starts[-1] :]).strip()[:QUESTION_LIMIT]
 
 
-def build_prompt(goal: str, step: Step, feedback: str | None = None) -> str:
+def build_prompt(
+    goal: str,
+    step: Step,
+    feedback: str | None = None,
+    verify: tuple[str, ...] = (),
+) -> str:
     files = "\n".join(f"- {f}" for f in step.files) or "- (not specified)"
     parts = [
         f"# Overall goal\n{goal}",
         f"# Your task: {step.title}\n{step.spec}",
         f"# Files expected to change\n{files}",
-        WORKING_RULES,
+        BRIEF,
     ]
+    if verify:
+        parts.append(verification_section(verify))
     if step.answers:
         answered = "\n\n".join(f"Q: {a.question}\nA: {a.answer}" for a in step.answers)
         parts.append(f"# Answers to your earlier questions\n{answered}")
@@ -86,9 +123,18 @@ async def run_step(
     goal: str = "",
     state: RunState | None = None,
     check: Check | None = None,
+    verify: tuple[str, ...] = (),
 ) -> StepResult:
     run = StepRun(
-        step, profile, attempt, judge, record, goal, state or RunState(), check or no_checks
+        step,
+        profile,
+        attempt,
+        judge,
+        record,
+        goal,
+        state or RunState(),
+        check or no_checks,
+        verify,
     )
     return await run.execute()
 
@@ -146,6 +192,7 @@ class StepRun:
     goal: str
     state: RunState
     check: Check
+    verify: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         self.result = StepResult(self.step.id, FAILED)
@@ -168,7 +215,7 @@ class StepRun:
             if provider_of(model) in self.state.excluded_worker_providers:
                 continue
             number = len(self.result.attempts) + 1
-            prompt = build_prompt(self.goal, self.step, feedback)
+            prompt = build_prompt(self.goal, self.step, feedback, self.verify)
             output = await self.attempt(self.step, number, model, prompt)
             entry = attempt_entry(number, tier, model, prompt, output)
             self.result.attempts.append(entry)

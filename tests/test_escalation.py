@@ -187,6 +187,52 @@ def test_prompt_contains_goal_spec_files_and_feedback() -> None:
         assert text in prompt
 
 
+def test_the_brief_sets_context_method_hooks_questions_and_commit() -> None:
+    prompt = build_prompt("ship v1", STEP)
+    assert "already approved" in prompt
+    assert "tests for new or changed behaviour first" in prompt
+    assert "git hooks" in prompt
+    assert "QUESTION:" in prompt
+    assert "COMMIT:" in prompt
+
+
+def test_verify_commands_appear_in_the_prompt() -> None:
+    prompt = build_prompt("ship v1", STEP, verify=("pytest -q", "ruff check ."))
+    assert "# Verification" in prompt
+    assert "- `pytest -q`" in prompt
+    assert "- `ruff check .`" in prompt
+    assert "run them yourself before finishing" in prompt
+    assert "$CONDUCTOR_REPO" in prompt
+    assert "git worktree list" in prompt
+
+
+def test_no_verification_section_without_verify_commands() -> None:
+    prompt = build_prompt("ship v1", STEP)
+    assert "# Verification" not in prompt
+
+
+def test_run_step_forwards_the_verify_commands_to_the_prompt() -> None:
+    prompts: list[str] = []
+
+    async def attempt(step: Step, number: int, model: str, prompt: str) -> AttemptOutput:
+        prompts.append(prompt)
+        return output()
+
+    result = asyncio.run(
+        run_step(
+            STEP,
+            PROFILE,
+            attempt=attempt,
+            judge=lambda *args: Verdict(True, "ok", "{}"),
+            record=lambda s, d: None,
+            verify=("pytest -q",),
+        )
+    )
+    assert result.status == "approved"
+    assert "# Verification" in prompts[0]
+    assert "- `pytest -q`" in prompts[0]
+
+
 def test_a_reviewer_error_hands_the_diff_to_the_brain_without_escalating() -> None:
     error = ModelError(TRANSIENT, "http-503", "unavailable")
     result, calls, recorded = run([Verdict(False, "reviewer unavailable", "", error=error)])

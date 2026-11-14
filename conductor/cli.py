@@ -112,7 +112,15 @@ async def execute_plan(
 
     async def execute(step: Step) -> StepResult:
         result = await run_step(
-            step, profile, attempt, judge, log.attempt, goal=plan.goal, state=state, check=check
+            step,
+            profile,
+            attempt,
+            judge,
+            log.attempt,
+            goal=plan.goal,
+            state=state,
+            check=check,
+            verify=plan.verify_for(step),
         )
         print(f"[{step.id}] {result.status}: {result.detail}", flush=True)
         numbers = [a["attempt"] for a in result.attempts]
