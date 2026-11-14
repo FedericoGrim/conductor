@@ -241,6 +241,8 @@ class Editor:
                     f"{name}/{model.id}",
                     model.prompt_price,
                     model.completion_price,
+                    model.cache_read_price,
+                    model.cache_write_price,
                     model.context,
                     model.supports_tools,
                 )
