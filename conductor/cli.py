@@ -99,8 +99,6 @@ async def execute_plan(
             extra_args,
             transient_attempts=profile.transient_attempts,
             harness=harness,
-            step_id=step.id,
-            number=number,
             commit_message=lambda final_text: choose_commit_message(
                 step.id, number, model, final_text, step.commit
             ),

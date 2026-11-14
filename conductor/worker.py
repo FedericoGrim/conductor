@@ -9,7 +9,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from conductor.commits import fallback_subject, is_conventional
 from conductor.config import Profile
 from conductor.errors import ModelError
 
@@ -188,8 +187,6 @@ async def run_attempt(
     harness: Harness,
     runner: Runner = subprocess_runner,
     *,
-    step_id: str,
-    number: int,
     commit_message: Callable[[str], str],
 ) -> AttemptOutput:
     command = harness.command(model, prompt, extra_args)
@@ -198,8 +195,6 @@ async def run_attempt(
     events = parse_events(stdout)
     final_text = harness.final_text(events)
     message = commit_message(final_text)
-    if not is_conventional(message.split("\n", 1)[0]):
-        message = fallback_subject(step_id, number)
     commit_rejection = commit_work(worktree, message)
     return AttemptOutput(
         exit_code=exit_code,
