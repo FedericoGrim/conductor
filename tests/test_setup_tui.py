@@ -22,8 +22,8 @@ from conductor.setup_tui import (
     save_config,
 )
 
-FLASH = CatalogModel("deepseek/flash", 0.3, 1.2, 128000, True)
-SONNET = CatalogModel("anthropic/sonnet", 2.0, 10.0, 500000, True)
+FLASH = CatalogModel("deepseek/flash", 0.3, 1.2, 0.0, 0.0, 128000, True)
+SONNET = CatalogModel("anthropic/sonnet", 2.0, 10.0, 0.0, 0.0, 500000, True)
 
 CONFIG = """
 default_privacy = "medium"

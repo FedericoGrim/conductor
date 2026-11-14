@@ -19,6 +19,8 @@ class CatalogModel:
     id: str
     prompt_price: float
     completion_price: float
+    cache_read_price: float
+    cache_write_price: float
     context: int
     supports_tools: bool
 
@@ -47,6 +49,8 @@ def parse_model(entry: dict[str, Any]) -> CatalogModel | None:
     pricing = entry.get("pricing") or {}
     prompt = price_per_million(pricing.get("prompt", pricing.get("input")))
     completion = price_per_million(pricing.get("completion", pricing.get("output")))
+    cache_read = price_per_million(pricing.get("input_cache_read", pricing.get("cache_read")))
+    cache_write = price_per_million(pricing.get("input_cache_write", pricing.get("cache_write")))
     is_language_model = entry.get("type", "language") == "language"
     is_batch_only = str(entry.get("id", "")).endswith(":batch")
     if not is_language_model or is_batch_only or prompt < 0 or completion < 0:
@@ -55,6 +59,8 @@ def parse_model(entry: dict[str, Any]) -> CatalogModel | None:
         id=str(entry["id"]),
         prompt_price=prompt,
         completion_price=completion,
+        cache_read_price=cache_read,
+        cache_write_price=cache_write,
         context=int(entry.get("context_length") or entry.get("context_window") or 0),
         supports_tools="tools" in (entry.get("supported_parameters") or []),
     )
@@ -93,3 +99,41 @@ def select_models(
     return sorted(
         selected, key=lambda model: (model.completion_price, model.prompt_price, model.id)
     )
+
+
+_MODEL_COSTS_CACHE: dict[str, dict[str, dict[str, float]]] = {}
+
+
+def model_costs(base_url: str, get: Get | None = None) -> dict[str, dict[str, float]]:
+    """Return the prices of every model the endpoint lists, keyed by model id.
+
+    Each value is a dict with keys "input", "output", "cacheRead", "cacheWrite".
+    On any CatalogError return {} and never raise.
+    Results are cached per base_url.
+    """
+    if base_url in _MODEL_COSTS_CACHE:
+        return _MODEL_COSTS_CACHE[base_url]
+
+    get = get or http_get
+    try:
+        payload = get(f"{base_url.rstrip('/')}/models")
+        models = parse_models(payload)
+    except CatalogError:
+        _MODEL_COSTS_CACHE[base_url] = {}
+        return {}
+
+    result: dict[str, dict[str, float]] = {}
+    for model in models:
+        result[model.id] = {
+            "input": model.prompt_price,
+            "output": model.completion_price,
+            "cacheRead": model.cache_read_price,
+            "cacheWrite": model.cache_write_price,
+        }
+    _MODEL_COSTS_CACHE[base_url] = result
+    return result
+
+
+def forget_prices() -> None:
+    """Clear the model costs cache. For tests and long-lived processes."""
+    _MODEL_COSTS_CACHE.clear()
