@@ -50,7 +50,7 @@ Rule: no module imports OpenCode or provider specifics except `harness.py`, `rev
 - `OPENROUTER_API_KEY`, and for the default fallbacks `DEEPSEEK_API_KEY` (low), `AI_GATEWAY_API_KEY` (medium), `SCALEWAY_API_KEY` (high) — or the `api_key_env` named in the chosen profile — for the reviewer call: from the environment, or from `~/.local/share/conductor/auth.json` written by `conductor setup`.
 - The same key env names for `conductor billing`; `SCW_ORGANIZATION_ID` for Scaleway.
 - OpenCode providers are authenticated with `opencode auth login`, and a `claude-code` provider with a Claude Code subscription login (`claude`), both outside Conductor.
-- A `pi` provider (tested with Pi 0.73.1) is authenticated through its key variable, `OPENROUTER_API_KEY` for the OpenRouter example in `conductor.toml.example`, exported in the environment: Pi's agent directory is per attempt, so no `pi` login is needed, and a key kept only in `auth.json` does not reach a Pi worker.
+- A `pi` provider (tested with Pi 0.73.1) is authenticated through its key variable, `OPENROUTER_API_KEY` for the OpenRouter example in `conductor.toml.example`: Conductor resolves it from the environment first, then from `auth.json`, and passes it in the Pi process's environment only, never to a file or a log. Pi's agent directory is per attempt, so no `pi` login is needed.
 - Repository secret `RELEASE_PLEASE_TOKEN`: fine-grained token (Contents and Pull requests, read and write, this repository only) used by release-please so that CI runs on its PRs. If it is missing or expired, release-please falls back to `GITHUB_TOKEN` and the `checks` run on the release PR must be approved by hand (`gh run rerun <id>` or "Approve and run" on the PR).
 - Never commit `.env`, `conductor.toml` with keys, or `.conductor/` run logs.
 
@@ -80,7 +80,8 @@ Rule: no module imports OpenCode or provider specifics except `harness.py`, `rev
 
 ## Security & constraints
 - Settings export never includes keys, only provider names and the variables that hold them.
-- API keys come from the environment or from `auth.json` (mode `600`, directory `700`, written atomically by `conductor setup` only); never written to logs, `opencode.json`, `run.json`, the ledger or billing output. The environment wins over the file. Pi's `models.json` names the key's variable and never holds the key, and a Pi worker gets only the exported environment, so its key must be exported.
+- API keys come from the environment or from `auth.json` (mode `600`, directory `700`, written atomically by `conductor setup` only); never written to logs, `opencode.json`, `run.json`, the ledger or billing output. The environment wins over the file. Pi's `models.json` names the key's variable and never holds the key; Conductor resolves that variable (environment or `auth.json`) and passes it in the worker's environment.
+- Pi reports a cost only for the models it knows: without a declared price a Pi attempt costs 0 and only its tokens are recorded.
 - A key is never sent to a `base_url` that is not `https`.
 - Worker output (transcripts, diffs, reviewer replies) is untrusted data: never executed, never fed to a shell.
 - `verify` commands come from the plan (written by the brain), never from worker output. They run in the worker's worktree, so they execute files the worker may have changed: no more than the worker can already run there with `--auto`.
