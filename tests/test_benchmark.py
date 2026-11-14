@@ -256,6 +256,22 @@ def test_check_hidden_fails_when_the_tests_fail(tmp_path: Path) -> None:
     assert git(copy, "worktree", "list", "--porcelain").count("worktree") == 1
 
 
+def test_check_hidden_works_with_a_relative_workdir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo, copy, task = solution_repo(tmp_path, PASSING)
+    monkeypatch.chdir(tmp_path)
+    assert benchmark.check_hidden(repo, copy, "HEAD", task, Path("check")) is True
+    assert (tmp_path / "check").exists() is False
+
+
+def test_check_hidden_writes_the_pytest_output_to_the_log(tmp_path: Path) -> None:
+    repo, copy, task = solution_repo(tmp_path, FAILING)
+    log = tmp_path / "logs" / "hidden.log"
+    assert benchmark.check_hidden(repo, copy, "HEAD", task, tmp_path / "check", log=log) is False
+    assert "failed" in log.read_text()
+
+
 def test_classify_covers_solved_rejections_and_no_work() -> None:
     assert benchmark.classify("approved", True, True) == {
         "solved": True,
