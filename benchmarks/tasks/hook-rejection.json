@@ -1,0 +1,10 @@
+{
+  "id": "hook-rejection",
+  "title": "Reject an attempt whose commit the git hooks refuse",
+  "difficulty": 2,
+  "base": "62a7f7e",
+  "solution": "e24c682",
+  "hidden_tests": ["tests/test_escalation.py"],
+  "files": ["conductor/escalation.py", "tests/test_escalation.py"],
+  "spec": "conductor/worker.py already commits a worker's changes through the repository's git hooks and sets `AttemptOutput.commit_rejection` to the hooks' output when they refuse the commit (None otherwise). conductor/escalation.py ignores it. Make escalation treat a refused commit like a failed verification:\n\n1. `attempt_entry` records `\"commit_rejection\": output.commit_rejection` in the attempt entry.\n2. In `StepRun.judge_attempt`, after the worker-question check and before the verification commands run: when `output.commit_rejection` is not None, record the entry, set `self.result.detail` to `rejected on <model>: <reason>` and return the reason `git hooks rejected the commit:\\n<hook output>`, so the step moves to the next level with that reason in the prompt. Neither the verification commands nor the reviewer run for that attempt, and an empty diff does not matter (the commit never happened). On the last level the step ends `failed` with that detail, as for any rejection.\n\nTests in tests/test_escalation.py (the `output(...)` helper there builds an AttemptOutput; give it a `commit_rejection` parameter): a first attempt with `commit_rejection=\"ruff: F401 unused import\"` and an empty diff is rejected, the next level is tried with the hook output in its prompt and is approved, the checks and the reviewer ran only for the second attempt, and the first entry records the rejection; a rejection on the last level fails the step."
+}
