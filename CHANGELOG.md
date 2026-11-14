@@ -1,5 +1,62 @@
 # Changelog
 
+## [0.6.0](https://github.com/FedericoGrim/conductor/compare/conductor-v0.5.1...conductor-v0.6.0) (2026-11-14)
+
+
+### Features
+
+* a suspicious rejection gets a second opinion from the next reviewer ([a58c3b3](https://github.com/FedericoGrim/conductor/commit/a58c3b303287255941c6a944eae6de9cc70f072c))
+* **brain:** read the brain's token usage from an OpenCode session ([c161f79](https://github.com/FedericoGrim/conductor/commit/c161f79ebc2f2278864f0a0237cae6270d63c2b3)), closes [#37](https://github.com/FedericoGrim/conductor/issues/37)
+* **cli:** add the conductor stats command ([9e79f8c](https://github.com/FedericoGrim/conductor/commit/9e79f8ccc69d88541f5f417849d336feb12b6dc3)), closes [#37](https://github.com/FedericoGrim/conductor/issues/37)
+* **commits:** choose an attempt's Conventional Commit message ([272c0bf](https://github.com/FedericoGrim/conductor/commit/272c0bf341864e6f690b33f74c3373d61a9b0cfe))
+* **defaults:** add claude-haiku-5.5 as the second reviewer of medium ([c995c10](https://github.com/FedericoGrim/conductor/commit/c995c1000227e6ff07b0d444896ce855a0e626a7))
+* **defaults:** choose the ladders on the measured benchmark ([e1e4361](https://github.com/FedericoGrim/conductor/commit/e1e4361317eef05affb9c1efcfa057f013f60b63))
+* **escalation:** ask a second reviewer about a suspicious rejection ([bae9751](https://github.com/FedericoGrim/conductor/commit/bae9751937cc29a3f4168adccd8a983f95222dbe))
+* **escalation:** give workers a working brief with the verify commands ([661645b](https://github.com/FedericoGrim/conductor/commit/661645ba0d3f247cb4a8dd62c34fc31bd4d6dc11))
+* **harness:** run workers with Pi ([e156ca3](https://github.com/FedericoGrim/conductor/commit/e156ca3d42d411a642c89a813d9179d584171ab2))
+* **log:** record the brain session and the subscription estimate in run.json ([e3de934](https://github.com/FedericoGrim/conductor/commit/e3de934e93df442551ff209f22dee76227360bd1)), closes [#37](https://github.com/FedericoGrim/conductor/issues/37)
+* measure Conductor with conductor stats and a measurement protocol ([232b355](https://github.com/FedericoGrim/conductor/commit/232b355033820756e7160b62419301e62831e545))
+* measure the models with a benchmark and choose the ladders on its numbers ([17af766](https://github.com/FedericoGrim/conductor/commit/17af766150c13916728b77dae9b855eeb42fe783))
+* Pi as a third worker harness ([b888659](https://github.com/FedericoGrim/conductor/commit/b888659e942ed0a098c8b7f1efe5cd90281a1561))
+* **privacy:** write a per-worktree Pi configuration ([0549d71](https://github.com/FedericoGrim/conductor/commit/0549d718e4ad7b3f1c40e5758c7097c05f2bfb89))
+* reviewer verdicts name a category; passed checks settle theirs ([68dc556](https://github.com/FedericoGrim/conductor/commit/68dc556378b9b77b61102571ba1eafa65cbf0736))
+* **reviewer:** commit attempts with the chosen message and review it ([c6d8bb3](https://github.com/FedericoGrim/conductor/commit/c6d8bb3077168007696130e8b519249ed7969a55))
+* **reviewer:** name a category in every rejection and flag suspicious ones ([dda524b](https://github.com/FedericoGrim/conductor/commit/dda524b890acb8c323b0ebd16e18165066795985))
+* **reviewer:** tell the reviewer what passed checks settle ([fe4be7d](https://github.com/FedericoGrim/conductor/commit/fe4be7d3f377d039eda0aaa7d1c49337ce3aa5e0))
+* **scripts:** replay a recorded attempt to the reviewer ([4d4386b](https://github.com/FedericoGrim/conductor/commit/4d4386bab02e09926148526ed2a6758f5ae61365))
+* **scripts:** report benchmark results per model ([56345ae](https://github.com/FedericoGrim/conductor/commit/56345ae6ddc178e46727b2714d7df8f7af09df3e))
+* **scripts:** run benchmark tasks with Conductor and check them with hidden tests ([7479e09](https://github.com/FedericoGrim/conductor/commit/7479e09d0b9f830acb7ba23aa12b46b2c90e00e8))
+* **stats:** build per-run and per-step statistics ([f6b5e33](https://github.com/FedericoGrim/conductor/commit/f6b5e339b1e685c8c7cb8125977c08e72a895583)), closes [#37](https://github.com/FedericoGrim/conductor/issues/37)
+* **worker:** let a harness set environment variables for its worker ([cccbacf](https://github.com/FedericoGrim/conductor/commit/cccbacf19d9524c8488158f168d5d668d46a975d))
+* working brief for workers and Conventional Commit messages they propose ([21a9158](https://github.com/FedericoGrim/conductor/commit/21a9158c73ace0ca0b580990c230e47de1f42128))
+
+
+### Bug Fixes
+
+* **benchmark:** check hidden tests in the right directory with a relative --out ([c234927](https://github.com/FedericoGrim/conductor/commit/c234927116916fae8b3ed0272684d8015bc173a3))
+* **harness:** give Pi its key and read a stream error with exit code zero ([e55b44e](https://github.com/FedericoGrim/conductor/commit/e55b44e046269bf72b6b82548cf15d5e8a1ff2ea))
+* isolate OpenCode workers from the user's skills and give them CLAUDE.md ([22c0292](https://github.com/FedericoGrim/conductor/commit/22c02922ca11046c9366d2a1aff44c7e6b124611))
+* **privacy:** isolate OpenCode workers from the user's skills and give them CLAUDE.md ([c66e52b](https://github.com/FedericoGrim/conductor/commit/c66e52b196fed79b82172a1c74149e474fe06dc5)), closes [#61](https://github.com/FedericoGrim/conductor/issues/61)
+* **rejections:** recognise ruff format by basename and as a formatter only ([0bf50b4](https://github.com/FedericoGrim/conductor/commit/0bf50b49ac76d42570de0b6889442acfeace131c))
+* **stats:** skip a run.json that cannot be read or decoded ([26ec215](https://github.com/FedericoGrim/conductor/commit/26ec2159c0372bb2b59dfc572ffed41d91affc04)), closes [#37](https://github.com/FedericoGrim/conductor/issues/37)
+
+
+### Documentation
+
+* add the protocol and register for measuring Conductor ([e8b4086](https://github.com/FedericoGrim/conductor/commit/e8b40868dc0705100d22454c10dc04aa49f8deb0)), closes [#37](https://github.com/FedericoGrim/conductor/issues/37)
+* **benchmarks:** say where the specs and the hidden tests come from ([86977f5](https://github.com/FedericoGrim/conductor/commit/86977f59df75c509aa8298fc71fd9d8d37c110f1))
+* correct how a Pi worker gets its key and note its cost limit ([04e3e6c](https://github.com/FedericoGrim/conductor/commit/04e3e6cec03682273ece0e882a15bb2d8e0b0111))
+* describe categorised verdicts and decision 021 ([41c150e](https://github.com/FedericoGrim/conductor/commit/41c150edee33c8e16a0c1972bfa7c0cce7352644))
+* describe the isolation of OpenCode workers and decision 019 ([71cf128](https://github.com/FedericoGrim/conductor/commit/71cf128afc6dee8818b0804f3a9674ccd5954e9d)), closes [#61](https://github.com/FedericoGrim/conductor/issues/61)
+* describe the model benchmark and how to rerun it ([00bd1b6](https://github.com/FedericoGrim/conductor/commit/00bd1b6bf15f8c838ddc7ad97d0ca1a82f42a6b3))
+* describe the Pi harness and record decision 024 ([4db24cd](https://github.com/FedericoGrim/conductor/commit/4db24cd88375d3313e70c5844a2731c915c4c8b6))
+* describe the second opinion and record decision 023 ([c0ddd0a](https://github.com/FedericoGrim/conductor/commit/c0ddd0a8b08c0196626029a30dd8b59aae6c8c97))
+* document the working brief and worker commit messages ([cad81be](https://github.com/FedericoGrim/conductor/commit/cad81be741d22336a1453db60c8d67f002ec24c3))
+* **escalation:** say that a suspicious rejection consults a second reviewer ([df93c81](https://github.com/FedericoGrim/conductor/commit/df93c8152ca99a70a81f735f55303e9fd1fd890f))
+* point the Pi cost gap at issue 72 ([6c649cf](https://github.com/FedericoGrim/conductor/commit/6c649cfef48f60a7a4af69eb891b240e28fdfaf2))
+* record the first measured task in the register ([d4e13ce](https://github.com/FedericoGrim/conductor/commit/d4e13ce12a3c8f6032258ad8348ab5a6a1ed864e)), closes [#37](https://github.com/FedericoGrim/conductor/issues/37)
+* record the replay measurements in decision 021 ([b3e459f](https://github.com/FedericoGrim/conductor/commit/b3e459fb3322d90769009efe2a7888c3d7e0b358))
+
 ## [0.5.1](https://github.com/FedericoGrim/conductor/compare/conductor-v0.5.0...conductor-v0.5.1) (2026-11-13)
 
 
