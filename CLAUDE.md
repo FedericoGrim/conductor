@@ -20,9 +20,9 @@ Simple layering, no tactical DDD: a small tool with little business logic.
 - `conductor/verify.py` — runs a step's `verify` commands with `sh -c` in its worktree (`CONDUCTOR_REPO` set, timeout, output tail).
 - `conductor/rejections.py` — rejection categories, the categories each known verify tool settles, and the suspicious-rejection rule.
 - `conductor/reviewer.py` — direct OpenAI-compatible chat call with explicit criteria (spec, tests in the diff, domain rules, bugs, the commit message), the plan's rules and the verification results; returns `{ok, category, reason}`.
-- `conductor/escalation.py` — the working brief in every prompt (plan already approved, TDD, stay in scope, run the step's `verify`, remember the git hooks, end with a `COMMIT:` line); rejected step → next tier with the reason in the prompt, and the attempt records the reviewer's category and whether the rejection is suspicious; beyond last tier → `failed`. A worker question → `needs_answer` (no review, no escalation). A commit refused by the git hooks → rejected with the hook output, like a failed verification. Classified model errors → next model of the level (an unusable provider is excluded for the run), level exhausted → `unavailable`, unclassified → `failed`; reviewer errors → next reviewer, all failed → `needs_brain_review`; never escalates on an error.
+- `conductor/escalation.py` — the working brief in every prompt (plan already approved, TDD, stay in scope, run the step's `verify`, remember the git hooks, end with a `COMMIT:` line); rejected step → next tier with the reason in the prompt, and the attempt records the reviewer's category and whether the rejection is suspicious; a suspicious rejection asks the next reviewer once before escalating; beyond last tier → `failed`. A worker question → `needs_answer` (no review, no escalation). A commit refused by the git hooks → rejected with the hook output, like a failed verification. Classified model errors → next model of the level (an unusable provider is excluded for the run), level exhausted → `unavailable`, unclassified → `failed`; reviewer errors → next reviewer, all failed → `needs_brain_review`; never escalates on an error.
 - `conductor/errors.py` — the error classes (transient, provider unusable, model unsuitable, unclassified) shared by worker and reviewer.
-- `conductor/log.py` — `.conductor/runs/<ts>/run.json` and `step-<id>/attempt-N.json`, with cost totals per step, model and run.
+- `conductor/log.py` — `.conductor/runs/<ts>/run.json` and `step-<id>/attempt-N.json`, with cost totals per step, model and run; the attempt records `second_opinion` and its cost is counted.
 - `conductor/merge.py` — merge approved worktree branches; conflicts and hooks refusing the merge are reported, not resolved.
 - `conductor/catalog.py` — provider model lists (`/models`), prices per million tokens, filtering and search.
 - `conductor/setup_state.py` — editable profiles, providers, five difficulty levels and validation for the setup UI.
@@ -63,6 +63,7 @@ Rule: no module imports OpenCode or provider specifics except `harness.py`, `rev
 - **Privacy level** — `low` (free models, data may be used for training), `medium` (paid, no-training providers), `high` (EU data residency).
 - **Attempt** — one execution of a step on one model; a step has 1..N attempts.
 - **Reviewer** — the model that approves or rejects an attempt's diff.
+- **Second opinion** — the extra reviewer consulted once about a suspicious rejection; it is the next model of the profile's `reviewer` list.
 - **Commit message** — the Conventional Commit subject of an attempt: the plan's `commit` field, the worker's `COMMIT:` proposal (when it passes the strict format), or the fallback; the reviewer checks it matches the diff.
 - **Escalation** — re-running a rejected step on the next tier.
 - **Ledger** — `~/.local/share/conductor/ledger.jsonl`, one line per finished run with its project and cost.
@@ -73,6 +74,7 @@ Rule: no module imports OpenCode or provider specifics except `harness.py`, `rev
 - Worktrees are created and merged by Conductor (`git worktree add`), never with OpenCode's own `--worktree` flag.
 - Routing options are written to a per-worktree `opencode.json`, excluded from the diff via `.git/info/exclude`.
 - That `opencode.json` also denies every skill (OpenCode loads the user's personal ones from `~/.claude/skills` and `~/.agents/skills`) and, when the target has a `CLAUDE.md` but no `AGENTS.md`, lists `CLAUDE.md` in `instructions` (OpenCode 2 reads `AGENTS.md` only). Decision 019.
+- The `reviewer` list is used both for reviewer errors (the next reviewer takes over) and for second opinions on suspicious rejections (decision 023), so choose its second entry on a different model family than the first.
 - That `opencode.json` sets `small_model` to the first model of level 1 and repeats each provider's `request_options` at provider level: OpenCode sends title and summary requests to a model of its own choosing, and the profile's data policy must reach it too.
 
 ## Security & constraints
