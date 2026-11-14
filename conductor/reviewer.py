@@ -32,6 +32,9 @@ SYSTEM_PROMPT = (
     "and configuration need none.\n"
     "3. The domain rules hold: names, invariants and boundaries.\n"
     "4. There are no obvious bugs or security issues.\n"
+    "5. The commit message, when given, describes the diff and has the right Conventional "
+    "Commit type (new behaviour is feat, not fix or chore; a bug fix is fix; tests only is "
+    "test; documentation only is docs).\n"
     "On rejection, name the criterion and what to change. "
     'Answer with JSON only: {"ok": true|false, "reason": "<one or two sentences>"}.'
 )
@@ -94,7 +97,13 @@ def classify_http_error(error: urllib.error.HTTPError) -> ModelError:
     return ModelError.of(kind, f"http-{error.code}", body or str(error.reason))
 
 
-def review_request(spec: str, diff: str, rules: tuple[str, ...], checks: list[CheckResult]) -> str:
+def review_request(
+    spec: str,
+    diff: str,
+    rules: tuple[str, ...],
+    checks: list[CheckResult],
+    commit_message: str = "",
+) -> str:
     sections = [f"## Specification\n{spec}"]
     if rules:
         sections.append("## Domain rules\n" + "\n".join(f"- {rule}" for rule in rules))
@@ -105,6 +114,8 @@ def review_request(spec: str, diff: str, rules: tuple[str, ...], checks: list[Ch
             for check in checks
         )
         sections.append(f"## Verification (run by Conductor)\n{outcomes}")
+    if commit_message:
+        sections.append(f"## Commit message\n```\n{commit_message}\n```")
     sections.append(f"## Diff\n```diff\n{diff}\n```")
     return "\n\n".join(sections)
 
@@ -117,6 +128,7 @@ def review(
     post: Post | None = None,
     rules: tuple[str, ...] = (),
     checks: list[CheckResult] | None = None,
+    commit_message: str = "",
 ) -> Verdict:
     post = post or http_post
     provider = profile.provider_for(model)
@@ -142,7 +154,10 @@ def review(
         "model": api_model_id(provider.name, model),
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": review_request(spec, diff, rules, checks or [])},
+            {
+                "role": "user",
+                "content": review_request(spec, diff, rules, checks or [], commit_message),
+            },
         ],
     }
     try:

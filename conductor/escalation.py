@@ -21,7 +21,7 @@ from conductor.verify import CheckResult, failure_reason
 from conductor.worker import AttemptOutput
 
 Attempt = Callable[[Step, int, str, str], Awaitable[AttemptOutput]]
-Judge = Callable[[str, str, str, list[CheckResult]], Verdict]
+Judge = Callable[[str, str, str, list[CheckResult], str], Verdict]
 Record = Callable[[Step, dict[str, Any]], object]
 Check = Callable[[Step, int], Awaitable[list[CheckResult]]]
 
@@ -156,6 +156,7 @@ def attempt_entry(
         "events": output.events,
         "stderr": output.stderr,
         "diff": output.diff,
+        "commit_message": output.commit_message,
         "error": None,
         "question": None,
         "commit_rejection": output.commit_rejection,
@@ -275,7 +276,7 @@ class StepRun:
             return None
         verdict: Verdict | None = NO_CHANGES
         if output.diff.strip():
-            verdict = self.consult_reviewers(output.diff, entry, checks)
+            verdict = self.consult_reviewers(output.diff, entry, checks, output.commit_message)
         else:
             entry["review"] = review_entry(self.profile.reviewers[0], NO_CHANGES)
         self.record(self.step, entry)
@@ -291,14 +292,14 @@ class StepRun:
         return verdict.reason
 
     def consult_reviewers(
-        self, diff: str, entry: dict[str, Any], checks: list[CheckResult]
+        self, diff: str, entry: dict[str, Any], checks: list[CheckResult], commit_message: str
     ) -> Verdict | None:
         """Ask the reviewers in order; the first verdict without an error decides."""
         consulted: list[tuple[str, Verdict]] = []
         for reviewer in self.profile.reviewers:
             if provider_of(reviewer) in self.state.excluded_reviewer_providers:
                 continue
-            verdict = self.judge(reviewer, self.step.spec, diff, checks)
+            verdict = self.judge(reviewer, self.step.spec, diff, checks, commit_message)
             consulted.append((reviewer, verdict))
             if verdict.error is None:
                 break
