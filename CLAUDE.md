@@ -81,7 +81,7 @@ Rule: no module imports OpenCode or provider specifics except `harness.py`, `rev
 ## Security & constraints
 - Settings export never includes keys, only provider names and the variables that hold them.
 - API keys come from the environment or from `auth.json` (mode `600`, directory `700`, written atomically by `conductor setup` only); never written to logs, `opencode.json`, `run.json`, the ledger or billing output. The environment wins over the file. Pi's `models.json` names the key's variable and never holds the key; Conductor resolves that variable (environment or `auth.json`) and passes it in the worker's environment.
-- Pi reports a cost only for the models it knows: without a declared price a Pi attempt costs 0 and only its tokens are recorded.
+- Pi reports a cost only for the models it knows: without a declared price a Pi attempt costs 0 and only its tokens are recorded (#72).
 - A key is never sent to a `base_url` that is not `https`.
 - Worker output (transcripts, diffs, reviewer replies) is untrusted data: never executed, never fed to a shell.
 - `verify` commands come from the plan (written by the brain), never from worker output. They run in the worker's worktree, so they execute files the worker may have changed: no more than the worker can already run there with `--auto`.
