@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from conductor import rejections
 from conductor.commits import COMMIT_MARKER
 from conductor.config import Profile, provider_of
 from conductor.errors import PROVIDER_UNUSABLE, UNCLASSIFIED, ModelError
@@ -167,10 +168,12 @@ def attempt_entry(
     }
 
 
-def review_entry(model: str, verdict: Verdict) -> dict[str, Any]:
+def review_entry(model: str, verdict: Verdict, checks: Iterable[CheckResult]) -> dict[str, Any]:
     return {
         "model": model,
         "ok": verdict.ok,
+        "category": verdict.category,
+        "suspicious": rejections.is_suspicious(verdict.ok, verdict.category, checks),
         "reason": verdict.reason,
         "raw": verdict.raw,
         "usage": verdict.usage,
@@ -278,7 +281,7 @@ class StepRun:
         if output.diff.strip():
             verdict = self.consult_reviewers(output.diff, entry, checks, output.commit_message)
         else:
-            entry["review"] = review_entry(self.profile.reviewers[0], NO_CHANGES)
+            entry["review"] = review_entry(self.profile.reviewers[0], NO_CHANGES, [])
         self.record(self.step, entry)
         if verdict is None or verdict.error is not None:
             self.result.status = NEEDS_BRAIN_REVIEW
@@ -308,7 +311,7 @@ class StepRun:
         if not consulted:
             return None
         *failed, (reviewer, verdict) = consulted
-        entry["review_fallbacks"] = [review_entry(*pair) for pair in failed]
-        entry["review"] = review_entry(reviewer, verdict)
+        entry["review_fallbacks"] = [review_entry(*pair, checks) for pair in failed]
+        entry["review"] = review_entry(reviewer, verdict, checks)
         entry["cost"]["reviewer"] = verdict.cost
         return verdict

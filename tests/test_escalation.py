@@ -618,3 +618,21 @@ def test_the_judge_receives_the_attempts_commit_message() -> None:
         judged_messages=judged_messages,
     )
     assert judged_messages == ["feat(parser): scan the input"]
+
+
+def test_the_attempt_entry_records_the_rejection_category_and_suspicion() -> None:
+    passed = CheckResult("mypy conductor", 0, "", 1.0)
+    verdict = Verdict(False, "wrong type", "{}", category="types")
+    _, _, recorded = run([verdict, Verdict(True, "ok", "{}")], checks=[[passed], []])
+    review = recorded[0]["review"]
+    assert review["category"] == "types"
+    assert review["suspicious"] is True
+
+
+def test_a_judgement_rejection_is_not_suspicious() -> None:
+    passed = CheckResult("mypy conductor", 0, "", 1.0)
+    verdict = Verdict(False, "misses the spec", "{}", category="spec")
+    _, _, recorded = run([verdict, Verdict(True, "ok", "{}")], checks=[[passed], []])
+    review = recorded[0]["review"]
+    assert review["category"] == "spec"
+    assert review["suspicious"] is False
