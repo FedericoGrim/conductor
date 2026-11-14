@@ -212,9 +212,17 @@ def attempt_commit(
 
 
 def check_hidden(
-    repo: Path, copy: Path, commit: str, task: Task, workdir: Path, timeout: float = 600
+    repo: Path,
+    copy: Path,
+    commit: str,
+    task: Task,
+    workdir: Path,
+    timeout: float = 600,
+    log: Path | None = None,
 ) -> bool:
     """Run the task's hidden tests from the solution commit on the worker's commit."""
+    # git -C <copy> resolves a relative path against the copy, Python against the cwd.
+    workdir = workdir.resolve()
     workdir.parent.mkdir(parents=True, exist_ok=True)
     git(copy, "worktree", "add", "--detach", str(workdir), commit)
     try:
@@ -238,10 +246,19 @@ def check_hidden(
         try:
             checked = subprocess.run(command, cwd=workdir, capture_output=True, timeout=timeout)
         except subprocess.TimeoutExpired:
+            write_log(log, f"hidden tests timed out after {timeout:.0f}s\n".encode())
             return False
+        write_log(log, checked.stdout + checked.stderr)
         return checked.returncode == 0
     finally:
         git(copy, "worktree", "remove", "--force", str(workdir))
+
+
+def write_log(log: Path | None, content: bytes) -> None:
+    if log is None:
+        return
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_bytes(content)
 
 
 def classify(status: str, review_ok: bool | None, hidden_ok: bool | None) -> dict[str, bool]:
@@ -512,7 +529,9 @@ def run_benchmark(args: argparse.Namespace) -> int:
     conductor = args.conductor or shutil.which("conductor")
     if conductor is None:
         raise BenchmarkError("conductor is not on PATH; pass --conductor PATH")
-    out = args.out if args.out is not None else repo / "benchmarks" / "results" / stamp()
+    out = (
+        args.out if args.out is not None else repo / "benchmarks" / "results" / stamp()
+    ).resolve()
     out.mkdir(parents=True, exist_ok=True)
 
     lock = threading.Lock()
@@ -544,7 +563,11 @@ def run_benchmark(args: argparse.Namespace) -> int:
             else None
         )
         hidden_ok = (
-            None if commit is None else check_hidden(repo, copy, commit, task, work / "check")
+            None
+            if commit is None
+            else check_hidden(
+                repo, copy, commit, task, work / "check", log=out / "logs" / f"{name}-hidden.log"
+            )
         )
         model = config.profiles[profile].tiers[0][0]
         record = job_result(profile, model, task, repetition, run_dir, hidden_ok)
