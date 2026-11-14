@@ -10,7 +10,7 @@ CLI that executes a `plan.json` written by a "brain" model (Claude in Claude Cod
 
 ## Architecture
 Simple layering, no tactical DDD: a small tool with little business logic.
-- `conductor/plan.py` — `Plan`, `Step` models and validation (unique ids, known `depends_on`, no cycles, difficulty between 1 and `DIFFICULTY_LEVELS`, optional `answers` to earlier questions).
+- `conductor/plan.py` — `Plan`, `Step` models and validation (unique ids, known `depends_on`, no cycles, difficulty between 1 and `DIFFICULTY_LEVELS`, optional `answers` to earlier questions, optional `commit` a Conventional Commit subject).
 - `conductor/config.py` — `conductor.toml`: privacy profiles, each with five difficulty levels (a model or an ordered list with fallbacks, cheapest first), one or more providers (each with a `harness`, default `opencode`; `base_url` and `api_key_env` together or neither), reviewers (a model, a list, or `brain`; never a provider without endpoint), `max_parallel`, `retry`. A model id is `<provider>/<model>`.
 - `conductor/defaults.py` — the built-in `low`/`medium`/`high` profiles (five levels each, with fallbacks on a second provider: DeepSeek, Vercel, Scaleway) and `DIFFICULTY_LEVELS`.
 - `conductor/privacy.py` — a profile → the `opencode.json` written in each worktree (one entry per provider, every skill denied) and the reviewer request options.
@@ -18,8 +18,8 @@ Simple layering, no tactical DDD: a small tool with little business logic.
 - `conductor/worker.py` — worktree creation, the streaming runner (stopped after the retry limit), `run_attempt` with a `Harness`, the commit of the worker's changes through the repository's git hooks (a refusal becomes `commit_rejection`), diff capture.
 - `conductor/harness.py` — the worker harnesses, each the command, its event stream (retries, cost, classified errors, final text) and its worktree configuration: OpenCode, and Claude Code (`claude -p`, isolated with `--setting-sources project`, confined to the worktree with `--permission-mode acceptEdits`). `harness_for` picks by the provider of the chosen model.
 - `conductor/verify.py` — runs a step's `verify` commands with `sh -c` in its worktree (`CONDUCTOR_REPO` set, timeout, output tail).
-- `conductor/reviewer.py` — direct OpenAI-compatible chat call with explicit criteria (spec, tests in the diff, domain rules, bugs), the plan's rules and the verification results; returns `{ok, reason}`.
-- `conductor/escalation.py` — rejected step → next tier with the reason in the prompt; beyond last tier → `failed`. A worker question → `needs_answer` (no review, no escalation). A commit refused by the git hooks → rejected with the hook output, like a failed verification. Classified model errors → next model of the level (an unusable provider is excluded for the run), level exhausted → `unavailable`, unclassified → `failed`; reviewer errors → next reviewer, all failed → `needs_brain_review`; never escalates on an error.
+- `conductor/reviewer.py` — direct OpenAI-compatible chat call with explicit criteria (spec, tests in the diff, domain rules, bugs, the commit message), the plan's rules and the verification results; returns `{ok, reason}`.
+- `conductor/escalation.py` — the working brief in every prompt (plan already approved, TDD, stay in scope, run the step's `verify`, remember the git hooks, end with a `COMMIT:` line); rejected step → next tier with the reason in the prompt; beyond last tier → `failed`. A worker question → `needs_answer` (no review, no escalation). A commit refused by the git hooks → rejected with the hook output, like a failed verification. Classified model errors → next model of the level (an unusable provider is excluded for the run), level exhausted → `unavailable`, unclassified → `failed`; reviewer errors → next reviewer, all failed → `needs_brain_review`; never escalates on an error.
 - `conductor/errors.py` — the error classes (transient, provider unusable, model unsuitable, unclassified) shared by worker and reviewer.
 - `conductor/log.py` — `.conductor/runs/<ts>/run.json` and `step-<id>/attempt-N.json`, with cost totals per step, model and run.
 - `conductor/merge.py` — merge approved worktree branches; conflicts and hooks refusing the merge are reported, not resolved.
@@ -32,6 +32,7 @@ Simple layering, no tactical DDD: a small tool with little business logic.
 - `conductor/brain.py` — the brain's token usage per model, read from `opencode session export` (numbers and model names only, never message text).
 - `conductor/stats.py` — per-run and per-step statistics from run.json, git (hand commits after a run) and the brain's session.
 - `conductor/cli.py` — `conductor run plan.json --privacy low|medium|high`, `conductor validate plan.json [--config]` (warns about levels relying on one provider), `conductor billing [project|projects]`, `conductor stats`, `conductor setup`.
+- `conductor/commits.py` — the Conventional Commit message of an attempt: the plan's `commit` field, the worker's `COMMIT:` line, or the fallback.
 Rule: no module imports OpenCode or provider specifics except `harness.py`, `reviewer.py`, `privacy.py`, `catalog.py`, `billing.py` and `brain.py`.
 
 ## Commands
@@ -59,12 +60,13 @@ Rule: no module imports OpenCode or provider specifics except `harness.py`, `rev
 - **Privacy level** — `low` (free models, data may be used for training), `medium` (paid, no-training providers), `high` (EU data residency).
 - **Attempt** — one execution of a step on one model; a step has 1..N attempts.
 - **Reviewer** — the model that approves or rejects an attempt's diff.
+- **Commit message** — the Conventional Commit subject of an attempt: the plan's `commit` field, the worker's `COMMIT:` proposal (when it passes the strict format), or the fallback; the reviewer checks it matches the diff.
 - **Escalation** — re-running a rejected step on the next tier.
 - **Ledger** — `~/.local/share/conductor/ledger.jsonl`, one line per finished run with its project and cost.
 
 ## Project conventions
 - OpenCode steps run with `opencode run --auto --archived`; Claude Code steps run with `claude -p --setting-sources project --disable-slash-commands --permission-mode acceptEdits --allowedTools=Bash`, isolated from the user's personal Claude settings and skills and confined to the worktree, never with `--dangerously-skip-permissions`. Either way, workers may do anything inside their worktree, nothing outside.
-- Conductor's commits and merges use Conventional Commit messages (`chore(conductor): ...`) and never bypass the target repository's git hooks (decision 018).
+- Conductor's commits and merges use Conventional Commit messages; a worker attempt is committed with the plan's or the worker's Conventional Commit message (fallback `chore(conductor): apply step <id> attempt <n>`), merges with `chore(conductor): merge <branch>`, never bypassing the target repository's git hooks (decisions 018 and 020).
 - Worktrees are created and merged by Conductor (`git worktree add`), never with OpenCode's own `--worktree` flag.
 - Routing options are written to a per-worktree `opencode.json`, excluded from the diff via `.git/info/exclude`.
 - That `opencode.json` also denies every skill (OpenCode loads the user's personal ones from `~/.claude/skills` and `~/.agents/skills`) and, when the target has a `CLAUDE.md` but no `AGENTS.md`, lists `CLAUDE.md` in `instructions` (OpenCode 2 reads `AGENTS.md` only). Decision 019.

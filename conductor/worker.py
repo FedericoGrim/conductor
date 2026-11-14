@@ -48,6 +48,7 @@ class AttemptOutput:
     cost: float = 0.0
     error: ModelError | None = None
     final_text: str = ""
+    commit_message: str = ""
     subscription_cost: float = 0.0
     commit_rejection: str | None = None
 
@@ -86,10 +87,6 @@ def parse_events(stdout: str) -> Events:
         if isinstance(event, dict):
             events.append(event)
     return events
-
-
-def attempt_commit_message(step_id: str, number: int) -> str:
-    return f"chore(conductor): apply step {step_id} attempt {number}"
 
 
 def commit_work(worktree: Path, message: str) -> str | None:
@@ -186,16 +183,19 @@ async def run_attempt(
     model: str,
     prompt: str,
     extra_args: list[str],
-    commit_message: str,
     transient_attempts: int,
     harness: Harness,
     runner: Runner = subprocess_runner,
+    *,
+    commit_message: Callable[[str], str],
 ) -> AttemptOutput:
     command = harness.command(model, prompt, extra_args)
     should_stop = retry_limit(transient_attempts, harness.is_retry)
     exit_code, stdout, stderr = await runner(command, worktree, should_stop)
     events = parse_events(stdout)
-    commit_rejection = commit_work(worktree, commit_message)
+    final_text = harness.final_text(events)
+    message = commit_message(final_text)
+    commit_rejection = commit_work(worktree, message)
     return AttemptOutput(
         exit_code=exit_code,
         session_id=harness.session_id(events),
@@ -205,7 +205,8 @@ async def run_attempt(
         command=command,
         cost=harness.cost(events),
         error=harness.error(events, exit_code, stderr),
-        final_text=harness.final_text(events),
+        final_text=final_text,
+        commit_message=message,
         subscription_cost=harness.subscription_cost(events) if harness.subscription_cost else 0.0,
         commit_rejection=commit_rejection,
     )

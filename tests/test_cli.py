@@ -201,6 +201,41 @@ def test_run_works_in_a_repository_that_enforces_conventional_commits(
     assert (repo / "output.txt").exists()
 
 
+def test_run_commits_with_the_workers_proposed_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = init_repo(tmp_path)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    script = bin_dir / "opencode"
+    script.write_text(
+        """#!/bin/sh
+msg='COMMIT: feat: parse input'
+printf '{"type":"text","sessionID":"ses_fake","part":{"type":"text","text":"%s"}}\\n' "$msg"
+printf '{"type":"step_finish","sessionID":"ses_fake","part":{"cost":0.01}}\\n'
+echo "made by pid $$" >> output.txt
+"""
+    )
+    script.chmod(script.stat().st_mode | stat.S_IEXEC)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setenv("TEST_CLI_KEY", "k")
+    config = tmp_path / "conductor.toml"
+    config.write_text(CONFIG)
+    plan = tmp_path / "plan.json"
+    plan.write_text(json.dumps({"goal": "g", "steps": [{"id": "a", "spec": "s"}]}))
+
+    def approve(url: str, headers: dict[str, str], body: dict[str, Any]) -> dict[str, Any]:
+        return {"choices": [{"message": {"content": '{"ok": true, "reason": "good"}'}}]}
+
+    monkeypatch.setattr(reviewer, "http_post", approve)
+
+    code = cli.main(["run", str(plan), "--config", str(config), "--repo", str(repo)])
+
+    assert code == 0, capsys.readouterr().out
+    assert git(repo, "log", "-1", "--format=%s", "HEAD").startswith("chore(conductor): merge ")
+    assert git(repo, "log", "-1", "--format=%s", "HEAD^2") == "feat: parse input\n"
+
+
 def test_run_refuses_a_dirty_repository(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     repo = init_repo(tmp_path)
     (repo / "dirty.txt").write_text("x")

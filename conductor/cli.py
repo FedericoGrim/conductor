@@ -10,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from conductor import billing, reviewer, settings, setup_tui, stats
+from conductor.commits import choose_commit_message
 from conductor.config import Config, ConfigError, Profile
 from conductor.escalation import RunState, run_step
 from conductor.harness import harness_for
@@ -20,7 +21,6 @@ from conductor.scheduler import APPROVED, CONFLICT, StepResult, run_plan
 from conductor.verify import CheckResult, run_checks
 from conductor.worker import (
     AttemptOutput,
-    attempt_commit_message,
     create_worktree,
     exclude_from_git,
     git,
@@ -97,13 +97,19 @@ async def execute_plan(
             model,
             prompt,
             extra_args,
-            attempt_commit_message(step.id, number),
             transient_attempts=profile.transient_attempts,
             harness=harness,
+            commit_message=lambda final_text: choose_commit_message(
+                step.id, number, model, final_text, step.commit
+            ),
         )
 
-    def judge(model: str, spec: str, diff: str, checks: list[CheckResult]) -> reviewer.Verdict:
-        return reviewer.review(profile, model, spec, diff, rules=rules, checks=checks)
+    def judge(
+        model: str, spec: str, diff: str, checks: list[CheckResult], commit_message: str
+    ) -> reviewer.Verdict:
+        return reviewer.review(
+            profile, model, spec, diff, rules=rules, checks=checks, commit_message=commit_message
+        )
 
     async def check(step: Step, number: int) -> list[CheckResult]:
         path = worktrees / f"{step.id}-{number}"
@@ -111,7 +117,15 @@ async def execute_plan(
 
     async def execute(step: Step) -> StepResult:
         result = await run_step(
-            step, profile, attempt, judge, log.attempt, goal=plan.goal, state=state, check=check
+            step,
+            profile,
+            attempt,
+            judge,
+            log.attempt,
+            goal=plan.goal,
+            state=state,
+            check=check,
+            verify=plan.verify_for(step),
         )
         print(f"[{step.id}] {result.status}: {result.detail}", flush=True)
         numbers = [a["attempt"] for a in result.attempts]

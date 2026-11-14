@@ -7,6 +7,8 @@ from graphlib import CycleError, TopologicalSorter
 from pathlib import Path
 from typing import Any
 
+from conductor.commits import is_conventional
+
 DIFFICULTY_LEVELS = 5
 DEFAULT_VERIFY_TIMEOUT = 600
 
@@ -71,11 +73,18 @@ class Step:
     depends_on: tuple[str, ...]
     answers: tuple[Answer, ...] = ()
     verify: tuple[str, ...] | None = None
+    commit: str | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Step:
         step_id = str(data["id"])
         verify = data.get("verify")
+        commit = data.get("commit")
+        if commit is not None and (not isinstance(commit, str) or not is_conventional(commit)):
+            raise PlanError(
+                f"step '{step_id}': commit must be a Conventional Commit subject "
+                "(type(scope): subject, at most 72 characters)"
+            )
         step = cls(
             id=str(data["id"]),
             title=str(data.get("title", data["id"])),
@@ -85,6 +94,7 @@ class Step:
             depends_on=tuple(str(d) for d in data.get("depends_on", [])),
             answers=parse_answers(step_id, data.get("answers", [])),
             verify=None if verify is None else string_list(verify, f"step '{step_id}': verify"),
+            commit=commit,
         )
         if not step.spec.strip():
             raise PlanError(f"step '{step.id}' has an empty spec")
