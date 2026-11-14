@@ -36,13 +36,16 @@ def test_sends_spec_and_diff_and_parses_verdict(monkeypatch: pytest.MonkeyPatch)
 
     def fake_post(url: str, headers: dict[str, str], body: dict[str, Any]) -> dict[str, Any]:
         captured.update(url=url, headers=headers, body=body)
-        return completion(json.dumps({"ok": False, "reason": "missing null check"}))
+        return completion(
+            json.dumps({"ok": False, "category": "logic", "reason": "missing null check"})
+        )
 
     verdict = review(
         PROFILE, PROFILE.reviewers[0], spec="add parser", diff="+def parse(): ...", post=fake_post
     )
     assert verdict.ok is False
     assert verdict.reason == "missing null check"
+    assert verdict.category == "logic"
     assert verdict.usage == {"total_tokens": 42}
     assert captured["url"] == "https://openrouter.ai/api/v1/chat/completions"
     assert captured["headers"]["Authorization"] == "Bearer sk-secret"
@@ -138,9 +141,46 @@ def test_a_parsed_verdict_has_no_error(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TEST_REVIEW_KEY", "k")
 
     def fake_post(url: str, headers: dict[str, str], body: dict[str, Any]) -> dict[str, Any]:
-        return completion('{"ok": false, "reason": "no tests"}')
+        return completion('{"ok": false, "category": "spec", "reason": "no tests"}')
 
     assert review(PROFILE, PROFILE.reviewers[0], spec="s", diff="d", post=fake_post).error is None
+
+
+def test_a_rejection_without_a_category_is_unparseable(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TEST_REVIEW_KEY", "k")
+
+    def fake_post(url: str, headers: dict[str, str], body: dict[str, Any]) -> dict[str, Any]:
+        return completion('{"ok": false, "reason": "no tests"}')
+
+    verdict = review(PROFILE, PROFILE.reviewers[0], spec="s", diff="d", post=fake_post)
+    assert verdict.ok is False
+    assert verdict.reason == "unparseable verdict"
+    assert verdict.error is not None
+    assert verdict.error.type == "unparseable-verdict"
+
+
+def test_a_rejection_with_an_unknown_category_is_unparseable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TEST_REVIEW_KEY", "k")
+
+    def fake_post(url: str, headers: dict[str, str], body: dict[str, Any]) -> dict[str, Any]:
+        return completion('{"ok": false, "category": "style", "reason": "messy"}')
+
+    verdict = review(PROFILE, PROFILE.reviewers[0], spec="s", diff="d", post=fake_post)
+    assert verdict.ok is False
+    assert verdict.reason == "unparseable verdict"
+
+
+def test_an_approval_without_a_category_is_ok(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TEST_REVIEW_KEY", "k")
+
+    def fake_post(url: str, headers: dict[str, str], body: dict[str, Any]) -> dict[str, Any]:
+        return completion('{"ok": true, "reason": "fine"}')
+
+    verdict = review(PROFILE, PROFILE.reviewers[0], spec="s", diff="d", post=fake_post)
+    assert verdict.ok is True
+    assert verdict.category is None
 
 
 def test_verdict_cost_comes_from_the_usage_reported_by_the_provider() -> None:
@@ -355,3 +395,10 @@ def test_the_system_prompt_says_what_passed_checks_settle(
     system = captured_request(monkeypatch)["messages"][0]["content"]
     assert "never a reason to reject" in system
     assert "is not missing" in system
+
+
+def test_the_system_prompt_lists_the_categories(monkeypatch: pytest.MonkeyPatch) -> None:
+    system = captured_request(monkeypatch)["messages"][0]["content"]
+    assert '"category"' in system
+    for category in ("types", "imports", "failing-tests", "spec", "logic", "commit"):
+        assert category in system

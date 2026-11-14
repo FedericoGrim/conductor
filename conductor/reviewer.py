@@ -8,7 +8,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from conductor import credentials
+from conductor import credentials, rejections
 from conductor.config import Profile
 from conductor.errors import (
     MODEL_UNSUITABLE,
@@ -40,7 +40,10 @@ SYSTEM_PROMPT = (
     "diff shows only part of each file: code you cannot see (imports, definitions elsewhere "
     "in a file) is not missing.\n"
     "On rejection, name the criterion and what to change. "
-    'Answer with JSON only: {"ok": true|false, "reason": "<one or two sentences>"}.'
+    "Answer with JSON only: "
+    f'{{"ok": true|false, "category": "<one of: {", ".join(rejections.CATEGORIES)}>", '
+    f'"reason": "<one or two sentences>"}}. '
+    "The category names the main criterion broken; it is required when ok is false."
 )
 CHECK_OUTPUT_LIMIT = 1000
 
@@ -56,6 +59,7 @@ class Verdict:
     raw: str
     usage: dict[str, Any] = field(default_factory=dict)
     error: ModelError | None = None
+    category: str | None = None
 
     @classmethod
     def failed(cls, error: ModelError, raw: str = "") -> Verdict:
@@ -76,7 +80,7 @@ def http_post(url: str, headers: dict[str, str], body: dict[str, Any]) -> dict[s
         return payload
 
 
-def parse_verdict(content: str) -> tuple[bool, str] | None:
+def parse_verdict(content: str) -> tuple[bool, str, str | None] | None:
     match = JSON_BLOCK.search(content)
     if not match:
         return None
@@ -86,7 +90,13 @@ def parse_verdict(content: str) -> tuple[bool, str] | None:
         return None
     if not isinstance(data, dict) or not isinstance(data.get("ok"), bool):
         return None
-    return data["ok"], str(data.get("reason", ""))
+    ok = data["ok"]
+    if not ok:
+        category = data.get("category")
+        if not isinstance(category, str) or category not in rejections.CATEGORIES:
+            return None
+        return ok, str(data.get("reason", "")), category
+    return ok, str(data.get("reason", "")), None
 
 
 def classify_http_error(error: urllib.error.HTTPError) -> ModelError:
@@ -189,4 +199,4 @@ def review(
     if parsed is None:
         unparseable = ModelError.of(MODEL_UNSUITABLE, "unparseable-verdict", content)
         return Verdict(False, UNPARSEABLE, content, usage, unparseable)
-    return Verdict(parsed[0], parsed[1], content, usage)
+    return Verdict(parsed[0], parsed[1], content, usage, category=parsed[2])
