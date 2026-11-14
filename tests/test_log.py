@@ -155,6 +155,33 @@ def test_cost_by_model_counts_the_reviewers_that_failed() -> None:
     }
 
 
+def test_cost_by_model_counts_the_second_opinion() -> None:
+    attempt = {
+        "model": "openrouter/cheap",
+        "cost": {"worker": 0.01, "reviewer": 0.002},
+        "review": {"model": "openrouter/judge"},
+        "second_opinion": {"model": "deepseek/judge", "cost": 0.004},
+    }
+    assert cost_by_model([attempt]) == {
+        "openrouter/cheap": pytest.approx(0.01),
+        "openrouter/judge": pytest.approx(0.002),
+        "deepseek/judge": pytest.approx(0.004),
+    }
+
+
+def test_cost_by_model_ignores_a_missing_second_opinion() -> None:
+    attempt = {
+        "model": "openrouter/cheap",
+        "cost": {"worker": 0.01, "reviewer": 0.002},
+        "review": {"model": "openrouter/judge"},
+        "second_opinion": None,
+    }
+    assert cost_by_model([attempt]) == {
+        "openrouter/cheap": pytest.approx(0.01),
+        "openrouter/judge": pytest.approx(0.002),
+    }
+
+
 def test_run_json_carries_the_question_of_a_step_waiting_for_an_answer(tmp_path: Path) -> None:
     log = RunLog.create(tmp_path, PLAN, privacy="medium")
     asked = [{"attempt": 1, "model": "m", "question": "QUESTION: which one?"}]

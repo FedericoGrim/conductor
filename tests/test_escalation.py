@@ -636,3 +636,98 @@ def test_a_judgement_rejection_is_not_suspicious() -> None:
     review = recorded[0]["review"]
     assert review["category"] == "spec"
     assert review["suspicious"] is False
+
+
+def suspicious_rejection(reason: str, cost: float) -> Verdict:
+    return Verdict(False, reason, "{}", usage={"cost": cost}, category="imports")
+
+
+def test_a_suspicious_rejection_asks_the_next_reviewer_for_a_second_opinion() -> None:
+    passed = CheckResult("mypy --strict .", 0, "", 1.0)
+    reviewed: list[str] = []
+    result, _, recorded = run(
+        [
+            suspicious_rejection("bad imports", 0.1),
+            Verdict(True, "actually fine", "{}", usage={"cost": 0.2}),
+        ],
+        profile=REVIEWERS_PROFILE,
+        reviewed=reviewed,
+        checks=[[passed]],
+    )
+    assert result.status == "approved"
+    assert reviewed == ["openrouter/r", "openrouter/r2"]
+    assert recorded[0]["review"]["model"] == "openrouter/r2"
+    assert recorded[0]["review_fallbacks"][0]["model"] == "openrouter/r"
+    assert recorded[0]["second_opinion"]["model"] == "openrouter/r2"
+    assert recorded[0]["second_opinion"]["ok"] is True
+    assert recorded[0]["cost"]["reviewer"] == 0.2
+
+
+def test_a_suspicious_rejection_escalates_when_the_second_opinion_also_rejects() -> None:
+    passed = CheckResult("mypy --strict .", 0, "", 1.0)
+    reviewed: list[str] = []
+    result, calls, recorded = run(
+        [
+            suspicious_rejection("bad imports", 0.1),
+            suspicious_rejection("still bad imports", 0.2),
+            Verdict(True, "ok", "{}"),
+        ],
+        profile=REVIEWERS_PROFILE,
+        reviewed=reviewed,
+        checks=[[passed], [passed]],
+    )
+    assert result.status == "approved"
+    assert models(calls) == ["openrouter/t1", "openrouter/t2"]
+    assert "still bad imports" in calls[1][2]
+    assert recorded[0]["review"]["model"] == "openrouter/r2"
+    assert recorded[0]["second_opinion"]["ok"] is False
+
+
+def test_a_rejection_that_is_not_suspicious_gets_no_second_opinion() -> None:
+    passed = CheckResult("mypy --strict .", 0, "", 1.0)
+    reviewed: list[str] = []
+    profile = replace(REVIEWERS_PROFILE, tiers=(("openrouter/t0",),))
+    result, _, recorded = run(
+        [Verdict(False, "bad logic", "{}", category="logic")],
+        profile=profile,
+        reviewed=reviewed,
+        checks=[[passed]],
+    )
+    assert result.status == "failed"
+    assert reviewed == ["openrouter/r"]
+    assert recorded[0]["second_opinion"] is None
+
+
+def test_a_single_reviewer_never_asks_for_a_second_opinion() -> None:
+    passed = CheckResult("mypy --strict .", 0, "", 1.0)
+    reviewed: list[str] = []
+    profile = replace(PROFILE, tiers=(("openrouter/t0",),))
+    result, _, recorded = run(
+        [suspicious_rejection("bad imports", 0.1)],
+        profile=profile,
+        reviewed=reviewed,
+        checks=[[passed]],
+    )
+    assert result.status == "failed"
+    assert reviewed == ["openrouter/r"]
+    assert recorded[0]["second_opinion"] is None
+
+
+def test_an_errored_second_opinion_does_not_overrule_the_first_rejection() -> None:
+    passed = CheckResult("mypy --strict .", 0, "", 1.0)
+    reviewed: list[str] = []
+    result, calls, recorded = run(
+        [
+            suspicious_rejection("bad imports", 0.1),
+            reviewer_error(TRANSIENT),
+            Verdict(True, "ok", "{}"),
+        ],
+        profile=REVIEWERS_PROFILE,
+        reviewed=reviewed,
+        checks=[[passed], [passed]],
+    )
+    assert result.status == "approved"
+    assert reviewed == ["openrouter/r", "openrouter/r2", "openrouter/r"]
+    assert "bad imports" in calls[1][2]
+    assert recorded[0]["review"]["model"] == "openrouter/r"
+    assert recorded[0]["second_opinion"]["error"]["kind"] == TRANSIENT

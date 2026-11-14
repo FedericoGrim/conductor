@@ -20,6 +20,9 @@ def cost_by_model(attempts: list[dict[str, Any]]) -> dict[str, float]:
         cost = attempt.get("cost") or {}
         review = attempt.get("review") or {}
         fallbacks = attempt.get("review_fallbacks") or []
+        second = attempt.get("second_opinion") or None
+        if second:
+            fallbacks = [*fallbacks, second]
         for model, amount in (
             (attempt.get("model"), cost.get("worker")),
             (review.get("model"), cost.get("reviewer")),
