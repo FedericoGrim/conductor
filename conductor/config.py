@@ -12,7 +12,7 @@ BARE_KEY = re.compile(r"[A-Za-z0-9_-]+")
 DEFAULT_TRANSIENT_ATTEMPTS = 3
 BRAIN = "brain"
 DEFAULT_HARNESS = "opencode"
-HARNESS_NAMES = ("opencode", "claude-code")
+HARNESS_NAMES = ("opencode", "claude-code", "pi")
 DUMP_HEADER = "# Written by `conductor setup`. Comments added by hand are lost on the next save."
 
 
@@ -210,6 +210,13 @@ class Profile:
         if BRAIN in self.reviewers and not self.is_brain_review:
             raise ConfigError(f"privacy.{self.name}: reviewer 'brain' cannot have fallbacks")
         for name, provider in self.providers.items():
+            # Pi cannot express Vercel's gateway training flag: refuse the profile at load time.
+            if provider.harness == "pi" and "providerOptions" in provider.request_options:
+                raise ConfigError(
+                    f"privacy.{self.name}: provider '{name}': Pi cannot send "
+                    "request_options.providerOptions (the Vercel gateway training flag); "
+                    "use another harness for that provider"
+                )
             used = {model[len(name) + 1 :] for model in self.models()}
             for model in provider.model_options:
                 if model not in used:

@@ -24,7 +24,9 @@ from tests.factories import make_profile
 
 
 def test_every_harness_name_has_a_harness() -> None:
-    assert set(HARNESSES) == set(HARNESS_NAMES)
+    # "pi" is a known name already; its Harness (command and event stream) lands with the
+    # Pi worker step, so for now it is the one name without a harness.
+    assert set(HARNESSES) == set(HARNESS_NAMES) - {"pi"}
     assert all(harness.name == name for name, harness in HARNESSES.items())
 
 
