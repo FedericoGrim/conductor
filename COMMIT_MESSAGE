@@ -1,0 +1,8 @@
+fix(defaults): update low profile free levels with working models
+
+- Level 1: dots-studio/dots-3-note-preview:free → cohere/north-mini-code:free
+- Level 2: nvidia/nemotron-3-ultra-550b-a55b:free → inclusionai/ling-3.2-flash:free
+
+The previous free models were unavailable (403 region error) or unstable (502, 429).
+Both levels keep two free models each, first cheaper/better then fallback.
+Mirrored in conductor.toml.example; tests updated to assert exact models.

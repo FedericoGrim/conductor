@@ -11,6 +11,24 @@ def test_low_starts_with_free_models_and_ends_on_paid_ones() -> None:
     assert not any(model.endswith(":free") for tier in low.tiers[2:] for model in tier)
 
 
+def test_low_free_levels_use_expected_models() -> None:
+    low = default_config().profile("low")
+    # Level 1 (tier 0)
+    assert low.tiers[0] == (
+        "openrouter/dots-studio/dots-3-note-preview:free",
+        "openrouter/cohere/north-mini-code:free",
+    )
+    # Level 2 (tier 1)
+    assert low.tiers[1] == (
+        "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
+        "openrouter/inclusionai/ling-3.2-flash:free",
+    )
+    # No free level names a model whose id starts with a paid prefix (i.e., not :free)
+    for tier in low.tiers[:2]:
+        for model in tier:
+            assert model.endswith(":free"), f"Free level contains non-free model: {model}"
+
+
 def test_medium_and_high_never_use_free_models() -> None:
     config = default_config()
     for name in ("medium", "high"):
