@@ -298,7 +298,7 @@ class StepRun:
     def consult_reviewers(
         self, diff: str, entry: dict[str, Any], checks: list[CheckResult], commit_message: str
     ) -> Verdict | None:
-        """Ask the reviewers in order; the first verdict without an error decides."""
+        """Ask the reviewers in order, and a second one when a rejection is suspicious."""
         consulted: list[tuple[str, Verdict]] = []
         deciding_index = -1
         for index, reviewer in enumerate(self.profile.reviewers):
