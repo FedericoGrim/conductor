@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+from conductor.commits import choose_commit_message
 from conductor.errors import TRANSIENT
 from conductor.harness import (
     OPENCODE,
@@ -185,7 +186,9 @@ def test_run_attempt_uses_injected_runner(tmp_path: Path) -> None:
             model="openrouter/a/b",
             prompt="do it",
             extra_args=[],
-            commit_message="conductor: s1 attempt 1",
+            step_id="s1",
+            number=1,
+            commit_message=lambda final_text: "chore(conductor): apply step s1 attempt 1",
             transient_attempts=3,
             harness=OPENCODE,
             runner=fake_runner,
@@ -224,7 +227,9 @@ def test_run_attempt_stops_after_the_retry_limit_and_reports_a_transient_error(
             model="openrouter/a/b",
             prompt="do it",
             extra_args=[],
-            commit_message="conductor: s1 attempt 1",
+            step_id="s1",
+            number=1,
+            commit_message=lambda final_text: "chore(conductor): apply step s1 attempt 1",
             transient_attempts=2,
             harness=OPENCODE,
             runner=retrying_runner,
@@ -300,7 +305,9 @@ def test_run_attempt_reports_a_commit_rejected_by_a_hook(tmp_path: Path) -> None
             model="openrouter/a/b",
             prompt="do it",
             extra_args=[],
-            commit_message="chore(conductor): apply step s1 attempt 1",
+            step_id="s1",
+            number=1,
+            commit_message=lambda final_text: "chore(conductor): apply step s1 attempt 1",
             transient_attempts=3,
             harness=OPENCODE,
             runner=writing_runner,
@@ -308,3 +315,75 @@ def test_run_attempt_reports_a_commit_rejected_by_a_hook(tmp_path: Path) -> None
     )
     assert output.commit_rejection is not None and "mypy: error" in output.commit_rejection
     assert output.diff == ""
+
+
+def test_run_attempt_commits_with_the_callables_message(tmp_path: Path) -> None:
+    repo = init_repo(tmp_path)
+    worktree = tmp_path / "wt"
+    create_worktree(repo, worktree, branch="conductor/s1-1", base="main")
+    received: list[str] = []
+
+    async def writing_runner(
+        cmd: list[str], cwd: Path, should_stop: Callable[[str], bool]
+    ) -> tuple[int, str, str]:
+        (cwd / "made.txt").write_text("x = 1\n")
+        events = [text_event("COMMIT: feat(parser): scan the input")]
+        return 0, "".join(json.dumps(event) + "\n" for event in events), ""
+
+    def message(final_text: str) -> str:
+        received.append(final_text)
+        return choose_commit_message("s1", 1, "openrouter/a/b", final_text)
+
+    output = asyncio.run(
+        run_attempt(
+            worktree,
+            base="main",
+            model="openrouter/a/b",
+            prompt="do it",
+            extra_args=[],
+            step_id="s1",
+            number=1,
+            commit_message=message,
+            transient_attempts=3,
+            harness=OPENCODE,
+            runner=writing_runner,
+        )
+    )
+    assert received == ["COMMIT: feat(parser): scan the input"]
+    assert output.commit_message == (
+        "feat(parser): scan the input\n\n"
+        "Written by a Conductor worker: step s1, attempt 1, on openrouter/a/b."
+    )
+    assert git(worktree, "log", "-1", "--format=%B").strip() == output.commit_message
+
+
+def test_run_attempt_falls_back_when_the_callable_returns_an_invalid_message(
+    tmp_path: Path,
+) -> None:
+    repo = init_repo(tmp_path)
+    worktree = tmp_path / "wt"
+    create_worktree(repo, worktree, branch="conductor/s1-1", base="main")
+
+    async def writing_runner(
+        cmd: list[str], cwd: Path, should_stop: Callable[[str], bool]
+    ) -> tuple[int, str, str]:
+        (cwd / "made.txt").write_text("x = 1\n")
+        return 0, "", ""
+
+    output = asyncio.run(
+        run_attempt(
+            worktree,
+            base="main",
+            model="openrouter/a/b",
+            prompt="do it",
+            extra_args=[],
+            step_id="s1",
+            number=1,
+            commit_message=lambda final_text: "not a conventional commit",
+            transient_attempts=3,
+            harness=OPENCODE,
+            runner=writing_runner,
+        )
+    )
+    assert output.commit_message == "chore(conductor): apply step s1 attempt 1"
+    assert git(worktree, "log", "-1", "--format=%s").strip() == output.commit_message

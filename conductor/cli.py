@@ -10,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from conductor import billing, reviewer, settings, setup_tui, stats
+from conductor.commits import choose_commit_message
 from conductor.config import Config, ConfigError, Profile
 from conductor.escalation import RunState, run_step
 from conductor.harness import harness_for
@@ -100,11 +101,17 @@ async def execute_plan(
             harness=harness,
             step_id=step.id,
             number=number,
-            planned=step.commit,
+            commit_message=lambda final_text: choose_commit_message(
+                step.id, number, model, final_text, step.commit
+            ),
         )
 
-    def judge(model: str, spec: str, diff: str, checks: list[CheckResult]) -> reviewer.Verdict:
-        return reviewer.review(profile, model, spec, diff, rules=rules, checks=checks)
+    def judge(
+        model: str, spec: str, diff: str, checks: list[CheckResult], commit_message: str
+    ) -> reviewer.Verdict:
+        return reviewer.review(
+            profile, model, spec, diff, rules=rules, checks=checks, commit_message=commit_message
+        )
 
     async def check(step: Step, number: int) -> list[CheckResult]:
         path = worktrees / f"{step.id}-{number}"

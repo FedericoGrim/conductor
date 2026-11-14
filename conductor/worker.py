@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from conductor.commits import choose_commit_message
+from conductor.commits import fallback_subject, is_conventional
 from conductor.config import Profile
 from conductor.errors import ModelError
 
@@ -49,6 +49,7 @@ class AttemptOutput:
     cost: float = 0.0
     error: ModelError | None = None
     final_text: str = ""
+    commit_message: str = ""
     subscription_cost: float = 0.0
     commit_rejection: str | None = None
 
@@ -187,20 +188,19 @@ async def run_attempt(
     harness: Harness,
     runner: Runner = subprocess_runner,
     *,
-    step_id: str | None = None,
-    number: int | None = None,
-    planned: str | None = None,
-    commit_message: str | None = None,
+    step_id: str,
+    number: int,
+    commit_message: Callable[[str], str],
 ) -> AttemptOutput:
     command = harness.command(model, prompt, extra_args)
     should_stop = retry_limit(transient_attempts, harness.is_retry)
     exit_code, stdout, stderr = await runner(command, worktree, should_stop)
     events = parse_events(stdout)
-    worker_text = harness.final_text(events)
-    if commit_message is None:
-        assert step_id is not None and number is not None
-        commit_message = choose_commit_message(step_id, number, model, worker_text, planned)
-    commit_rejection = commit_work(worktree, commit_message)
+    final_text = harness.final_text(events)
+    message = commit_message(final_text)
+    if not is_conventional(message.split("\n", 1)[0]):
+        message = fallback_subject(step_id, number)
+    commit_rejection = commit_work(worktree, message)
     return AttemptOutput(
         exit_code=exit_code,
         session_id=harness.session_id(events),
@@ -210,7 +210,8 @@ async def run_attempt(
         command=command,
         cost=harness.cost(events),
         error=harness.error(events, exit_code, stderr),
-        final_text=worker_text,
+        final_text=final_text,
+        commit_message=message,
         subscription_cost=harness.subscription_cost(events) if harness.subscription_cost else 0.0,
         commit_rejection=commit_rejection,
     )

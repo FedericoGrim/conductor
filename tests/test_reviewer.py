@@ -14,7 +14,7 @@ from conductor.errors import (
     UNCLASSIFIED,
     ModelError,
 )
-from conductor.reviewer import Verdict, review
+from conductor.reviewer import Verdict, review, review_request
 from conductor.verify import CheckResult
 from tests.factories import make_profile
 
@@ -314,3 +314,23 @@ def test_the_reviewer_judges_tests_and_domain_rules_explicitly(
     system = captured_request(monkeypatch)["messages"][0]["content"]
     for criterion in ("tests", "domain rules", "JSON only"):
         assert criterion in system
+
+
+def test_review_request_includes_the_commit_message_when_given() -> None:
+    prompt = review_request("spec", "+diff", (), [], "feat(parser): scan the input")
+    assert "## Commit message" in prompt
+    assert "feat(parser): scan the input" in prompt
+    assert prompt.index("## Commit message") < prompt.index("## Diff")
+
+
+def test_review_request_omits_the_commit_message_when_empty() -> None:
+    prompt = review_request("spec", "+diff", (), [])
+    assert "## Commit message" not in prompt
+
+
+def test_the_system_prompt_names_the_commit_message_criterion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    system = captured_request(monkeypatch)["messages"][0]["content"]
+    assert "commit message" in system
+    assert "Conventional Commit type" in system

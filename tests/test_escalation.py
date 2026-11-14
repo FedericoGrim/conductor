@@ -29,6 +29,7 @@ def output(
     cost: float = 0.0,
     error: ModelError | None = None,
     commit_rejection: str | None = None,
+    commit_message: str = "",
 ) -> AttemptOutput:
     return AttemptOutput(
         exit_code=exit_code,
@@ -38,6 +39,7 @@ def output(
         cost=cost,
         error=error,
         commit_rejection=commit_rejection,
+        commit_message=commit_message,
     )
 
 
@@ -50,6 +52,7 @@ def run(
     checks: list[list[CheckResult]] | None = None,
     checked: list[int] | None = None,
     judged_checks: list[list[CheckResult]] | None = None,
+    judged_messages: list[str] | None = None,
 ) -> Any:
     calls: list[tuple[int, str, str]] = []
     recorded: list[dict[str, Any]] = []
@@ -57,14 +60,18 @@ def run(
     judged = list(reversed(range(len(verdicts))))
     reviewed = [] if reviewed is None else reviewed
     judged_checks = [] if judged_checks is None else judged_checks
+    judged_messages = [] if judged_messages is None else judged_messages
 
     async def attempt(step: Step, number: int, model: str, prompt: str) -> AttemptOutput:
         calls.append((number, model, prompt))
         return outputs[number - 1]
 
-    def judge(model: str, spec: str, diff: str, checks: list[CheckResult]) -> Verdict:
+    def judge(
+        model: str, spec: str, diff: str, checks: list[CheckResult], commit_message: str
+    ) -> Verdict:
         reviewed.append(model)
         judged_checks.append(checks)
+        judged_messages.append(commit_message)
         return verdicts[judged.pop()]
 
     def record(step: Step, data: dict[str, Any]) -> None:
@@ -172,7 +179,9 @@ def test_brain_reviewer_hands_the_diff_back_without_judging() -> None:
     async def attempt(step: Step, number: int, model: str, prompt: str) -> AttemptOutput:
         return output()
 
-    def judge(model: str, spec: str, diff: str, checks: list[CheckResult]) -> Verdict:
+    def judge(
+        model: str, spec: str, diff: str, checks: list[CheckResult], commit_message: str
+    ) -> Verdict:
         raise AssertionError("brain profile must not call the reviewer")
 
     result = asyncio.run(
@@ -470,7 +479,9 @@ def test_a_step_with_answers_puts_them_in_the_prompt_and_reaches_the_reviewer() 
         calls.append(prompt)
         return output()
 
-    def judge(model: str, spec: str, diff: str, checks: list[CheckResult]) -> Verdict:
+    def judge(
+        model: str, spec: str, diff: str, checks: list[CheckResult], commit_message: str
+    ) -> Verdict:
         reviewed.append(model)
         return Verdict(True, "ok", "{}")
 
@@ -589,3 +600,21 @@ def test_a_commit_rejected_on_the_last_level_fails_the_step() -> None:
     result, _, _ = run([], outputs=[rejected, rejected])
     assert result.status == "failed"
     assert "git hooks rejected the commit" in result.detail
+
+
+def test_the_attempt_entry_records_the_commit_message() -> None:
+    _, _, recorded = run(
+        [Verdict(True, "ok", "{}")],
+        outputs=[output(commit_message="feat(parser): scan the input")],
+    )
+    assert recorded[0]["commit_message"] == "feat(parser): scan the input"
+
+
+def test_the_judge_receives_the_attempts_commit_message() -> None:
+    judged_messages: list[str] = []
+    run(
+        [Verdict(True, "ok", "{}")],
+        outputs=[output(commit_message="feat(parser): scan the input")],
+        judged_messages=judged_messages,
+    )
+    assert judged_messages == ["feat(parser): scan the input"]
