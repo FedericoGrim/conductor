@@ -35,6 +35,10 @@ SYSTEM_PROMPT = (
     "5. The commit message, when given, describes the diff and has the right Conventional "
     "Commit type (new behaviour is feat, not fix or chore; a bug fix is fix; tests only is "
     "test; documentation only is docs).\n"
+    "The verification commands already ran and passed: problems they check (imports, types, "
+    "syntax, formatting, lint, failing tests) are settled and never a reason to reject. The "
+    "diff shows only part of each file: code you cannot see (imports, definitions elsewhere "
+    "in a file) is not missing.\n"
     "On rejection, name the criterion and what to change. "
     'Answer with JSON only: {"ok": true|false, "reason": "<one or two sentences>"}.'
 )
@@ -113,7 +117,11 @@ def review_request(
             f"```\n{check.output[-CHECK_OUTPUT_LIMIT:].strip()}\n```"
             for check in checks
         )
-        sections.append(f"## Verification (run by Conductor)\n{outcomes}")
+        sections.append(
+            "## Verification (run by Conductor)\n"
+            "All verification commands passed (exit 0); what they check is settled.\n"
+            f"{outcomes}"
+        )
     if commit_message:
         sections.append(f"## Commit message\n```\n{commit_message}\n```")
     sections.append(f"## Diff\n```diff\n{diff}\n```")
