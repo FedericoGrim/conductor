@@ -4,7 +4,9 @@ from typing import Any
 
 import pytest
 
+from conductor import credentials
 from conductor.config import HARNESS_NAMES, Profile, Provider
+from conductor.errors import PROVIDER_UNUSABLE
 from conductor.harness import (
     CLAUDE_CODE,
     HARNESSES,
@@ -328,6 +330,29 @@ def test_a_pi_exit_with_nothing_to_classify_is_unclassified() -> None:
     assert (error.kind, error.type) == ("unclassified", "exit 2")
 
 
+def test_pi_api_error_with_exit_code_zero_is_a_classified_error() -> None:
+    failed = {
+        "type": "message_end",
+        "message": {
+            "role": "assistant",
+            "content": [],
+            "stopReason": "error",
+            "errorMessage": "401 Missing Authentication header",
+        },
+    }
+    error = pi_error(
+        [PI_SESSION, failed, {"type": "agent_end", "messages": [failed["message"]]}],
+        exit_code=0,
+        stderr="",
+    )
+    assert error is not None
+    assert (error.kind, error.type) == (PROVIDER_UNUSABLE, "pi-401")
+
+
+def test_pi_successful_exit_without_an_error_stays_none() -> None:
+    assert pi_error(PI_STREAM, exit_code=0, stderr="") is None
+
+
 def test_pi_stream_drops_noise_lines_and_keeps_unicode_line_separators() -> None:
     # U+2028 is a line separator to str.splitlines() but text inside a JSON string: the
     # stream splits on \n only, so the event survives whole and a non-JSON line is noise.
@@ -375,6 +400,38 @@ def test_the_pi_command_isolates_the_worker_and_names_the_api_model() -> None:
 
 
 def test_pi_environment_points_at_the_agent_dir_in_the_worktree(tmp_path: Path) -> None:
+    assert pi_environment(tmp_path) == {"PI_CODING_AGENT_DIR": str(tmp_path / ".pi-agent")}
+
+
+def test_pi_environment_resolves_the_key_of_every_provider_it_declared(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(credentials, "api_key", lambda name: "sk-" + name if name else None)
+    (tmp_path / ".pi-agent").mkdir()
+    (tmp_path / ".pi-agent" / "models.json").write_text(
+        json.dumps({"providers": {"a": {"apiKey": "KEY_A"}, "b": {"apiKey": "KEY_B"}}})
+    )
+    assert pi_environment(tmp_path) == {
+        "PI_CODING_AGENT_DIR": str(tmp_path / ".pi-agent"),
+        "KEY_A": "sk-KEY_A",
+        "KEY_B": "sk-KEY_B",
+    }
+
+
+def test_pi_environment_omits_a_key_that_cannot_be_resolved(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(credentials, "api_key", lambda name: None)
+    (tmp_path / ".pi-agent").mkdir()
+    (tmp_path / ".pi-agent" / "models.json").write_text(
+        json.dumps({"providers": {"a": {"apiKey": "KEY_A"}}})
+    )
+    assert pi_environment(tmp_path) == {"PI_CODING_AGENT_DIR": str(tmp_path / ".pi-agent")}
+
+
+def test_pi_environment_without_a_written_config_only_points_at_the_agent_dir(
+    tmp_path: Path,
+) -> None:
     assert pi_environment(tmp_path) == {"PI_CODING_AGENT_DIR": str(tmp_path / ".pi-agent")}
 
 
