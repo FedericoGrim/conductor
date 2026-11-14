@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
-from conductor.config import Profile
+from conductor import credentials
+from conductor.config import Profile, provider_of
 from conductor.errors import (
     MODEL_UNSUITABLE,
     PROVIDER_UNUSABLE,
@@ -13,8 +15,15 @@ from conductor.errors import (
     ModelError,
     mentions_context_limit,
 )
-from conductor.privacy import opencode_config
-from conductor.worker import Events, Harness, exclude_from_git
+from conductor.privacy import (
+    PI_AGENT_DIR,
+    api_model_id,
+    opencode_config,
+    pi_config,
+    pi_key_variables,
+    write_pi_config,
+)
+from conductor.worker import Events, Harness, exclude_from_git, no_environment
 
 OPENCODE_CONFIG_NAME = "opencode.json"
 ERROR_EVENT = "error"
@@ -216,9 +225,171 @@ def claude_error(events: Events, exit_code: int, stderr: str) -> ModelError | No
     return None
 
 
+PI_SESSION = "session"
+PI_TURN_END = "turn_end"
+PI_AGENT_END = "agent_end"
+PI_RETRY_START = "auto_retry_start"
+PI_RETRY_END = "auto_retry_end"
+PI_ASSISTANT = "assistant"
+PI_TEXT_BLOCK = "text"
+PI_STOP_ERROR = "error"
+# Pi reports API errors as strings, and the OpenAI-compatible client prefixes the HTTP
+# status to the text ("401 Incorrect API key provided", "Connection error.").
+PI_STATUS_CODE = re.compile(r"\b[45]\d{2}\b")
+
+
+def pi_command(model: str, prompt: str, extra_args: list[str]) -> list[str]:
+    return [
+        "pi",
+        "--mode",
+        "json",
+        "--no-session",
+        # The user's personal skills, extensions, prompt templates and themes must not reach
+        # a worker of an unrelated repository; the target's AGENTS.md/CLAUDE.md stay on.
+        "--no-skills",
+        "--no-extensions",
+        "--no-prompt-templates",
+        "--no-themes",
+        "--tools",
+        "read,bash,edit,write",
+        "--model",
+        api_model_id(provider_of(model), model),
+        *extra_args,
+        prompt,
+    ]
+
+
+def pi_environment(worktree: Path) -> dict[str, str]:
+    """Pi's process environment: its agent directory, and the keys its config references.
+
+    `models.json` names each provider's key variable, not the key; Pi reads the value from
+    the environment, so it never reaches a file. OpenCode and Claude Code keep their own
+    stored credentials and need none of this.
+    """
+    agent_dir = worktree / PI_AGENT_DIR
+    environment = {"PI_CODING_AGENT_DIR": str(agent_dir)}
+    for name in pi_key_variables(agent_dir):
+        key = credentials.api_key(name)
+        if key:
+            environment[name] = key
+    return environment
+
+
+def pi_prepare(worktree: Path, profile: Profile) -> None:
+    write_pi_config(worktree, pi_config(profile))
+
+
+def pi_session_id(events: Events) -> str | None:
+    return next(
+        (
+            str(event["id"])
+            for event in events
+            if event.get("type") == PI_SESSION and event.get("id")
+        ),
+        None,
+    )
+
+
+def pi_is_retry(event: dict[str, Any]) -> bool:
+    return event.get("type") == PI_RETRY_START
+
+
+def pi_cost(events: Events) -> float:
+    total = 0.0
+    for event in events:
+        if event.get("type") != PI_TURN_END:
+            continue
+        message = event.get("message")
+        usage = message.get("usage") if isinstance(message, dict) else None
+        cost = usage.get("cost") if isinstance(usage, dict) else None
+        reported = cost.get("total") if isinstance(cost, dict) else None
+        if isinstance(reported, int | float):
+            total += float(reported)
+    return total
+
+
+def pi_assistant_messages(events: Events) -> list[dict[str, Any]]:
+    """Assistant messages, newest first: each turn's message, then agent_end's transcript."""
+    messages: list[dict[str, Any]] = []
+    for event in reversed(events):
+        if event.get("type") != PI_TURN_END:
+            continue
+        message = event.get("message")
+        if isinstance(message, dict) and message.get("role") == PI_ASSISTANT:
+            messages.append(message)
+    for event in reversed(events):
+        if event.get("type") != PI_AGENT_END:
+            continue
+        transcript = event.get("messages")
+        if isinstance(transcript, list):
+            messages.extend(
+                message
+                for message in reversed(transcript)
+                if isinstance(message, dict) and message.get("role") == PI_ASSISTANT
+            )
+    return messages
+
+
+def pi_message_text(message: dict[str, Any]) -> str:
+    content = message.get("content")
+    texts = [
+        str(block["text"])
+        for block in content or []
+        if isinstance(block, dict) and block.get("type") == PI_TEXT_BLOCK
+    ]
+    return "\n".join(texts)
+
+
+def pi_final_text(events: Events) -> str:
+    for message in pi_assistant_messages(events):
+        text = pi_message_text(message)
+        if text:
+            return text
+    return ""
+
+
+def pi_status(message: str) -> int | None:
+    match = PI_STATUS_CODE.search(message)
+    return int(match[0]) if match else None
+
+
+def pi_kind(status: Any, message: str) -> str:
+    """The same word and status tests as the Claude Code classifier."""
+    return claude_kind(status, message)
+
+
+def pi_error(events: Events, exit_code: int, stderr: str) -> ModelError | None:
+    """Classify a failed attempt from the final error text in its stream.
+
+    Pi exits 0 even when the provider refused the request, reporting the failure as the last
+    assistant message's `stopReason`/`errorMessage`, so the stream is read whatever the exit
+    code; only an exit with nothing to classify is an unclassified error.
+    """
+    retry_end = next(
+        (event for event in reversed(events) if event.get("type") == PI_RETRY_END),
+        None,
+    )
+    reported: list[str] = []
+    if retry_end is not None and retry_end.get("finalError"):
+        reported.append(str(retry_end["finalError"]))
+    for message in pi_assistant_messages(events):
+        failure = message.get("errorMessage")
+        if not failure and message.get("stopReason") == PI_STOP_ERROR:
+            failure = PI_STOP_ERROR
+        if failure:
+            reported.append(str(failure))
+    for reason in reported:
+        status = pi_status(reason)
+        return ModelError.of(pi_kind(status, reason), f"pi-{status or 'error'}", reason)
+    if exit_code == 0:
+        return None
+    return ModelError.of(UNCLASSIFIED, f"exit {exit_code}", stderr)
+
+
 OPENCODE = Harness(
     name="opencode",
     prepare=prepare_opencode,
+    environment=no_environment,
     command=build_command,
     session_id=session_id,
     is_retry=is_retry,
@@ -230,6 +401,7 @@ OPENCODE = Harness(
 CLAUDE_CODE = Harness(
     name="claude-code",
     prepare=prepare_claude_code,
+    environment=no_environment,
     command=claude_build_command,
     session_id=claude_session_id,
     is_retry=claude_is_retry,
@@ -239,7 +411,19 @@ CLAUDE_CODE = Harness(
     subscription_cost=claude_subscription_cost,
 )
 
-HARNESSES = {harness.name: harness for harness in (OPENCODE, CLAUDE_CODE)}
+PI = Harness(
+    name="pi",
+    prepare=pi_prepare,
+    environment=pi_environment,
+    command=pi_command,
+    session_id=pi_session_id,
+    is_retry=pi_is_retry,
+    cost=pi_cost,
+    error=pi_error,
+    final_text=pi_final_text,
+)
+
+HARNESSES = {harness.name: harness for harness in (OPENCODE, CLAUDE_CODE, PI)}
 
 
 def harness_for(profile: Profile, model: str) -> Harness:

@@ -1,4 +1,9 @@
-from conductor.privacy import api_model_id, opencode_config
+import json
+from pathlib import Path
+
+from conductor.config import Profile, Provider
+from conductor.privacy import api_model_id, opencode_config, pi_config, write_pi_config
+from conductor.worker import create_worktree, git
 from tests.factories import make_profile
 
 PROFILE = make_profile(
@@ -149,3 +154,104 @@ def test_opencode_config_hides_every_skill_from_the_worker() -> None:
     assert opencode_config(PROFILE)["permissions"] == [
         {"action": "skill", "resource": "*", "effect": "deny"}
     ]
+
+
+PI_PROFILE = Profile(
+    "medium",
+    {
+        "openrouter": Provider(
+            "openrouter",
+            "https://eu.openrouter.ai/api/v1",
+            "OPENROUTER_API_KEY",
+            {"provider": {"data_collection": "deny"}},
+            harness="pi",
+        )
+    },
+    (("openrouter/deepseek/v4",), ("openrouter/anthropic/sonnet",)),
+    ("openrouter/deepseek/v4",),
+)
+
+
+def test_pi_config_lists_every_model_of_tiers_and_reviewers_with_its_api_id() -> None:
+    assert pi_config(PI_PROFILE) == {
+        "providers": {
+            "openrouter": {
+                "baseUrl": "https://eu.openrouter.ai/api/v1",
+                "api": "openai-completions",
+                "apiKey": "OPENROUTER_API_KEY",
+                "models": [{"id": "deepseek/v4"}, {"id": "anthropic/sonnet"}],
+                "compat": {"openRouterRouting": {"data_collection": "deny"}},
+            }
+        }
+    }
+
+
+def test_pi_config_skips_providers_of_other_harnesses() -> None:
+    profile = Profile(
+        "medium",
+        {
+            "openrouter": Provider("openrouter", "https://openrouter.ai/api/v1", "A", harness="pi"),
+            "deepseek": Provider("deepseek", "https://api.deepseek.com/v1", "B"),
+        },
+        (("openrouter/a",), ("deepseek/b",)),
+        ("openrouter/a",),
+    )
+    assert set(pi_config(profile)["providers"]) == {"openrouter"}
+
+
+def test_pi_config_never_contains_the_api_key(monkeypatch: object) -> None:
+    import os
+
+    os.environ["OPENROUTER_API_KEY"] = "sk-test-secret"
+    try:
+        assert "sk-test-secret" not in str(pi_config(PI_PROFILE))
+    finally:
+        del os.environ["OPENROUTER_API_KEY"]
+
+
+def test_pi_config_leaves_out_compat_without_provider_options() -> None:
+    profile = Profile(
+        "medium",
+        {"openrouter": Provider("openrouter", "https://openrouter.ai/api/v1", "A", harness="pi")},
+        (("openrouter/a",),),
+        ("openrouter/a",),
+    )
+    assert "compat" not in pi_config(profile)["providers"]["openrouter"]
+
+
+def test_pi_config_does_not_send_openrouter_routing_to_other_providers() -> None:
+    profile = Profile(
+        "medium",
+        {
+            "scaleway": Provider(
+                "scaleway",
+                "https://api.scaleway.ai/v1",
+                "SCALEWAY_API_KEY",
+                {"provider": {"data_collection": "deny"}},
+                harness="pi",
+            )
+        },
+        (("scaleway/glm-5.3",),),
+        ("scaleway/glm-5.3",),
+    )
+    provider = pi_config(profile)["providers"]["scaleway"]
+    assert provider["baseUrl"] == "https://api.scaleway.ai/v1"
+    assert provider["apiKey"] == "SCALEWAY_API_KEY"
+    assert "compat" not in provider
+
+
+def test_write_pi_config_writes_models_json_and_excludes_the_agent_dir(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init", "-q", "-b", "main")
+    git(repo, "config", "user.name", "test")
+    git(repo, "config", "user.email", "test@example.com")
+    (repo / "README.md").write_text("hi\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "init")
+    worktree = tmp_path / "wt"
+    create_worktree(repo, worktree, branch="conductor/s1-1", base="main")
+    config = {"providers": {"openrouter": {"apiKey": "OPENROUTER_API_KEY"}}}
+    write_pi_config(worktree, config)
+    assert json.loads((worktree / ".pi-agent" / "models.json").read_text()) == config
+    assert ".pi-agent/" in (repo / ".git" / "info" / "exclude").read_text()

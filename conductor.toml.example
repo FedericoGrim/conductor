@@ -66,6 +66,18 @@
 # medium: paid models, providers are asked not to retain or train on prompts. Fallbacks run on
 # Vercel AI Gateway with disallowPromptTraining (AI_GATEWAY_API_KEY), at a higher price.
 #
+# A provider may also be run by the Pi harness (harness = "pi"): Pi gets the endpoint and the key's
+# variable name in its own models.json, so the provider keeps base_url and api_key_env. Pi cannot
+# send the Vercel gateway's providerOptions, so such a provider is refused at load time. Medium
+# with a Pi provider on OpenRouter:
+#
+#   [privacy.medium.providers.pi-openrouter]
+#   base_url = "https://openrouter.ai/api/v1"
+#   api_key_env = "OPENROUTER_API_KEY"
+#   harness = "pi"
+#   # then, in [privacy.medium], tiers = ["pi-openrouter/anthropic/claude-haiku-5.5", ...]
+#
+#
 # high: EU data residency through eu.openrouter.ai (OpenRouter Business plan, +8% on credits).
 # Fallbacks run on Scaleway in Paris (SCALEWAY_API_KEY), which has no GPT-5.6 Luna or Opus.
 

@@ -340,6 +340,20 @@ def test_a_level_whose_providers_are_all_excluded_is_unavailable_without_attempt
     assert "excluded" in result.detail
 
 
+def test_a_classified_error_with_exit_code_zero_is_a_failed_attempt() -> None:
+    result, calls, recorded = run(
+        [Verdict(True, "ok", "{}")],
+        outputs=[
+            output(diff="", exit_code=0, error=ModelError(TRANSIENT, "pi-429", "rate limited")),
+            output(),
+        ],
+        profile=FALLBACK_PROFILE,
+    )
+    assert result.status == "approved"
+    assert models(calls) == ["openrouter/t1", "openrouter/t1b"]
+    assert recorded[0]["error"]["type"] == "pi-429"
+
+
 def test_an_unclassified_error_fails_without_trying_the_fallbacks() -> None:
     result, calls, _ = run([], outputs=[failure(UNCLASSIFIED)], profile=FALLBACK_PROFILE)
     assert result.status == "failed"
