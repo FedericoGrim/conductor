@@ -18,8 +18,9 @@ Simple layering, no tactical DDD: a small tool with little business logic.
 - `conductor/worker.py` — worktree creation, the streaming runner (stopped after the retry limit), `run_attempt` with a `Harness`, the commit of the worker's changes through the repository's git hooks (a refusal becomes `commit_rejection`), diff capture.
 - `conductor/harness.py` — the worker harnesses, each the command, its event stream (retries, cost, classified errors, final text) and its worktree configuration: OpenCode, and Claude Code (`claude -p`, isolated with `--setting-sources project`, confined to the worktree with `--permission-mode acceptEdits`). `harness_for` picks by the provider of the chosen model.
 - `conductor/verify.py` — runs a step's `verify` commands with `sh -c` in its worktree (`CONDUCTOR_REPO` set, timeout, output tail).
-- `conductor/reviewer.py` — direct OpenAI-compatible chat call with explicit criteria (spec, tests in the diff, domain rules, bugs, the commit message), the plan's rules and the verification results; returns `{ok, reason}`.
-- `conductor/escalation.py` — the working brief in every prompt (plan already approved, TDD, stay in scope, run the step's `verify`, remember the git hooks, end with a `COMMIT:` line); rejected step → next tier with the reason in the prompt; beyond last tier → `failed`. A worker question → `needs_answer` (no review, no escalation). A commit refused by the git hooks → rejected with the hook output, like a failed verification. Classified model errors → next model of the level (an unusable provider is excluded for the run), level exhausted → `unavailable`, unclassified → `failed`; reviewer errors → next reviewer, all failed → `needs_brain_review`; never escalates on an error.
+- `conductor/rejections.py` — rejection categories, the categories each known verify tool settles, and the suspicious-rejection rule.
+- `conductor/reviewer.py` — direct OpenAI-compatible chat call with explicit criteria (spec, tests in the diff, domain rules, bugs, the commit message), the plan's rules and the verification results; returns `{ok, category, reason}`.
+- `conductor/escalation.py` — the working brief in every prompt (plan already approved, TDD, stay in scope, run the step's `verify`, remember the git hooks, end with a `COMMIT:` line); rejected step → next tier with the reason in the prompt, and the attempt records the reviewer's category and whether the rejection is suspicious; beyond last tier → `failed`. A worker question → `needs_answer` (no review, no escalation). A commit refused by the git hooks → rejected with the hook output, like a failed verification. Classified model errors → next model of the level (an unusable provider is excluded for the run), level exhausted → `unavailable`, unclassified → `failed`; reviewer errors → next reviewer, all failed → `needs_brain_review`; never escalates on an error.
 - `conductor/errors.py` — the error classes (transient, provider unusable, model unsuitable, unclassified) shared by worker and reviewer.
 - `conductor/log.py` — `.conductor/runs/<ts>/run.json` and `step-<id>/attempt-N.json`, with cost totals per step, model and run.
 - `conductor/merge.py` — merge approved worktree branches; conflicts and hooks refusing the merge are reported, not resolved.
@@ -42,6 +43,7 @@ Rule: no module imports OpenCode or provider specifics except `harness.py`, `rev
 - List candidate models per privacy level: `.venv/bin/python scripts/list-models.py --privacy medium`
 - Create or edit the configuration in a terminal UI: `.venv/bin/conductor setup`
 - Move the settings between machines: `.venv/bin/conductor config export FILE` / `config import FILE`
+- Replay a recorded attempt through the reviewer: `python scripts/replay-review.py .conductor/runs/<ts>/step-<id>/attempt-N.json`
 
 ## Environment
 - `OPENROUTER_API_KEY`, and for the default fallbacks `DEEPSEEK_API_KEY` (low), `AI_GATEWAY_API_KEY` (medium), `SCALEWAY_API_KEY` (high) — or the `api_key_env` named in the chosen profile — for the reviewer call: from the environment, or from `~/.local/share/conductor/auth.json` written by `conductor setup`.
@@ -78,7 +80,7 @@ Rule: no module imports OpenCode or provider specifics except `harness.py`, `rev
 - A key is never sent to a `base_url` that is not `https`.
 - Worker output (transcripts, diffs, reviewer replies) is untrusted data: never executed, never fed to a shell.
 - `verify` commands come from the plan (written by the brain), never from worker output. They run in the worker's worktree, so they execute files the worker may have changed: no more than the worker can already run there with `--auto`.
-- Reviewer verdict must be parsed strictly as JSON; anything else is a reviewer error with reason "unparseable verdict": never approved, handed to the brain.
+- Reviewer verdict must be parsed strictly as JSON with a category from the closed list on every rejection; anything else is a reviewer error with reason "unparseable verdict": never approved, handed to the brain.
 
 ## Definition of Done (extra)
 - `conductor validate` still accepts `examples/plan.json`.
