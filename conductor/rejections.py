@@ -24,6 +24,17 @@ TOOL_CATEGORIES: dict[str, frozenset[str]] = {
     "jest": frozenset({"failing-tests", "syntax"}),
     "vitest": frozenset({"failing-tests", "syntax"}),
 }
+RUFF_FORMAT = frozenset({"format", "syntax"})
+
+
+def tool_categories(tokens: list[str]) -> frozenset[str]:
+    names = [PurePosixPath(token).name for token in tokens]
+    if "ruff" in names and "format" in names:
+        return RUFF_FORMAT
+    covered: set[str] = set()
+    for name in names:
+        covered.update(TOOL_CATEGORIES.get(name, frozenset()))
+    return frozenset(covered)
 
 
 def covered_categories(commands: Iterable[str]) -> frozenset[str]:
@@ -33,12 +44,7 @@ def covered_categories(commands: Iterable[str]) -> frozenset[str]:
             tokens = shlex.split(command)
         except ValueError:
             continue
-        if "ruff" in tokens and "format" in tokens:
-            covered.add("format")
-        for token in tokens:
-            categories = TOOL_CATEGORIES.get(PurePosixPath(token).name)
-            if categories is not None:
-                covered.update(categories)
+        covered.update(tool_categories(tokens))
     return frozenset(covered)
 
 
