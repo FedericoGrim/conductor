@@ -4,7 +4,7 @@ A rerunnable benchmark that measures, per worker model: which real tasks of this
 
 ## What is measured
 
-Every task in `benchmarks/tasks/` is a piece of this repository's own history: a real commit, its issue text as the spec, the tests it added as hidden tests. Each candidate model runs the tasks through Conductor like any worker and is scored against the ground truth of the solution commit, not against the reviewer's taste:
+Every task in `benchmarks/tasks/` is a piece of this repository's own history: a real commit, a spec written by the brain as it would be for a real plan (exact interfaces, so that the hidden tests can run), and the test files of the solution commit as hidden tests. Each candidate model runs the tasks through Conductor like any worker and is scored against the ground truth of the solution commit, not against the reviewer's taste:
 
 - **Solved** — the jobs that ended approved with the hidden tests passing.
 - **Cost** — worker plus fixed reviewer in dollars per job, dollars per solved job, and the mean time per job.
@@ -57,7 +57,7 @@ One JSON file per task in `benchmarks/tasks/`, named `<id>.json` — `https-only
 | `difficulty` | the task's difficulty, 1–5, as it would be planned in a real run; recorded for the report's per-difficulty columns, while the benchmark itself always runs the step at difficulty 5 |
 | `base` | the commit a job starts from: the parent of `solution` |
 | `solution` | the commit that solved the task; the hidden tests are read from it |
-| `hidden_tests` | the test files the task added or changed, as repository-root paths in the solution commit |
+| `hidden_tests` | the test files that cover the change, taken whole from the solution commit (repository-root paths) |
 | `files` | the files the worker may touch; the step's `files` |
 | `spec` | the task text the worker receives; the step's `spec`, self-contained (the worker sees only the copy) |
 
