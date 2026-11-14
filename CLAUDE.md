@@ -13,10 +13,10 @@ Simple layering, no tactical DDD: a small tool with little business logic.
 - `conductor/plan.py` — `Plan`, `Step` models and validation (unique ids, known `depends_on`, no cycles, difficulty between 1 and `DIFFICULTY_LEVELS`, optional `answers` to earlier questions, optional `commit` a Conventional Commit subject).
 - `conductor/config.py` — `conductor.toml`: privacy profiles, each with five difficulty levels (a model or an ordered list with fallbacks, cheapest first), one or more providers (each with a `harness`, default `opencode`; `base_url` and `api_key_env` together or neither), reviewers (a model, a list, or `brain`; never a provider without endpoint), `max_parallel`, `retry`. A model id is `<provider>/<model>`.
 - `conductor/defaults.py` — the built-in `low`/`medium`/`high` profiles (five levels each, with fallbacks on a second provider: DeepSeek, Vercel, Scaleway) and `DIFFICULTY_LEVELS`.
-- `conductor/privacy.py` — a profile → the `opencode.json` written in each worktree (one entry per provider, every skill denied), the Pi `models.json` in each worktree's agent directory (one entry per `pi` provider, the key named by its variable) and the reviewer request options.
+- `conductor/privacy.py` — a profile → the `opencode.json` written in each worktree (one entry per provider, every skill denied), the Pi `models.json` in each worktree's agent directory (one entry per `pi` provider, the key named by its variable, prices declared for each model) and the reviewer request options.
 - `conductor/scheduler.py` — asyncio DAG scheduler bounded by `max_parallel`.
 - `conductor/worker.py` — worktree creation, the streaming runner (stopped after the retry limit), `run_attempt` with a `Harness`, the commit of the worker's changes through the repository's git hooks (a refusal becomes `commit_rejection`), diff capture.
-- `conductor/harness.py` — the worker harnesses, each the command, its event stream (retries, cost, classified errors, final text) and its worktree configuration: OpenCode, Claude Code (`claude -p`, isolated with `--setting-sources project`, confined to the worktree with `--permission-mode acceptEdits`), and Pi (`pi --mode json`, a JSON event stream read for the final assistant text, the turn costs, the auto-retries and the final error strings; isolated per attempt by `PI_CODING_AGENT_DIR`). `harness_for` picks by the provider of the chosen model.
+- `conductor/harness.py` — the worker harnesses, each the command, its event stream (retries, cost, classified errors, final text) and its worktree configuration: OpenCode, Claude Code (`claude -p`, isolated with `--setting-sources project`, confined to the worktree with `--permission-mode acceptEdits`), and Pi (`pi --mode json`, a JSON event stream read for the final assistant text, the turn costs, the auto-retries and the final error strings; isolated per attempt by `PI_CODING_AGENT_DIR`; `pi_prepare` passes the catalog prices). `harness_for` picks by the provider of the chosen model.
 - `conductor/verify.py` — runs a step's `verify` commands with `sh -c` in its worktree (`CONDUCTOR_REPO` set, timeout, output tail).
 - `conductor/rejections.py` — rejection categories, the categories each known verify tool settles, and the suspicious-rejection rule.
 - `conductor/reviewer.py` — direct OpenAI-compatible chat call with explicit criteria (spec, tests in the diff, domain rules, bugs, the commit message), the plan's rules and the verification results; returns `{ok, category, reason}`.
@@ -24,7 +24,7 @@ Simple layering, no tactical DDD: a small tool with little business logic.
 - `conductor/errors.py` — the error classes (transient, provider unusable, model unsuitable, unclassified) shared by worker and reviewer.
 - `conductor/log.py` — `.conductor/runs/<ts>/run.json` and `step-<id>/attempt-N.json`, with cost totals per step, model and run; the attempt records `second_opinion` and its cost is counted.
 - `conductor/merge.py` — merge approved worktree branches; conflicts and hooks refusing the merge are reported, not resolved.
-- `conductor/catalog.py` — provider model lists (`/models`), prices per million tokens, filtering and search.
+- `conductor/catalog.py` — provider model lists (`/models`), prices per million tokens (cached per base URL), filtering and search.
 - `conductor/setup_state.py` — editable profiles, providers, five difficulty levels and validation for the setup UI.
 - `conductor/setup_tui.py` — `curses` screens, keys and rendering of `conductor setup`, starting from `defaults.py` when no file exists.
 - `conductor/credentials.py` — API keys from the environment first, then `auth.json`.
@@ -81,7 +81,7 @@ Rule: no module imports OpenCode or provider specifics except `harness.py`, `rev
 ## Security & constraints
 - Settings export never includes keys, only provider names and the variables that hold them.
 - API keys come from the environment or from `auth.json` (mode `600`, directory `700`, written atomically by `conductor setup` only); never written to logs, `opencode.json`, `run.json`, the ledger or billing output. The environment wins over the file. Pi's `models.json` names the key's variable and never holds the key; Conductor resolves that variable (environment or `auth.json`) and passes it in the worker's environment.
-- Pi reports a cost only for the models it knows: without a declared price a Pi attempt costs 0 and only its tokens are recorded (#72).
+- A Pi step's cost comes from the model's price declared in `models.json`, read from the provider's `/models` endpoint once per run, and a price that cannot be read leaves a cost of 0 instead of failing the run.
 - A key is never sent to a `base_url` that is not `https`.
 - Worker output (transcripts, diffs, reviewer replies) is untrusted data: never executed, never fed to a shell.
 - `verify` commands come from the plan (written by the brain), never from worker output. They run in the worker's worktree, so they execute files the worker may have changed: no more than the worker can already run there with `--auto`.
