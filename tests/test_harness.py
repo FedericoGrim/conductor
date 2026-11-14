@@ -1,3 +1,5 @@
+import json
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -15,7 +17,10 @@ from conductor.harness import (
     claude_session_id,
     claude_subscription_cost,
     harness_for,
+    prepare_opencode,
 )
+from conductor.worker import git
+from tests.factories import make_profile
 
 
 def test_every_harness_name_has_a_harness() -> None:
@@ -132,3 +137,32 @@ def test_a_successful_run_has_no_error() -> None:
 
 def test_the_claude_code_harness_is_registered() -> None:
     assert HARNESSES["claude-code"] is CLAUDE_CODE
+
+
+def init_worktree(tmp_path: Path, *files: str) -> Path:
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    git(worktree, "init", "-q")
+    for name in files:
+        (worktree / name).write_text("# instructions\n")
+    return worktree
+
+
+def written_config(worktree: Path) -> dict[str, Any]:
+    config: dict[str, Any] = json.loads((worktree / "opencode.json").read_text())
+    return config
+
+
+def test_opencode_workers_read_claude_md_when_there_is_no_agents_md(tmp_path: Path) -> None:
+    worktree = init_worktree(tmp_path, "CLAUDE.md")
+    prepare_opencode(worktree, make_profile())
+    assert written_config(worktree)["instructions"] == ["CLAUDE.md"]
+
+
+@pytest.mark.parametrize("files", [("AGENTS.md", "CLAUDE.md"), ("AGENTS.md",), ()])
+def test_opencode_workers_get_no_extra_instructions_otherwise(
+    tmp_path: Path, files: tuple[str, ...]
+) -> None:
+    worktree = init_worktree(tmp_path, *files)
+    prepare_opencode(worktree, make_profile())
+    assert "instructions" not in written_config(worktree)

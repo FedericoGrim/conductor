@@ -36,8 +36,15 @@ def write_opencode_config(worktree: Path, config: dict[str, Any]) -> None:
     exclude_from_git(worktree, OPENCODE_CONFIG_NAME)
 
 
+def repository_instructions(worktree: Path) -> dict[str, Any]:
+    """OpenCode 2 reads AGENTS.md only: point it at CLAUDE.md when that is all there is."""
+    if (worktree / "CLAUDE.md").is_file() and not (worktree / "AGENTS.md").is_file():
+        return {"instructions": ["CLAUDE.md"]}
+    return {}
+
+
 def prepare_opencode(worktree: Path, profile: Profile) -> None:
-    write_opencode_config(worktree, opencode_config(profile))
+    write_opencode_config(worktree, opencode_config(profile) | repository_instructions(worktree))
 
 
 def build_command(model: str, prompt: str, extra_args: list[str]) -> list[str]:

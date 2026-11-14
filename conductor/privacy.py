@@ -7,6 +7,9 @@ from conductor.config import Profile, Provider
 
 VERCEL_GATEWAY_HOST = "ai-gateway.vercel.sh"
 OPENCODE = "opencode"
+# OpenCode also loads the user's personal skills (~/.claude/skills, ~/.agents/skills): a worker
+# must see only Conductor's prompt and the target repository.
+NO_SKILLS = [{"action": "skill", "resource": "*", "effect": "deny"}]
 
 
 def api_model_id(provider: str, model: str) -> str:
@@ -57,6 +60,7 @@ def opencode_config(profile: Profile) -> dict[str, Any]:
             }
             for name, provider in written.items()
         },
+        "permissions": NO_SKILLS,
     }
     # OpenCode sends title and summary requests to a model of its own choosing: pin it to
     # the profile, and put the provider options at provider level so they reach it anyway.
