@@ -44,6 +44,7 @@ Rule: no module imports OpenCode or provider specifics except `harness.py`, `rev
 - Create or edit the configuration in a terminal UI: `.venv/bin/conductor setup`
 - Move the settings between machines: `.venv/bin/conductor config export FILE` / `config import FILE`
 - Replay a recorded attempt through the reviewer: `python scripts/replay-review.py .conductor/runs/<ts>/step-<id>/attempt-N.json`
+- Model benchmark: `.venv/bin/python scripts/benchmark.py run --repeat 3 --budget 12`, then `scripts/benchmark.py report benchmarks/results/<ts>` (see benchmarks/README.md)
 
 ## Environment
 - `OPENROUTER_API_KEY`, and for the default fallbacks `DEEPSEEK_API_KEY` (low), `AI_GATEWAY_API_KEY` (medium), `SCALEWAY_API_KEY` (high) — or the `api_key_env` named in the chosen profile — for the reviewer call: from the environment, or from `~/.local/share/conductor/auth.json` written by `conductor setup`.

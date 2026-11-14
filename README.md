@@ -147,6 +147,8 @@ Multi-step changes (two or more steps, or several files) go through the `conduct
 
 ## Development
 
+Which worker model Conductor should pay for is measured with the rerunnable benchmark in [benchmarks/README.md](benchmarks/README.md): each candidate runs real tasks of this repository through Conductor with a fixed reviewer, is scored with hidden tests, and reports solved tasks, cost and reviewer accuracy per model.
+
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -e .[dev]
 .venv/bin/pytest
