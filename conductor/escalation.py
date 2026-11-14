@@ -164,6 +164,7 @@ def attempt_entry(
         "verify": [],
         "review": None,
         "review_fallbacks": [],
+        "second_opinion": None,
         "cost": cost,
     }
 
@@ -299,19 +300,41 @@ class StepRun:
     ) -> Verdict | None:
         """Ask the reviewers in order; the first verdict without an error decides."""
         consulted: list[tuple[str, Verdict]] = []
-        for reviewer in self.profile.reviewers:
+        deciding_index = -1
+        for index, reviewer in enumerate(self.profile.reviewers):
             if provider_of(reviewer) in self.state.excluded_reviewer_providers:
                 continue
             verdict = self.judge(reviewer, self.step.spec, diff, checks, commit_message)
             consulted.append((reviewer, verdict))
+            deciding_index = index
             if verdict.error is None:
                 break
             if verdict.error.kind == PROVIDER_UNUSABLE:
                 self.state.excluded_reviewer_providers.add(provider_of(reviewer))
         if not consulted:
             return None
-        *failed, (reviewer, verdict) = consulted
-        entry["review_fallbacks"] = [review_entry(*pair, checks) for pair in failed]
+        verdict = consulted[-1][1]
+        if rejections.is_suspicious(verdict.ok, verdict.category, checks):
+            second_model = next(
+                (
+                    candidate
+                    for candidate in self.profile.reviewers[deciding_index + 1 :]
+                    if provider_of(candidate) not in self.state.excluded_reviewer_providers
+                ),
+                None,
+            )
+            if second_model is not None:
+                second = self.judge(second_model, self.step.spec, diff, checks, commit_message)
+                consulted.append((second_model, second))
+                entry["second_opinion"] = review_entry(second_model, second, checks)
+        deciding_at = next(
+            (i for i in reversed(range(len(consulted))) if consulted[i][1].error is None),
+            len(consulted) - 1,
+        )
+        reviewer, verdict = consulted[deciding_at]
+        entry["review_fallbacks"] = [
+            review_entry(*consulted[i], checks) for i in range(len(consulted)) if i != deciding_at
+        ]
         entry["review"] = review_entry(reviewer, verdict, checks)
         entry["cost"]["reviewer"] = verdict.cost
         return verdict
