@@ -14,7 +14,7 @@ from conductor.errors import (
     mentions_context_limit,
 )
 from conductor.privacy import opencode_config
-from conductor.worker import Events, Harness, exclude_from_git
+from conductor.worker import Events, Harness, exclude_from_git, no_environment
 
 OPENCODE_CONFIG_NAME = "opencode.json"
 ERROR_EVENT = "error"
@@ -219,6 +219,7 @@ def claude_error(events: Events, exit_code: int, stderr: str) -> ModelError | No
 OPENCODE = Harness(
     name="opencode",
     prepare=prepare_opencode,
+    environment=no_environment,
     command=build_command,
     session_id=session_id,
     is_retry=is_retry,
@@ -230,6 +231,7 @@ OPENCODE = Harness(
 CLAUDE_CODE = Harness(
     name="claude-code",
     prepare=prepare_claude_code,
+    environment=no_environment,
     command=claude_build_command,
     session_id=claude_session_id,
     is_retry=claude_is_retry,

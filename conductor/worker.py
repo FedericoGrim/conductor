@@ -17,17 +17,23 @@ STOP_GRACE_SECONDS = 10
 HOOK_OUTPUT_LIMIT = 4000
 
 StopCondition = Callable[[str], bool]
-Runner = Callable[[list[str], Path, StopCondition], Awaitable[tuple[int, str, str]]]
+Runner = Callable[[list[str], Path, StopCondition, dict[str, str]], Awaitable[tuple[int, str, str]]]
 Events = list[dict[str, Any]]
 EventCheck = Callable[[dict[str, Any]], bool]
 
 
-@dataclass(frozen=True)
+def no_environment(worktree: Path) -> dict[str, str]:
+    """The variables a harness adds to its worker's process; most harnesses add none."""
+    return {}
+
+
+@dataclass(frozen=True, kw_only=True)
 class Harness:
     """The command-line agent that runs a worker, and how to read its event stream."""
 
     name: str
     prepare: Callable[[Path, Profile], None]
+    environment: Callable[[Path], dict[str, str]] = no_environment
     command: Callable[[str, str, list[str]], list[str]]
     session_id: Callable[[Events], str | None]
     is_retry: EventCheck
@@ -79,7 +85,9 @@ def exclude_from_git(repo: Path, pattern: str) -> None:
 
 def parse_events(stdout: str) -> Events:
     events: Events = []
-    for line in stdout.splitlines():
+    # Split on "\n" only: str.splitlines() also breaks on the Unicode line separators
+    # U+2028 and U+2029, which a JSON string in an event line may legitimately hold.
+    for line in stdout.split("\n"):
         try:
             event = json.loads(line)
         except json.JSONDecodeError:
@@ -151,13 +159,13 @@ async def stop_process(process: asyncio.subprocess.Process) -> None:
 
 
 async def subprocess_runner(
-    cmd: list[str], cwd: Path, should_stop: StopCondition
+    cmd: list[str], cwd: Path, should_stop: StopCondition, environment: dict[str, str]
 ) -> tuple[int, str, str]:
     # OpenCode resolves its project root from $PWD, not from the process cwd.
     process = await asyncio.create_subprocess_exec(
         *cmd,
         cwd=cwd,
-        env={**os.environ, "PWD": str(cwd)},
+        env={**os.environ, "PWD": str(cwd), **environment},
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
@@ -191,7 +199,9 @@ async def run_attempt(
 ) -> AttemptOutput:
     command = harness.command(model, prompt, extra_args)
     should_stop = retry_limit(transient_attempts, harness.is_retry)
-    exit_code, stdout, stderr = await runner(command, worktree, should_stop)
+    exit_code, stdout, stderr = await runner(
+        command, worktree, should_stop, harness.environment(worktree)
+    )
     events = parse_events(stdout)
     final_text = harness.final_text(events)
     message = commit_message(final_text)
