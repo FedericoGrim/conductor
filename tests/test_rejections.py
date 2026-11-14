@@ -29,9 +29,13 @@ def test_covered_categories_recognises_ruff_check() -> None:
     )
 
 
-def test_covered_categories_adds_format_for_ruff_format() -> None:
-    assert covered_categories(["ruff format --check"]) == frozenset(
-        {"lint", "imports", "syntax", "format"}
+def test_ruff_format_covers_formatting_only() -> None:
+    assert covered_categories(["ruff format --check"]) == frozenset({"format", "syntax"})
+
+
+def test_ruff_format_is_recognised_through_a_virtualenv_path() -> None:
+    assert covered_categories(["$CONDUCTOR_REPO/.venv/bin/ruff format --check ."]) == frozenset(
+        {"format", "syntax"}
     )
 
 
