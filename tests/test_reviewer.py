@@ -295,9 +295,21 @@ def test_the_verification_results_reach_the_reviewer(monkeypatch: pytest.MonkeyP
     passed = CheckResult("pytest -q", 0, "x" * 5000 + "12 passed", 3.0)
     body = captured_request(monkeypatch, checks=[passed])
     prompt = body["messages"][-1]["content"]
-    assert "## Verification (run by Conductor)\n- `pytest -q`: exit 0" in prompt
+    assert (
+        "## Verification (run by Conductor)\n"
+        "All verification commands passed (exit 0); what they check is settled.\n"
+        "- `pytest -q`: exit 0"
+    ) in prompt
     assert "12 passed" in prompt
     assert len(prompt) < 2500
+
+
+def test_the_verification_summary_precedes_the_commands(monkeypatch: pytest.MonkeyPatch) -> None:
+    passed = CheckResult("ruff check .", 0, "All checks passed", 1.0)
+    prompt = review_request("spec", "+diff", (), [passed])
+    summary = "All verification commands passed (exit 0); what they check is settled."
+    assert summary in prompt
+    assert prompt.index(summary) < prompt.index("`ruff check .`")
 
 
 def test_without_rules_or_checks_the_sections_are_left_out(
@@ -306,6 +318,7 @@ def test_without_rules_or_checks_the_sections_are_left_out(
     prompt = captured_request(monkeypatch)["messages"][-1]["content"]
     assert "## Domain rules" not in prompt
     assert "## Verification" not in prompt
+    assert "All verification commands passed" not in prompt
 
 
 def test_the_reviewer_judges_tests_and_domain_rules_explicitly(
@@ -334,3 +347,11 @@ def test_the_system_prompt_names_the_commit_message_criterion(
     system = captured_request(monkeypatch)["messages"][0]["content"]
     assert "commit message" in system
     assert "Conventional Commit type" in system
+
+
+def test_the_system_prompt_says_what_passed_checks_settle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    system = captured_request(monkeypatch)["messages"][0]["content"]
+    assert "never a reason to reject" in system
+    assert "is not missing" in system
