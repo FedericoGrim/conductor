@@ -359,3 +359,177 @@ def test_job_result_marks_a_false_approval(tmp_path: Path) -> None:
     record = benchmark.job_result("bench-a", "prov/model", task, 1, run_dir, False)
     assert record["false_approval"] is True
     assert record["solved"] is False
+
+
+def job_record(**overrides: Any) -> dict[str, Any]:
+    """A hand-made record like the ones job_result writes."""
+    body: dict[str, Any] = {
+        "profile": "bench-a",
+        "model": "prov/a",
+        "task": "tiny",
+        "difficulty": 3,
+        "repetition": 1,
+        "status": "approved",
+        "attempts": 1,
+        "cost": 0.1,
+        "seconds": 60.0,
+        "review": {"ok": True, "category": None, "suspicious": False},
+        "hidden_ok": True,
+        "solved": True,
+        "false_rejection": False,
+        "false_approval": False,
+    }
+    body.update(overrides)
+    return body
+
+
+def unsolved(**overrides: Any) -> dict[str, Any]:
+    return job_record(
+        status="failed",
+        review=None,
+        hidden_ok=None,
+        solved=False,
+        false_rejection=False,
+        false_approval=False,
+        **overrides,
+    )
+
+
+def test_report_sorts_by_solved_then_cost() -> None:
+    records = [
+        unsolved(model="prov/dear", profile="p1", cost=0.5),
+        job_record(model="prov/cheap", profile="p2", cost=0.2),
+        unsolved(model="prov/mid", profile="p3", cost=0.1),
+        job_record(model="prov/cheap", profile="p2", cost=0.3, repetition=2),
+        unsolved(model="prov/mid", profile="p3", cost=0.1, repetition=2),
+    ]
+    lines = benchmark.report(records).splitlines()
+    assert lines[0] == (
+        "| Model | Solved | D3 | Cost | $/solved | Mean time"
+        " | Rejections | False rej. | False appr. | Suspicious |"
+    )
+    assert lines[1].startswith("|---|")
+    assert "| prov/cheap | 2/2 | 2/2 | 0.5000 | 0.2500 | 60.0 | 0 | 0 | 0 | 0 |" in lines
+    assert "| prov/mid | 0/2 | 0/2 | 0.2000 | - | 60.0 | 0 | 0 | 0 | 0 |" in lines
+    assert "| prov/dear | 0/1 | 0/1 | 0.5000 | - | 60.0 | 0 | 0 | 0 | 0 |" in lines
+    models = [line.split("|")[1].strip() for line in lines if line.startswith("| prov/")]
+    assert models == ["prov/cheap", "prov/mid", "prov/dear"]
+    assert lines[-1] == "Total: 5 jobs, $1.2000, 3 errors"
+
+
+def test_report_per_difficulty_cells() -> None:
+    records = [
+        job_record(task="easy", difficulty=2),
+        job_record(task="hard", difficulty=4, repetition=2),
+        unsolved(task="hard", difficulty=4, repetition=3),
+    ]
+    lines = benchmark.report(records).splitlines()
+    assert lines[0] == (
+        "| Model | Solved | D2 | D4 | Cost | $/solved | Mean time"
+        " | Rejections | False rej. | False appr. | Suspicious |"
+    )
+    assert "| prov/a | 2/3 | 1/1 | 1/2 | 0.3000 | 0.1500 | 60.0 | 0 | 0 | 0 | 0 |" in lines
+
+
+def test_report_dollar_per_solved_needs_a_solve() -> None:
+    lines = benchmark.report([job_record(cost=0.4)]).splitlines()
+    assert "| prov/a | 1/1 | 1/1 | 0.4000 | 0.4000 | 60.0 | 0 | 0 | 0 | 0 |" in lines
+    lines = benchmark.report([unsolved(cost=0.4)]).splitlines()
+    assert "| prov/a | 0/1 | 0/1 | 0.4000 | - | 60.0 | 0 | 0 | 0 | 0 |" in lines
+
+
+def test_report_counts_rejections_false_verdicts_and_suspicious() -> None:
+    records = [
+        job_record(),
+        job_record(
+            repetition=2,
+            status="failed",
+            review={"ok": False, "category": "tests", "suspicious": False},
+            hidden_ok=True,
+            solved=False,
+            false_rejection=True,
+        ),
+        job_record(
+            repetition=3,
+            status="failed",
+            review={"ok": False, "category": "spec", "suspicious": True},
+            hidden_ok=False,
+            solved=False,
+        ),
+        job_record(repetition=4, hidden_ok=False, solved=False, false_approval=True),
+    ]
+    lines = benchmark.report(records).splitlines()
+    assert "| prov/a | 1/4 | 1/4 | 0.4000 | 0.4000 | 60.0 | 2 | 1 | 1 | 1 |" in lines
+
+
+def test_report_per_task_table() -> None:
+    records = [
+        job_record(task="easy", difficulty=2),
+        unsolved(task="hard", difficulty=4, model="prov/b", profile="p2"),
+        job_record(task="hard", difficulty=4, model="prov/b", profile="p2", repetition=2),
+    ]
+    lines = benchmark.report(records).splitlines()
+    header = lines.index("| Task | Difficulty | prov/a | prov/b |")
+    assert lines[header + 1].startswith("|---|")
+    assert lines[header + 2] == "| easy | 2 | 1/1 | - |"
+    assert lines[header + 3] == "| hard | 4 | - | 1/2 |"
+    assert "| prov/a | 1/1 | 1/1 | - | 0.1000 | 0.1000 | 60.0 | 0 | 0 | 0 | 0 |" in lines
+    assert "| prov/b | 1/2 | - | 1/2 | 0.2000 | 0.2000 | 60.0 | 0 | 0 | 0 | 0 |" in lines
+
+
+def test_report_errors_line_counts_provider_failures() -> None:
+    records = [
+        job_record(),
+        job_record(
+            repetition=2,
+            status="unavailable",
+            review=None,
+            hidden_ok=None,
+            solved=False,
+        ),
+        job_record(
+            repetition=3,
+            status="no-run",
+            review=None,
+            hidden_ok=None,
+            seconds=None,
+            solved=False,
+        ),
+        unsolved(repetition=4),
+        job_record(
+            repetition=5,
+            status="failed",
+            review={"ok": False, "category": "tests", "suspicious": False},
+            hidden_ok=None,
+            solved=False,
+        ),
+    ]
+    lines = benchmark.report(records).splitlines()
+    assert lines[-1] == "Total: 5 jobs, $0.5000, 3 errors"
+
+
+def test_report_subcommand_reads_results_jsonl(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    records = [
+        job_record(),
+        unsolved(model="prov/b", profile="p2"),
+    ]
+    path = tmp_path / "results.jsonl"
+    path.write_text("".join(json.dumps(record) + "\n" for record in records))
+    assert benchmark.main(["report", str(path)]) == 0
+    assert capsys.readouterr().out == benchmark.report(records)
+    (tmp_path / "run").mkdir()
+    path.rename(tmp_path / "run" / "results.jsonl")
+    assert benchmark.main(["report", str(tmp_path / "run")]) == 0
+    assert capsys.readouterr().out == benchmark.report(records)
+
+
+def test_report_subcommand_rejects_bad_results(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (tmp_path / "results.jsonl").write_text("{not json}\n")
+    assert benchmark.main(["report", str(tmp_path)]) == 2
+    assert "not valid JSON" in capsys.readouterr().err
+    assert benchmark.main(["report", str(tmp_path / "missing")]) == 2
+    assert "error:" in capsys.readouterr().err

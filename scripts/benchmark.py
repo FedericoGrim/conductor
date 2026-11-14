@@ -11,6 +11,7 @@ Usage: python scripts/benchmark.py run [--profiles bench-a,bench-b]
        [--tasks id1,id2] [--repeat 3] [--budget 12] [--parallel 4]
        [--out DIR] [--config benchmarks/profiles.toml]
        [--conductor PATH] [--keep]
+       python scripts/benchmark.py report <results dir or results.jsonl>
 """
 
 from __future__ import annotations
@@ -335,6 +336,150 @@ def step_state(run_dir: Path | None, step_id: str) -> tuple[str, int]:
     return str(step.get("status", "no-run")), int(step.get("attempts", 0))
 
 
+def cost_of(record: dict[str, Any]) -> float:
+    cost = record.get("cost")
+    if isinstance(cost, bool) or not isinstance(cost, int | float):
+        return 0.0
+    return float(cost)
+
+
+def seconds_of(record: dict[str, Any]) -> float | None:
+    seconds = record.get("seconds")
+    if isinstance(seconds, bool) or not isinstance(seconds, int | float):
+        return None
+    return float(seconds)
+
+
+def review_of(record: dict[str, Any]) -> dict[str, Any] | None:
+    review = record.get("review")
+    return review if isinstance(review, dict) else None
+
+
+def is_error(record: dict[str, Any]) -> bool:
+    """Lost to the provider or the harness, not to the model."""
+    status = str(record.get("status", "no-run"))
+    return status in ("unavailable", "no-run") or (status == "failed" and review_of(record) is None)
+
+
+def solved_count(records: list[dict[str, Any]]) -> int:
+    return sum(1 for record in records if record.get("solved") is True)
+
+
+def total_cost(records: list[dict[str, Any]]) -> float:
+    return sum(cost_of(record) for record in records)
+
+
+def separator(columns: int) -> str:
+    return "|" + "---|" * columns
+
+
+def model_header(difficulties: list[int]) -> str:
+    cells = "".join(f" | D{difficulty}" for difficulty in difficulties)
+    return (
+        f"| Model | Solved{cells}"
+        " | Cost | $/solved | Mean time | Rejections | False rej. | False appr. | Suspicious |"
+    )
+
+
+def per_difficulty(group: list[dict[str, Any]], difficulty: int) -> str:
+    jobs = [record for record in group if int(record.get("difficulty", 0)) == difficulty]
+    return f"{solved_count(jobs)}/{len(jobs)}" if jobs else "-"
+
+
+def model_row(group: list[dict[str, Any]], difficulties: list[int]) -> str:
+    jobs, solved, cost = len(group), solved_count(group), total_cost(group)
+    cells = "".join(f" | {per_difficulty(group, difficulty)}" for difficulty in difficulties)
+    times = [second for record in group if (second := seconds_of(record)) is not None]
+    mean = f"{sum(times) / len(times):.1f}" if times else "-"
+    per_solved = f"{cost / solved:.4f}" if solved else "-"
+    reviews = [review_of(record) for record in group]
+    rejected = [review for review in reviews if review is not None and review.get("ok") is False]
+    suspicious = sum(1 for review in rejected if review.get("suspicious") is True)
+    false_rejections = sum(1 for record in group if record.get("false_rejection") is True)
+    false_approvals = sum(1 for record in group if record.get("false_approval") is True)
+    model = str(group[0].get("model", ""))
+    return (
+        f"| {model} | {solved}/{jobs}{cells} | {cost:.4f} | {per_solved} | {mean} | "
+        f"{len(rejected)} | {false_rejections} | {false_approvals} | {suspicious} |"
+    )
+
+
+def task_header(models: list[str]) -> str:
+    cells = "".join(f" | {model}" for model in models)
+    return f"| Task | Difficulty{cells} |"
+
+
+def per_task(group: list[dict[str, Any]], task_id: str) -> str:
+    jobs = [record for record in group if str(record.get("task", "")) == task_id]
+    return f"{solved_count(jobs)}/{len(jobs)}" if jobs else "-"
+
+
+def task_row(
+    task_id: str,
+    records: list[dict[str, Any]],
+    ordered: list[tuple[tuple[str, str], list[dict[str, Any]]]],
+) -> str:
+    same = [record for record in records if str(record.get("task", "")) == task_id]
+    difficulty = int(same[0].get("difficulty", 0))
+    cells = "".join(f" | {per_task(group, task_id)}" for _, group in ordered)
+    return f"| {task_id} | {difficulty}{cells} |"
+
+
+def total_line(records: list[dict[str, Any]]) -> str:
+    errors = sum(1 for record in records if is_error(record))
+    return f"Total: {len(records)} jobs, ${total_cost(records):.4f}, {errors} errors"
+
+
+def report(records: list[dict[str, Any]]) -> str:
+    """The Markdown report for the records `run` wrote: per model, per task, totals."""
+    groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for record in records:
+        key = (str(record.get("profile", "")), str(record.get("model", "")))
+        groups.setdefault(key, []).append(record)
+    ordered = sorted(groups.items(), key=lambda item: (-solved_count(item[1]), total_cost(item[1])))
+    difficulties = sorted({int(record.get("difficulty", 0)) for record in records})
+    lines = [model_header(difficulties), separator(3 + len(difficulties) + 6)]
+    for _, group in ordered:
+        lines.append(model_row(group, difficulties))
+    lines.append("")
+    models = [key[1] for key, _ in ordered]
+    lines.append(task_header(models))
+    lines.append(separator(2 + len(models)))
+    tasks = sorted({str(record.get("task", "")) for record in records})
+    for task_id in tasks:
+        lines.append(task_row(task_id, records, ordered))
+    lines.append("")
+    lines.append(total_line(records))
+    return "\n".join(lines) + "\n"
+
+
+def read_records(path: Path) -> list[dict[str, Any]]:
+    try:
+        text = path.read_text()
+    except OSError as error:
+        raise BenchmarkError(f"cannot read results '{path}': {error.strerror or error}") from error
+    records: list[dict[str, Any]] = []
+    for number, line in enumerate(text.splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError as error:
+            raise BenchmarkError(f"{path}:{number} is not valid JSON: {error}") from error
+        if not isinstance(record, dict):
+            raise BenchmarkError(f"{path}:{number} does not contain a JSON object")
+        records.append(record)
+    return records
+
+
+def run_report(args: argparse.Namespace) -> int:
+    path: Path = args.source
+    if path.is_dir():
+        path = path / "results.jsonl"
+    print(report(read_records(path)), end="")
+    return 0
+
+
 def split_list(value: str | None) -> list[str] | None:
     if value is None:
         return None
@@ -465,6 +610,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     runner.add_argument("--keep", action="store_true", help="keep the throwaway copies")
     runner.set_defaults(handler=run_benchmark)
+    reporter = commands.add_parser(
+        "report", help="print a Markdown report from a run's results.jsonl"
+    )
+    reporter.add_argument("source", type=Path, help="results directory or results.jsonl file")
+    reporter.set_defaults(handler=run_report)
     return parser
 
 
