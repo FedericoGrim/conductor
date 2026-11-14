@@ -1,0 +1,10 @@
+{
+  "id": "scheduler-crash",
+  "title": "A step that raises fails instead of stopping the run",
+  "difficulty": 2,
+  "base": "5f42f6c",
+  "solution": "cf988fa",
+  "hidden_tests": ["tests/test_scheduler.py"],
+  "files": ["conductor/scheduler.py", "tests/test_scheduler.py"],
+  "spec": "In conductor/scheduler.py, `run_plan(plan, max_parallel, execute)` runs every ready step through `execute`, bounded by a semaphore. An unexpected exception raised by `execute` for one step (for example a failing git command) currently crashes the whole run, leaving run.json unfinished and the ledger unwritten.\n\nChange it so that an `Exception` raised by `execute(step)` ends only that step: its result is `StepResult(step.id, FAILED, \"internal error: <ExceptionClass>: <message>\")` (for `RuntimeError(\"git exploded\")` the detail is exactly `internal error: RuntimeError: git exploded`). The run goes on: steps that depend on it are `skipped` as for any failed step, independent steps still run and keep their own results. Do not catch `BaseException` (cancellation and KeyboardInterrupt must still propagate).\n\nAdd a test with a plan of three steps a, b (depends on a) and c, where execute raises for a: a is failed with that detail, b is skipped, c is approved."
+}

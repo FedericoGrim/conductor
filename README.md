@@ -8,16 +8,16 @@ Conductor takes a `plan.json` produced by a planning model (Claude in Claude Cod
 
 1. The brain writes `plan.json`: steps with a spec, the files to touch, a difficulty from 1 (trivial) to 5 (hard), and dependencies.
 2. `conductor run plan.json --privacy medium` picks the profile from `conductor.toml`.
-3. Every step whose dependencies are approved starts, up to `max_parallel` at once, in its own worktree branched from the current branch. The step runs its provider's harness on the first model of its difficulty level, `tiers[difficulty - 1]`: `opencode run --format json --auto`, or `claude -p --output-format stream-json` for a `claude-code` provider (isolated from your personal Claude settings, confined to the worktree). A level may list fallback models after the first one.
-4. Commit: Conductor commits the worker's changes as `chore(conductor): apply step <id> attempt <n>`, running the repository's git hooks (never `--no-verify`). A hook that fixes files is retried once with its fixes staged; a hook that still refuses the commit rejects the attempt with its output as the reason, like a failed verification.
+3. Every step whose dependencies are approved starts, up to `max_parallel` at once, in its own worktree branched from the current branch. The step runs its provider's harness on the first model of its difficulty level, `tiers[difficulty - 1]`: `opencode run --format json --auto`, or `claude -p --output-format stream-json` for a `claude-code` provider (isolated from your personal Claude settings, confined to the worktree), or `pi --mode json --no-session --no-skills --no-extensions --no-prompt-templates --no-themes --tools read,bash,edit,write` for a provider with `harness = "pi"`. A Pi worker gets its own agent directory per attempt: `PI_CODING_AGENT_DIR` points at `.pi-agent/` in the worktree (excluded from the diff), whose `models.json` holds the provider routing and the API key's variable name, never the key itself; Pi reads no personal skills, extensions or prompt templates, and the target's `AGENTS.md` or `CLAUDE.md` stay in effect. Conductor resolves the key variables its own `models.json` names — from the environment first, then from `auth.json` — and passes them only in the Pi process's environment, so the key never reaches a file. Pi has no equivalent of the Vercel gateway's `disallowPromptTraining` flag, so a `pi` provider that carries it is refused when the configuration loads, `conductor validate` included. Pi prices only the models in its own catalog, so a Pi step of a newer model records its tokens but a cost of 0 (#72). OpenCode workers are isolated too: the worktree's `opencode.json` denies every skill, so your personal skills never reach a worker, and a repository with a `CLAUDE.md` but no `AGENTS.md` gets its `CLAUDE.md` as instructions. A level may list fallback models after the first one. Each worker also gets a short working brief — the plan is already approved, so do the work now (tests first), stay in scope, run the step's `verify` commands yourself, and remember Conductor commits through the repository's git hooks — and is asked to end its reply with a `COMMIT: <conventional subject>` line proposing its commit message.
+4. Commit: Conductor commits the attempt with the plan's `commit` message when the step has one, else the worker's `COMMIT:` proposal when it matches the strict Conventional Commit format, else the fallback `chore(conductor): apply step <id> attempt <n>`; the body names the step, the attempt and the model. The commit runs the repository's git hooks (never `--no-verify`). A hook that fixes files is retried once with its fixes staged; a hook that still refuses the commit rejects the attempt with its output as the reason, like a failed verification.
 5. Verification: the step's `verify` commands (from the plan) run in the worktree with `sh -c`, `$CONDUCTOR_REPO` pointing at the main repository. The first failure rejects the attempt with the command's output as the reason, without calling the reviewer.
-6. The reviewer model receives the spec, the plan's domain rules, the verification results and the diff, and approves only if the spec is complete, new behaviour has tests in the diff, the domain rules hold and there is no obvious bug; it answers `{"ok": bool, "reason": str}`. `reviewer` may also list fallbacks.
+6. The reviewer model receives the spec, the plan's domain rules, the verification results and the diff — and the commit message — and approves only if the spec is complete, new behaviour has tests in the diff, the domain rules hold, there is no obvious bug and the commit message describes the diff with the right type. The verification section opens with a line saying that every command passed: what those commands check (imports, types, syntax, formatting, lint, tests) is settled, and code outside the diff is not missing. It answers `{"ok": bool, "category": str, "reason": str}`; every rejection carries a category from a closed list (`types`, `imports`, `syntax`, `format`, `lint`, `failing-tests`, `spec`, `missing-tests`, `domain`, `logic`, `security`, `commit`), and a missing or unknown one is an unparseable verdict that moves to the next reviewer. A rejection whose category a passed check covers, by tool name (`mypy`, `pyright`, `tsc`, `ruff`, `flake8`, `pylint`, `eslint`, `black`, `prettier`, `pytest`, `jest`, `vitest`; `ruff format` counts as a formatter only), is recorded as `suspicious` in the attempt file. When a rejection is suspicious, the next reviewer of the profile's `reviewer` list is asked once for a second opinion: if it approves, the step is approved, the first reviewer's verdict is kept in the attempt's `review_fallbacks` and the second opinion in `second_opinion`; otherwise the rejection stands, with the reason of the last usable verdict, and the step escalates. With a single reviewer, or for a rejection that is not suspicious, nothing changes. `reviewer` may also list fallbacks.
 7. Rejected: the step restarts on the first usable model of the next difficulty level with the reason in the prompt, possibly on a different provider. Rejected on level 5: `failed`, and its dependents are `skipped`.
    - Model or provider error: the step never escalates on an error. OpenCode retries rate limits, server and network errors by itself; after `retry.transient_attempts` of those retries (default 3, per profile) Conductor stops the worker. A transient error or an unsuitable model (context exceeded, unknown model) moves to the next model of the same level, on a fresh worktree; an unusable provider (bad key, no credit) is also excluded for the rest of the run. When no model of the level is left, the step is `unavailable`; an unclassified error ends it as `failed` at once. Each fallback is its own attempt, with the classified error in its `error`.
    - Reviewer error: an HTTP or network failure, a missing key or an unparseable verdict moves to the next reviewer without costing the worker a level, and an unusable reviewer provider is excluded for the run (separately from the workers, whose keys live in OpenCode). The failed reviewers are listed in the attempt's `review_fallbacks`. When every reviewer fails, the diff goes to the brain as `needs_brain_review`, with the error in `review.error`; the run goes on and the step is never approved.
 8. Question: when the spec leaves open a decision with different consequences, the worker stops before changing files and ends its reply with a `QUESTION:` block. The step becomes `needs_answer` (not reviewed, not escalated, nothing merged), the question is in `run.json`, and its dependents are `skipped`. The brain answers it, or asks the user, and reruns the step with `answers`.
 9. Approved: the branch is merged into the current branch; a conflict, or a hook refusing the merge commit `chore(conductor): merge <branch>`, is reported as `conflict` and the branch is kept for the brain. An unexpected error inside a step ends that step as `failed` and the run goes on.
-10. `.conductor/runs/<timestamp>/run.json` summarises the run; `step-<id>/attempt-<n>.json` holds the prompt, the full OpenCode event transcript, the diff, any hook output that refused the commit (`commit_rejection`) and the reviewer's verdict of every attempt.
+10. `.conductor/runs/<timestamp>/run.json` summarises the run, records the brain's session (`--session`, default `$OPENCODE_SESSION_ID`) and totals the subscription estimate of the attempts apart from the billed cost; `step-<id>/attempt-<n>.json` holds the prompt, the full OpenCode event transcript, the diff, any hook output that refused the commit (`commit_rejection`) and the reviewer's verdict of every attempt.
 
 ## Privacy levels
 
@@ -48,6 +48,20 @@ Balances come from the provider behind each profile's `base_url`:
 | Scaleway Generative APIs | consumption of the current month in EUR (pay as you go, no prepaid balance) | `SCW_ORGANIZATION_ID`, and a key allowed to read billing |
 
 Other providers are listed with "no balance API known". Amounts are never converted between currencies.
+
+Whether Conductor pays off is measured with the protocol in [docs/measurements.md](docs/measurements.md), which also holds the results.
+
+## Statistics
+
+`conductor stats [--repo PATH]` reads the run logs under `.conductor/runs` of a repository and reports, per run and per step: the status, the attempts, the models, the cost, whether the step was approved on the first try, the hand commits (human commits on the step's files since the run finished) and the brain's token usage. It backs the measurement protocol in [docs/measurements.md](docs/measurements.md).
+
+```
+$ conductor stats
+run 2026-11-13T15-32-28  privacy dogfood  finished 2026-11-13T15:32:37+00:00
+  step hello-script  approved  attempts 1  first try yes  models claude-code/sonnet  cost 0.0000 USD  subscription 0.0497 USD  hand commits 0
+  total  cost 0.0000 USD  subscription 0.0497 USD
+  brain ses_abc  claude-agent/opus  replies 12  output 3400  reasoning 900  input 50  cache write 12000  cache read 45000
+```
 
 ## Setup
 
@@ -123,18 +137,26 @@ Multi-step changes (two or more steps, or several files) go through the `conduct
   "verify_timeout": 600,
   "steps": [
     {"id": "core", "title": "...", "spec": "detailed instructions", "files": ["a.py"], "difficulty": 1, "depends_on": []},
-    {"id": "cli", "spec": "...", "difficulty": 2, "depends_on": ["core"],
+    {"id": "cli", "spec": "...", "difficulty": 2, "depends_on": ["core"], "commit": "feat(cli): add stats",
      "answers": [{"question": "Exit code on bad input?", "answer": "2, message on stderr"}]}
   ]
 }
 ```
 
-`difficulty` is 1 to 5 and picks the level of the chosen profile. `rules`, `rules_file`, `verify` and `verify_timeout` are optional: `verify` applies to every step unless a step sets its own (`[]` drops it), and `rules_file` is read from the repository when the run starts. `answers` is optional: the brain adds it when it reruns a step that stopped with a question, and the worker receives it in its prompt. Check it with `conductor validate plan.json`; when a `conductor.toml` is found (or given with `--config`), it also warns about levels and reviewers that rely on a single provider. Parallel steps must not touch the same files, or they will conflict at merge time.
+`difficulty` is 1 to 5 and picks the level of the chosen profile. `rules`, `rules_file`, `verify` and `verify_timeout` are optional: `verify` applies to every step unless a step sets its own (`[]` drops it), and `rules_file` is read from the repository when the run starts. `answers` is optional: the brain adds it when it reruns a step that stopped with a question, and the worker receives it in its prompt. A step may also name its subject with the optional `commit` field (a Conventional Commit subject, validated by `conductor validate`); otherwise the worker proposes one on a `COMMIT:` line, and Conductor falls back to `chore(conductor): apply step ...` when none is usable. Check it with `conductor validate plan.json`; when a `conductor.toml` is found (or given with `--config`), it also warns about levels and reviewers that rely on a single provider. Parallel steps must not touch the same files, or they will conflict at merge time.
 
 ## Development
+
+Which worker model Conductor should pay for is measured with the rerunnable benchmark in [benchmarks/README.md](benchmarks/README.md): each candidate runs real tasks of this repository through Conductor with a fixed reviewer, is scored with hidden tests, and reports solved tasks, cost and reviewer accuracy per model.
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -e .[dev]
 .venv/bin/pytest
 pre-commit run --all-files
+```
+
+`scripts/replay-review.py` replays a recorded attempt through the reviewer several times, to test reviewer prompts and models against a real rejection (it reads the run's plan two directories up, sends the same review request again and again, and prints one line per verdict plus a summary; never the API key):
+
+```bash
+python scripts/replay-review.py .conductor/runs/<ts>/step-<id>/attempt-1.json [--privacy medium] [--config PATH] [--reviewer MODEL] [--times 5]
 ```

@@ -112,6 +112,23 @@ def test_a_step_inherits_the_plan_verify_unless_it_has_its_own() -> None:
     ]
 
 
+def test_a_step_keeps_a_valid_commit_subject() -> None:
+    planned = step("a")
+    planned["commit"] = "feat: add a"
+    assert Plan.from_dict({"goal": "g", "steps": [planned]}).steps[0].commit == "feat: add a"
+
+
+def test_a_step_rejects_an_invalid_commit_subject() -> None:
+    planned = step("a")
+    planned["commit"] = "not conventional"
+    with pytest.raises(PlanError, match="step 'a': commit must be a Conventional Commit subject"):
+        Plan.from_dict({"goal": "g", "steps": [planned]})
+
+
+def test_a_step_commit_subject_defaults_to_none() -> None:
+    assert Plan.from_dict({"goal": "g", "steps": [step("a")]}).steps[0].commit is None
+
+
 def test_the_new_fields_are_optional() -> None:
     plan = Plan.from_dict({"goal": "g", "steps": [step("a")]})
     assert (plan.rules, plan.rules_file, plan.verify) == ((), None, ())

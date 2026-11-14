@@ -2,11 +2,13 @@ import asyncio
 import json
 import subprocess
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from conductor.commits import choose_commit_message
 from conductor.errors import TRANSIENT
 from conductor.harness import (
     OPENCODE,
@@ -18,7 +20,6 @@ from conductor.harness import (
     write_opencode_config,
 )
 from conductor.worker import (
-    attempt_commit_message,
     commit_work,
     create_worktree,
     diff_against,
@@ -73,6 +74,14 @@ def test_parse_events_keeps_json_lines_and_session_id() -> None:
     assert session_id(events) == "ses_1"
 
 
+def test_parse_events_splits_on_newlines_only() -> None:
+    # U+2028 is a line separator to str.splitlines() but text inside a JSON string:
+    # the line must survive whole, and a line that is not JSON is dropped.
+    event = {"type": "text", "text": "before\u2028after"}
+    raw = json.dumps(event, ensure_ascii=False) + "\nnot json\n"
+    assert parse_events(raw) == [event]
+
+
 def test_worktree_config_commit_and_diff(tmp_path: Path) -> None:
     repo = init_repo(tmp_path)
     worktree = tmp_path / "wt"
@@ -92,10 +101,18 @@ def never_stop(line: str) -> bool:
 
 def test_subprocess_runner_sets_pwd_to_the_working_directory(tmp_path: Path) -> None:
     code, stdout, _ = asyncio.run(
-        subprocess_runner(["sh", "-c", "echo $PWD"], tmp_path, never_stop)
+        subprocess_runner(["sh", "-c", "echo $PWD"], tmp_path, never_stop, {})
     )
     assert code == 0
     assert stdout.strip() == str(tmp_path)
+
+
+def test_subprocess_runner_adds_the_extra_environment_variables(tmp_path: Path) -> None:
+    code, stdout, _ = asyncio.run(
+        subprocess_runner(["sh", "-c", "echo $PROBE"], tmp_path, never_stop, {"PROBE": "1"})
+    )
+    assert code == 0
+    assert stdout.strip() == "1"
 
 
 def test_subprocess_runner_stops_the_process_when_asked(tmp_path: Path) -> None:
@@ -107,7 +124,7 @@ def test_subprocess_runner_stops_the_process_when_asked(tmp_path: Path) -> None:
         return len(seen) == 3
 
     code, stdout, _ = asyncio.run(
-        asyncio.wait_for(subprocess_runner(["sh", "-c", endless], tmp_path, stop_on_third), 10)
+        asyncio.wait_for(subprocess_runner(["sh", "-c", endless], tmp_path, stop_on_third, {}), 10)
     )
     assert code != 0
     assert stdout.splitlines()[:3] == ["line", "line", "line"]
@@ -115,7 +132,7 @@ def test_subprocess_runner_stops_the_process_when_asked(tmp_path: Path) -> None:
 
 def test_subprocess_runner_keeps_stderr(tmp_path: Path) -> None:
     code, _, stderr = asyncio.run(
-        subprocess_runner(["sh", "-c", "echo oops >&2; exit 3"], tmp_path, never_stop)
+        subprocess_runner(["sh", "-c", "echo oops >&2; exit 3"], tmp_path, never_stop, {})
     )
     assert code == 3
     assert stderr.strip() == "oops"
@@ -171,7 +188,10 @@ def test_run_attempt_uses_injected_runner(tmp_path: Path) -> None:
     seen: dict[str, object] = {}
 
     async def fake_runner(
-        cmd: list[str], cwd: Path, should_stop: Callable[[str], bool]
+        cmd: list[str],
+        cwd: Path,
+        should_stop: Callable[[str], bool],
+        environment: dict[str, str],
     ) -> tuple[int, str, str]:
         seen["cmd"] = cmd
         seen["cwd"] = cwd
@@ -186,7 +206,7 @@ def test_run_attempt_uses_injected_runner(tmp_path: Path) -> None:
             model="openrouter/a/b",
             prompt="do it",
             extra_args=[],
-            commit_message="conductor: s1 attempt 1",
+            commit_message=lambda final_text: "chore(conductor): apply step s1 attempt 1",
             transient_attempts=3,
             harness=OPENCODE,
             runner=fake_runner,
@@ -201,6 +221,79 @@ def test_run_attempt_uses_injected_runner(tmp_path: Path) -> None:
     assert "+by model" in output.diff
 
 
+def probe_environment(worktree: Path) -> dict[str, str]:
+    return {"PROBE": "1"}
+
+
+def test_run_attempt_passes_what_the_harness_environment_returns(tmp_path: Path) -> None:
+    repo = init_repo(tmp_path)
+    worktree = tmp_path / "wt"
+    create_worktree(repo, worktree, branch="conductor/s1-1", base="main")
+    seen: dict[str, object] = {}
+    harness = replace(OPENCODE, environment=probe_environment)
+
+    async def recording_runner(
+        cmd: list[str],
+        cwd: Path,
+        should_stop: Callable[[str], bool],
+        environment: dict[str, str],
+    ) -> tuple[int, str, str]:
+        seen["environment"] = environment
+        events = [{"type": "text", "sessionID": "ses_9"}, step_finish(0.02)]
+        return 0, "".join(json.dumps(event) + "\n" for event in events), ""
+
+    output = asyncio.run(
+        run_attempt(
+            worktree,
+            base="main",
+            model="openrouter/a/b",
+            prompt="do it",
+            extra_args=[],
+            commit_message=lambda final_text: "chore(conductor): apply step s1 attempt 1",
+            transient_attempts=3,
+            harness=harness,
+            runner=recording_runner,
+        )
+    )
+    assert seen["environment"] == {"PROBE": "1"}
+    assert output.exit_code == 0
+
+
+def test_run_attempt_passes_an_empty_environment_from_the_default_harness(
+    tmp_path: Path,
+) -> None:
+    repo = init_repo(tmp_path)
+    worktree = tmp_path / "wt"
+    create_worktree(repo, worktree, branch="conductor/s1-1", base="main")
+    seen: dict[str, object] = {}
+
+    async def recording_runner(
+        cmd: list[str],
+        cwd: Path,
+        should_stop: Callable[[str], bool],
+        environment: dict[str, str],
+    ) -> tuple[int, str, str]:
+        seen["environment"] = environment
+        events = [{"type": "text", "sessionID": "ses_9"}, step_finish(0.02)]
+        return 0, "".join(json.dumps(event) + "\n" for event in events), ""
+
+    output = asyncio.run(
+        run_attempt(
+            worktree,
+            base="main",
+            model="openrouter/a/b",
+            prompt="do it",
+            extra_args=[],
+            commit_message=lambda final_text: "chore(conductor): apply step s1 attempt 1",
+            transient_attempts=3,
+            harness=OPENCODE,
+            runner=recording_runner,
+        )
+    )
+    assert seen["environment"] == {}
+    assert output.exit_code == 0
+
+
 def test_run_attempt_stops_after_the_retry_limit_and_reports_a_transient_error(
     tmp_path: Path,
 ) -> None:
@@ -209,7 +302,10 @@ def test_run_attempt_stops_after_the_retry_limit_and_reports_a_transient_error(
     create_worktree(repo, worktree, branch="conductor/s1-1", base="main")
 
     async def retrying_runner(
-        cmd: list[str], cwd: Path, should_stop: Callable[[str], bool]
+        cmd: list[str],
+        cwd: Path,
+        should_stop: Callable[[str], bool],
+        environment: dict[str, str],
     ) -> tuple[int, str, str]:
         lines: list[str] = []
         while True:
@@ -225,7 +321,7 @@ def test_run_attempt_stops_after_the_retry_limit_and_reports_a_transient_error(
             model="openrouter/a/b",
             prompt="do it",
             extra_args=[],
-            commit_message="conductor: s1 attempt 1",
+            commit_message=lambda final_text: "chore(conductor): apply step s1 attempt 1",
             transient_attempts=2,
             harness=OPENCODE,
             runner=retrying_runner,
@@ -282,12 +378,6 @@ def test_commit_work_without_changes_commits_nothing(tmp_path: Path) -> None:
     assert git(repo, "log", "--oneline").count("\n") == 1
 
 
-def test_attempt_commit_message_is_a_conventional_commit() -> None:
-    assert attempt_commit_message("parse-input", 2) == (
-        "chore(conductor): apply step parse-input attempt 2"
-    )
-
-
 def test_run_attempt_reports_a_commit_rejected_by_a_hook(tmp_path: Path) -> None:
     repo = init_repo(tmp_path)
     install_git_hook(repo, "pre-commit", "echo 'mypy: error'\nexit 1\n")
@@ -295,7 +385,10 @@ def test_run_attempt_reports_a_commit_rejected_by_a_hook(tmp_path: Path) -> None
     create_worktree(repo, worktree, branch="conductor/s1-1", base="main")
 
     async def writing_runner(
-        cmd: list[str], cwd: Path, should_stop: Callable[[str], bool]
+        cmd: list[str],
+        cwd: Path,
+        should_stop: Callable[[str], bool],
+        environment: dict[str, str],
     ) -> tuple[int, str, str]:
         (cwd / "made.py").write_text("x: int = 'a'\n")
         return 0, "", ""
@@ -307,7 +400,7 @@ def test_run_attempt_reports_a_commit_rejected_by_a_hook(tmp_path: Path) -> None
             model="openrouter/a/b",
             prompt="do it",
             extra_args=[],
-            commit_message="chore(conductor): apply step s1 attempt 1",
+            commit_message=lambda final_text: "chore(conductor): apply step s1 attempt 1",
             transient_attempts=3,
             harness=OPENCODE,
             runner=writing_runner,
@@ -315,3 +408,44 @@ def test_run_attempt_reports_a_commit_rejected_by_a_hook(tmp_path: Path) -> None
     )
     assert output.commit_rejection is not None and "mypy: error" in output.commit_rejection
     assert output.diff == ""
+
+
+def test_run_attempt_commits_with_the_callables_message(tmp_path: Path) -> None:
+    repo = init_repo(tmp_path)
+    worktree = tmp_path / "wt"
+    create_worktree(repo, worktree, branch="conductor/s1-1", base="main")
+    received: list[str] = []
+
+    async def writing_runner(
+        cmd: list[str],
+        cwd: Path,
+        should_stop: Callable[[str], bool],
+        environment: dict[str, str],
+    ) -> tuple[int, str, str]:
+        (cwd / "made.txt").write_text("x = 1\n")
+        events = [text_event("COMMIT: feat(parser): scan the input")]
+        return 0, "".join(json.dumps(event) + "\n" for event in events), ""
+
+    def message(final_text: str) -> str:
+        received.append(final_text)
+        return choose_commit_message("s1", 1, "openrouter/a/b", final_text)
+
+    output = asyncio.run(
+        run_attempt(
+            worktree,
+            base="main",
+            model="openrouter/a/b",
+            prompt="do it",
+            extra_args=[],
+            commit_message=message,
+            transient_attempts=3,
+            harness=OPENCODE,
+            runner=writing_runner,
+        )
+    )
+    assert received == ["COMMIT: feat(parser): scan the input"]
+    assert output.commit_message == (
+        "feat(parser): scan the input\n\n"
+        "Written by a Conductor worker: step s1, attempt 1, on openrouter/a/b."
+    )
+    assert git(worktree, "log", "-1", "--format=%B").strip() == output.commit_message

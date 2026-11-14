@@ -361,6 +361,18 @@ def test_a_provider_managed_by_its_harness_has_no_url_or_key() -> None:
     assert managed_profile().providers["openrouter"].harness == "opencode"
 
 
+def test_a_pi_harness_provider_is_accepted() -> None:
+    text = HARNESS_MANAGED.replace('harness = "opencode"', 'harness = "pi"')
+    assert managed_profile(text).providers["subscription"].harness == "pi"
+
+
+def test_the_known_harness_names_include_pi() -> None:
+    text = HARNESS_MANAGED.replace('harness = "opencode"', 'harness = "emacs"')
+    with pytest.raises(ConfigError) as error:
+        managed_profile(text)
+    assert "known: opencode, claude-code, pi" in str(error.value)
+
+
 def test_base_url_and_api_key_env_come_together() -> None:
     text = HARNESS_MANAGED.replace('harness = "opencode"', 'api_key_env = "K"')
     with pytest.raises(ConfigError, match="subscription: set both base_url and api_key_env"):
@@ -388,3 +400,37 @@ def test_dump_omits_what_a_managed_provider_does_not_have(tmp_path: Path) -> Non
     written = tmp_path / "conductor.toml"
     written.write_text(text)
     assert Config.load(written) == config
+
+
+PI_VERCEL_GATEWAY = """
+default_privacy = "medium"
+[privacy.medium]
+tiers = ["vercel/a"]
+reviewer = "vercel/a"
+
+[privacy.medium.providers.vercel]
+harness = "pi"
+base_url = "https://ai-gateway.vercel.sh/v1"
+api_key_env = "AI_GATEWAY_API_KEY"
+request_options = { providerOptions = { gateway = { disallowPromptTraining = true } } }
+"""
+
+
+def test_a_pi_provider_cannot_send_the_vercel_gateway_training_flag() -> None:
+    data = tomllib.loads(PI_VERCEL_GATEWAY)["privacy"]["medium"]
+    with pytest.raises(
+        ConfigError,
+        match="privacy.medium: provider 'vercel': Pi cannot send request_options.providerOptions",
+    ):
+        Profile.from_dict("medium", data)
+
+
+def test_a_pi_provider_may_keep_other_request_options() -> None:
+    data = tomllib.loads(PI_VERCEL_GATEWAY)["privacy"]["medium"]
+    data["providers"]["vercel"]["request_options"] = {
+        "provider": {"data_collection": "deny"},
+        "temperature": 0,
+    }
+    provider = Profile.from_dict("medium", data).providers["vercel"]
+    assert provider.harness == "pi"
+    assert provider.request_options["temperature"] == 0

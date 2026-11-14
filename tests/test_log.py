@@ -29,6 +29,18 @@ def test_run_log_writes_run_and_attempt_files(tmp_path: Path) -> None:
     assert second["step"] == {"id": "s1", "title": "S1"}
 
 
+def test_run_json_records_the_brain_session_when_one_is_given(tmp_path: Path) -> None:
+    log = RunLog.create(tmp_path, PLAN, privacy="medium", brain_session="ses_brain")
+    run = json.loads((log.directory / "run.json").read_text())
+    assert run["brain_session"] == {"harness": "opencode", "id": "ses_brain"}
+
+
+def test_run_json_records_no_brain_session_without_one(tmp_path: Path) -> None:
+    log = RunLog.create(tmp_path, PLAN, privacy="medium")
+    run = json.loads((log.directory / "run.json").read_text())
+    assert run["brain_session"] is None
+
+
 def test_finish_totals_the_cost_per_step_per_model_and_for_the_run(tmp_path: Path) -> None:
     log = RunLog.create(tmp_path, PLAN, privacy="medium")
     attempts = [
@@ -58,6 +70,67 @@ def test_finish_totals_the_cost_per_step_per_model_and_for_the_run(tmp_path: Pat
     }
 
 
+def test_finish_totals_the_subscription_per_step_and_for_the_run(tmp_path: Path) -> None:
+    plan = Plan(
+        "goal",
+        (
+            Step("s1", "S1", "do", ("a.py",), 1, ()),
+            Step("s2", "S2", "also do", ("b.py",), 1, ()),
+            Step("s3", "S3", "and this", ("c.py",), 1, ()),
+        ),
+    )
+    log = RunLog.create(tmp_path, plan, privacy="medium")
+    subscribed = [
+        {
+            "attempt": 1,
+            "model": "claude-code/sonnet",
+            "cost": {"worker": 0.01, "reviewer": None, "subscription": 0.05},
+        },
+        {
+            "attempt": 2,
+            "model": "claude-code/sonnet",
+            "cost": {"worker": 0.02, "reviewer": None, "subscription": 0.07},
+        },
+    ]
+    once = [
+        {
+            "attempt": 1,
+            "model": "claude-code/sonnet",
+            "cost": {"worker": 0.01, "subscription": 0.02},
+        }
+    ]
+    unbilled = [{"attempt": 1, "model": "openrouter/cheap", "cost": {"worker": 0.005}}]
+    log.finish(
+        {
+            "s1": StepResult("s1", "approved", "fine", attempts=subscribed),
+            "s2": StepResult("s2", "approved", "fine", attempts=once),
+            "s3": StepResult("s3", "approved", "fine", attempts=unbilled),
+        }
+    )
+
+    run = json.loads((log.directory / "run.json").read_text())
+    assert run["steps"]["s1"]["subscription"] == pytest.approx(0.12)
+    assert run["steps"]["s2"]["subscription"] == pytest.approx(0.02)
+    assert run["steps"]["s3"]["subscription"] is None
+    assert run["subscription"] == pytest.approx(0.14)
+    assert run["steps"]["s1"]["cost"] == pytest.approx(0.03)
+    assert run["cost"] == pytest.approx(0.045)
+    assert run["cost_by_model"] == {
+        "claude-code/sonnet": pytest.approx(0.04),
+        "openrouter/cheap": pytest.approx(0.005),
+    }
+
+
+def test_finish_records_no_subscription_when_no_attempt_reports_one(tmp_path: Path) -> None:
+    log = RunLog.create(tmp_path, PLAN, privacy="medium")
+    attempts = [{"attempt": 1, "model": "openrouter/cheap", "cost": {"worker": 0.01}}]
+    log.finish({"s1": StepResult("s1", "approved", "fine", attempts=attempts)})
+
+    run = json.loads((log.directory / "run.json").read_text())
+    assert run["steps"]["s1"]["subscription"] is None
+    assert run["subscription"] is None
+
+
 def test_each_run_gets_its_own_directory(tmp_path: Path) -> None:
     first = RunLog.create(tmp_path, PLAN, privacy="low")
     second = RunLog.create(tmp_path, PLAN, privacy="low")
@@ -79,6 +152,33 @@ def test_cost_by_model_counts_the_reviewers_that_failed() -> None:
         "openrouter/cheap": pytest.approx(0.01),
         "deepseek/judge": pytest.approx(0.002),
         "openrouter/judge": pytest.approx(0.003),
+    }
+
+
+def test_cost_by_model_counts_the_second_opinion() -> None:
+    attempt = {
+        "model": "openrouter/cheap",
+        "cost": {"worker": 0.01, "reviewer": 0.002},
+        "review": {"model": "openrouter/judge"},
+        "second_opinion": {"model": "deepseek/judge", "cost": 0.004},
+    }
+    assert cost_by_model([attempt]) == {
+        "openrouter/cheap": pytest.approx(0.01),
+        "openrouter/judge": pytest.approx(0.002),
+        "deepseek/judge": pytest.approx(0.004),
+    }
+
+
+def test_cost_by_model_ignores_a_missing_second_opinion() -> None:
+    attempt = {
+        "model": "openrouter/cheap",
+        "cost": {"worker": 0.01, "reviewer": 0.002},
+        "review": {"model": "openrouter/judge"},
+        "second_opinion": None,
+    }
+    assert cost_by_model([attempt]) == {
+        "openrouter/cheap": pytest.approx(0.01),
+        "openrouter/judge": pytest.approx(0.002),
     }
 
 

@@ -66,6 +66,18 @@
 # medium: paid models, providers are asked not to retain or train on prompts. Fallbacks run on
 # Vercel AI Gateway with disallowPromptTraining (AI_GATEWAY_API_KEY), at a higher price.
 #
+# A provider may also be run by the Pi harness (harness = "pi"): Pi gets the endpoint and the key's
+# variable name in its own models.json, so the provider keeps base_url and api_key_env. Pi cannot
+# send the Vercel gateway's providerOptions, so such a provider is refused at load time. Medium
+# with a Pi provider on OpenRouter:
+#
+#   [privacy.medium.providers.pi-openrouter]
+#   base_url = "https://openrouter.ai/api/v1"
+#   api_key_env = "OPENROUTER_API_KEY"
+#   harness = "pi"
+#   # then, in [privacy.medium], tiers = ["pi-openrouter/anthropic/claude-haiku-5.5", ...]
+#
+#
 # high: EU data residency through eu.openrouter.ai (OpenRouter Business plan, +8% on credits).
 # Fallbacks run on Scaleway in Paris (SCALEWAY_API_KEY), which has no GPT-5.6 Luna or Opus.
 
@@ -76,9 +88,9 @@ max_parallel = 2
 tiers = [
   ["openrouter/thinkingmachines/inkling-2-small:free", "openrouter/dots-studio/dots-3-note-preview:free"],
   ["openrouter/nvidia/nemotron-3-ultra-550b-a55b:free", "openrouter/recursive/flint-v1.0:free"],
-  ["openrouter/z-ai/glm-5.3-flash", "deepseek/deepseek-flash"],
-  ["openrouter/deepseek/deepseek-v4-flash-0731", "deepseek/deepseek-flash"],
-  ["openrouter/openai/gpt-5.6-luna", "deepseek/deepseek-v4-pro"],
+  ["openrouter/anthropic/claude-haiku-5.5", "deepseek/deepseek-flash"],
+  ["openrouter/deepseek/deepseek-v4.1-flash-1017", "deepseek/deepseek-flash"],
+  ["openrouter/minimax/minimax-m3.1-flash", "deepseek/deepseek-v4-pro"],
 ]
 reviewer = ["openrouter/z-ai/glm-5.3-flash", "deepseek/deepseek-flash"]
 
@@ -93,13 +105,16 @@ api_key_env = "DEEPSEEK_API_KEY"
 [privacy.medium]
 max_parallel = 4
 tiers = [
+  ["openrouter/anthropic/claude-haiku-5.5", "vercel/anthropic/claude-haiku-5.5"],
+  ["openrouter/deepseek/deepseek-v4.1-flash-1017", "vercel/deepseek/deepseek-v4.1-flash-1017"],
   ["openrouter/deepseek/deepseek-v4-flash-0731", "vercel/deepseek/deepseek-v4-flash-0731"],
   ["openrouter/z-ai/glm-5.3-flash", "vercel/zai/glm-5.3-flash"],
-  ["openrouter/openai/gpt-5.6-luna", "vercel/openai/gpt-5.6-luna"],
-  ["openrouter/z-ai/glm-5.3", "vercel/zai/glm-5.3"],
-  ["openrouter/deepseek/deepseek-v4-pro-0813", "vercel/deepseek/deepseek-v4-pro"],
+  ["openrouter/minimax/minimax-m3.1-flash", "vercel/minimax/minimax-m3.1-flash"],
 ]
-reviewer = ["openrouter/openai/gpt-5.6-luna", "vercel/openai/gpt-5.6-luna"]
+# The reviewer list is used in order: a reviewer error moves to the next entry, and a
+# suspicious rejection asks the next entry once for a second opinion (decision 023), so
+# the second entry is a different model family and the last one a different provider.
+reviewer = ["openrouter/openai/gpt-5.6-luna", "openrouter/anthropic/claude-haiku-5.5", "vercel/openai/gpt-5.6-luna"]
 
 [privacy.medium.providers.openrouter]
 base_url = "https://openrouter.ai/api/v1"
@@ -114,9 +129,9 @@ request_options = { providerOptions = { gateway = { disallowPromptTraining = tru
 [privacy.high]
 max_parallel = 4
 tiers = [
+  ["openrouter/anthropic/claude-haiku-5.5", "scaleway/glm-5.3"],
+  ["openrouter/deepseek/deepseek-v4.1-flash-1017", "scaleway/deepseek-v4.1-flash-1017"],
   ["openrouter/z-ai/glm-5.3-flash", "scaleway/deepseek-v4-flash-0731"],
-  ["openrouter/deepseek/deepseek-v4-flash-0731", "scaleway/deepseek-v4-flash-0731"],
-  ["openrouter/openai/gpt-5.6-luna", "scaleway/deepseek-v4.1-flash-1017"],
   ["openrouter/z-ai/glm-5.3", "scaleway/glm-5.3"],
   ["openrouter/anthropic/claude-opus-5.5", "scaleway/glm-5.3"],
 ]

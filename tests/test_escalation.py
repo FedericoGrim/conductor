@@ -29,6 +29,7 @@ def output(
     cost: float = 0.0,
     error: ModelError | None = None,
     commit_rejection: str | None = None,
+    commit_message: str = "",
 ) -> AttemptOutput:
     return AttemptOutput(
         exit_code=exit_code,
@@ -38,6 +39,7 @@ def output(
         cost=cost,
         error=error,
         commit_rejection=commit_rejection,
+        commit_message=commit_message,
     )
 
 
@@ -50,6 +52,7 @@ def run(
     checks: list[list[CheckResult]] | None = None,
     checked: list[int] | None = None,
     judged_checks: list[list[CheckResult]] | None = None,
+    judged_messages: list[str] | None = None,
 ) -> Any:
     calls: list[tuple[int, str, str]] = []
     recorded: list[dict[str, Any]] = []
@@ -57,14 +60,18 @@ def run(
     judged = list(reversed(range(len(verdicts))))
     reviewed = [] if reviewed is None else reviewed
     judged_checks = [] if judged_checks is None else judged_checks
+    judged_messages = [] if judged_messages is None else judged_messages
 
     async def attempt(step: Step, number: int, model: str, prompt: str) -> AttemptOutput:
         calls.append((number, model, prompt))
         return outputs[number - 1]
 
-    def judge(model: str, spec: str, diff: str, checks: list[CheckResult]) -> Verdict:
+    def judge(
+        model: str, spec: str, diff: str, checks: list[CheckResult], commit_message: str
+    ) -> Verdict:
         reviewed.append(model)
         judged_checks.append(checks)
+        judged_messages.append(commit_message)
         return verdicts[judged.pop()]
 
     def record(step: Step, data: dict[str, Any]) -> None:
@@ -172,7 +179,9 @@ def test_brain_reviewer_hands_the_diff_back_without_judging() -> None:
     async def attempt(step: Step, number: int, model: str, prompt: str) -> AttemptOutput:
         return output()
 
-    def judge(model: str, spec: str, diff: str, checks: list[CheckResult]) -> Verdict:
+    def judge(
+        model: str, spec: str, diff: str, checks: list[CheckResult], commit_message: str
+    ) -> Verdict:
         raise AssertionError("brain profile must not call the reviewer")
 
     result = asyncio.run(
@@ -185,6 +194,52 @@ def test_prompt_contains_goal_spec_files_and_feedback() -> None:
     prompt = build_prompt("ship v1", STEP, feedback="missing edge case")
     for text in ("ship v1", "Parser", "write a parser", "parser.py", "missing edge case"):
         assert text in prompt
+
+
+def test_the_brief_sets_context_method_hooks_questions_and_commit() -> None:
+    prompt = build_prompt("ship v1", STEP)
+    assert "already approved" in prompt
+    assert "tests for new or changed behaviour first" in prompt
+    assert "git hooks" in prompt
+    assert "QUESTION:" in prompt
+    assert "COMMIT:" in prompt
+
+
+def test_verify_commands_appear_in_the_prompt() -> None:
+    prompt = build_prompt("ship v1", STEP, verify=("pytest -q", "ruff check ."))
+    assert "# Verification" in prompt
+    assert "- `pytest -q`" in prompt
+    assert "- `ruff check .`" in prompt
+    assert "run them yourself before finishing" in prompt
+    assert "$CONDUCTOR_REPO" in prompt
+    assert "git worktree list" in prompt
+
+
+def test_no_verification_section_without_verify_commands() -> None:
+    prompt = build_prompt("ship v1", STEP)
+    assert "# Verification" not in prompt
+
+
+def test_run_step_forwards_the_verify_commands_to_the_prompt() -> None:
+    prompts: list[str] = []
+
+    async def attempt(step: Step, number: int, model: str, prompt: str) -> AttemptOutput:
+        prompts.append(prompt)
+        return output()
+
+    result = asyncio.run(
+        run_step(
+            STEP,
+            PROFILE,
+            attempt=attempt,
+            judge=lambda *args: Verdict(True, "ok", "{}"),
+            record=lambda s, d: None,
+            verify=("pytest -q",),
+        )
+    )
+    assert result.status == "approved"
+    assert "# Verification" in prompts[0]
+    assert "- `pytest -q`" in prompts[0]
 
 
 def test_a_reviewer_error_hands_the_diff_to_the_brain_without_escalating() -> None:
@@ -283,6 +338,20 @@ def test_a_level_whose_providers_are_all_excluded_is_unavailable_without_attempt
     assert result.status == "unavailable"
     assert calls == []
     assert "excluded" in result.detail
+
+
+def test_a_classified_error_with_exit_code_zero_is_a_failed_attempt() -> None:
+    result, calls, recorded = run(
+        [Verdict(True, "ok", "{}")],
+        outputs=[
+            output(diff="", exit_code=0, error=ModelError(TRANSIENT, "pi-429", "rate limited")),
+            output(),
+        ],
+        profile=FALLBACK_PROFILE,
+    )
+    assert result.status == "approved"
+    assert models(calls) == ["openrouter/t1", "openrouter/t1b"]
+    assert recorded[0]["error"]["type"] == "pi-429"
 
 
 def test_an_unclassified_error_fails_without_trying_the_fallbacks() -> None:
@@ -424,7 +493,9 @@ def test_a_step_with_answers_puts_them_in_the_prompt_and_reaches_the_reviewer() 
         calls.append(prompt)
         return output()
 
-    def judge(model: str, spec: str, diff: str, checks: list[CheckResult]) -> Verdict:
+    def judge(
+        model: str, spec: str, diff: str, checks: list[CheckResult], commit_message: str
+    ) -> Verdict:
         reviewed.append(model)
         return Verdict(True, "ok", "{}")
 
@@ -543,3 +614,134 @@ def test_a_commit_rejected_on_the_last_level_fails_the_step() -> None:
     result, _, _ = run([], outputs=[rejected, rejected])
     assert result.status == "failed"
     assert "git hooks rejected the commit" in result.detail
+
+
+def test_the_attempt_entry_records_the_commit_message() -> None:
+    _, _, recorded = run(
+        [Verdict(True, "ok", "{}")],
+        outputs=[output(commit_message="feat(parser): scan the input")],
+    )
+    assert recorded[0]["commit_message"] == "feat(parser): scan the input"
+
+
+def test_the_judge_receives_the_attempts_commit_message() -> None:
+    judged_messages: list[str] = []
+    run(
+        [Verdict(True, "ok", "{}")],
+        outputs=[output(commit_message="feat(parser): scan the input")],
+        judged_messages=judged_messages,
+    )
+    assert judged_messages == ["feat(parser): scan the input"]
+
+
+def test_the_attempt_entry_records_the_rejection_category_and_suspicion() -> None:
+    passed = CheckResult("mypy conductor", 0, "", 1.0)
+    verdict = Verdict(False, "wrong type", "{}", category="types")
+    _, _, recorded = run([verdict, Verdict(True, "ok", "{}")], checks=[[passed], []])
+    review = recorded[0]["review"]
+    assert review["category"] == "types"
+    assert review["suspicious"] is True
+
+
+def test_a_judgement_rejection_is_not_suspicious() -> None:
+    passed = CheckResult("mypy conductor", 0, "", 1.0)
+    verdict = Verdict(False, "misses the spec", "{}", category="spec")
+    _, _, recorded = run([verdict, Verdict(True, "ok", "{}")], checks=[[passed], []])
+    review = recorded[0]["review"]
+    assert review["category"] == "spec"
+    assert review["suspicious"] is False
+
+
+def suspicious_rejection(reason: str, cost: float) -> Verdict:
+    return Verdict(False, reason, "{}", usage={"cost": cost}, category="imports")
+
+
+def test_a_suspicious_rejection_asks_the_next_reviewer_for_a_second_opinion() -> None:
+    passed = CheckResult("mypy --strict .", 0, "", 1.0)
+    reviewed: list[str] = []
+    result, _, recorded = run(
+        [
+            suspicious_rejection("bad imports", 0.1),
+            Verdict(True, "actually fine", "{}", usage={"cost": 0.2}),
+        ],
+        profile=REVIEWERS_PROFILE,
+        reviewed=reviewed,
+        checks=[[passed]],
+    )
+    assert result.status == "approved"
+    assert reviewed == ["openrouter/r", "openrouter/r2"]
+    assert recorded[0]["review"]["model"] == "openrouter/r2"
+    assert recorded[0]["review_fallbacks"][0]["model"] == "openrouter/r"
+    assert recorded[0]["second_opinion"]["model"] == "openrouter/r2"
+    assert recorded[0]["second_opinion"]["ok"] is True
+    assert recorded[0]["cost"]["reviewer"] == 0.2
+
+
+def test_a_suspicious_rejection_escalates_when_the_second_opinion_also_rejects() -> None:
+    passed = CheckResult("mypy --strict .", 0, "", 1.0)
+    reviewed: list[str] = []
+    result, calls, recorded = run(
+        [
+            suspicious_rejection("bad imports", 0.1),
+            suspicious_rejection("still bad imports", 0.2),
+            Verdict(True, "ok", "{}"),
+        ],
+        profile=REVIEWERS_PROFILE,
+        reviewed=reviewed,
+        checks=[[passed], [passed]],
+    )
+    assert result.status == "approved"
+    assert models(calls) == ["openrouter/t1", "openrouter/t2"]
+    assert "still bad imports" in calls[1][2]
+    assert recorded[0]["review"]["model"] == "openrouter/r2"
+    assert recorded[0]["second_opinion"]["ok"] is False
+
+
+def test_a_rejection_that_is_not_suspicious_gets_no_second_opinion() -> None:
+    passed = CheckResult("mypy --strict .", 0, "", 1.0)
+    reviewed: list[str] = []
+    profile = replace(REVIEWERS_PROFILE, tiers=(("openrouter/t0",),))
+    result, _, recorded = run(
+        [Verdict(False, "bad logic", "{}", category="logic")],
+        profile=profile,
+        reviewed=reviewed,
+        checks=[[passed]],
+    )
+    assert result.status == "failed"
+    assert reviewed == ["openrouter/r"]
+    assert recorded[0]["second_opinion"] is None
+
+
+def test_a_single_reviewer_never_asks_for_a_second_opinion() -> None:
+    passed = CheckResult("mypy --strict .", 0, "", 1.0)
+    reviewed: list[str] = []
+    profile = replace(PROFILE, tiers=(("openrouter/t0",),))
+    result, _, recorded = run(
+        [suspicious_rejection("bad imports", 0.1)],
+        profile=profile,
+        reviewed=reviewed,
+        checks=[[passed]],
+    )
+    assert result.status == "failed"
+    assert reviewed == ["openrouter/r"]
+    assert recorded[0]["second_opinion"] is None
+
+
+def test_an_errored_second_opinion_does_not_overrule_the_first_rejection() -> None:
+    passed = CheckResult("mypy --strict .", 0, "", 1.0)
+    reviewed: list[str] = []
+    result, calls, recorded = run(
+        [
+            suspicious_rejection("bad imports", 0.1),
+            reviewer_error(TRANSIENT),
+            Verdict(True, "ok", "{}"),
+        ],
+        profile=REVIEWERS_PROFILE,
+        reviewed=reviewed,
+        checks=[[passed], [passed]],
+    )
+    assert result.status == "approved"
+    assert reviewed == ["openrouter/r", "openrouter/r2", "openrouter/r"]
+    assert "bad imports" in calls[1][2]
+    assert recorded[0]["review"]["model"] == "openrouter/r"
+    assert recorded[0]["second_opinion"]["error"]["kind"] == TRANSIENT

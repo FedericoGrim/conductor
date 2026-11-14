@@ -5,23 +5,24 @@ CLI that executes a `plan.json` written by a "brain" model (Claude in Claude Cod
 
 ## Tech stack
 - Python 3.12, standard library only at runtime (`asyncio`, `subprocess`, `urllib`, `tomllib`, `json`).
-- Workers run on one of two harnesses, chosen by the `harness` field of the provider of the step's model: the OpenCode 2.x CLI (`@opencode/cli`, any provider OpenCode supports), the default, or the Claude Code CLI (`claude -p`) for a provider with `harness = "claude-code"` (the Claude subscription).
+- Workers run on one of three harnesses, chosen by the `harness` field of the provider of the step's model: the OpenCode 2.x CLI (`@opencode/cli`, any provider OpenCode supports), the default, the Claude Code CLI (`claude -p`) for a provider with `harness = "claude-code"` (the Claude subscription), or the Pi CLI (`pi`, 0.73.1) for a provider with `harness = "pi"`.
 - Dev: pytest, ruff, mypy (strict), pre-commit.
 
 ## Architecture
 Simple layering, no tactical DDD: a small tool with little business logic.
-- `conductor/plan.py` — `Plan`, `Step` models and validation (unique ids, known `depends_on`, no cycles, difficulty between 1 and `DIFFICULTY_LEVELS`, optional `answers` to earlier questions).
+- `conductor/plan.py` — `Plan`, `Step` models and validation (unique ids, known `depends_on`, no cycles, difficulty between 1 and `DIFFICULTY_LEVELS`, optional `answers` to earlier questions, optional `commit` a Conventional Commit subject).
 - `conductor/config.py` — `conductor.toml`: privacy profiles, each with five difficulty levels (a model or an ordered list with fallbacks, cheapest first), one or more providers (each with a `harness`, default `opencode`; `base_url` and `api_key_env` together or neither), reviewers (a model, a list, or `brain`; never a provider without endpoint), `max_parallel`, `retry`. A model id is `<provider>/<model>`.
 - `conductor/defaults.py` — the built-in `low`/`medium`/`high` profiles (five levels each, with fallbacks on a second provider: DeepSeek, Vercel, Scaleway) and `DIFFICULTY_LEVELS`.
-- `conductor/privacy.py` — a profile → the `opencode.json` written in each worktree (one entry per provider) and the reviewer request options.
+- `conductor/privacy.py` — a profile → the `opencode.json` written in each worktree (one entry per provider, every skill denied), the Pi `models.json` in each worktree's agent directory (one entry per `pi` provider, the key named by its variable) and the reviewer request options.
 - `conductor/scheduler.py` — asyncio DAG scheduler bounded by `max_parallel`.
 - `conductor/worker.py` — worktree creation, the streaming runner (stopped after the retry limit), `run_attempt` with a `Harness`, the commit of the worker's changes through the repository's git hooks (a refusal becomes `commit_rejection`), diff capture.
-- `conductor/harness.py` — the worker harnesses, each the command, its event stream (retries, cost, classified errors, final text) and its worktree configuration: OpenCode, and Claude Code (`claude -p`, isolated with `--setting-sources project`, confined to the worktree with `--permission-mode acceptEdits`). `harness_for` picks by the provider of the chosen model.
+- `conductor/harness.py` — the worker harnesses, each the command, its event stream (retries, cost, classified errors, final text) and its worktree configuration: OpenCode, Claude Code (`claude -p`, isolated with `--setting-sources project`, confined to the worktree with `--permission-mode acceptEdits`), and Pi (`pi --mode json`, a JSON event stream read for the final assistant text, the turn costs, the auto-retries and the final error strings; isolated per attempt by `PI_CODING_AGENT_DIR`). `harness_for` picks by the provider of the chosen model.
 - `conductor/verify.py` — runs a step's `verify` commands with `sh -c` in its worktree (`CONDUCTOR_REPO` set, timeout, output tail).
-- `conductor/reviewer.py` — direct OpenAI-compatible chat call with explicit criteria (spec, tests in the diff, domain rules, bugs), the plan's rules and the verification results; returns `{ok, reason}`.
-- `conductor/escalation.py` — rejected step → next tier with the reason in the prompt; beyond last tier → `failed`. A worker question → `needs_answer` (no review, no escalation). A commit refused by the git hooks → rejected with the hook output, like a failed verification. Classified model errors → next model of the level (an unusable provider is excluded for the run), level exhausted → `unavailable`, unclassified → `failed`; reviewer errors → next reviewer, all failed → `needs_brain_review`; never escalates on an error.
+- `conductor/rejections.py` — rejection categories, the categories each known verify tool settles, and the suspicious-rejection rule.
+- `conductor/reviewer.py` — direct OpenAI-compatible chat call with explicit criteria (spec, tests in the diff, domain rules, bugs, the commit message), the plan's rules and the verification results; returns `{ok, category, reason}`.
+- `conductor/escalation.py` — the working brief in every prompt (plan already approved, TDD, stay in scope, run the step's `verify`, remember the git hooks, end with a `COMMIT:` line); rejected step → next tier with the reason in the prompt, and the attempt records the reviewer's category and whether the rejection is suspicious; a suspicious rejection asks the next reviewer once before escalating; beyond last tier → `failed`. A worker question → `needs_answer` (no review, no escalation). A commit refused by the git hooks → rejected with the hook output, like a failed verification. Classified model errors → next model of the level (an unusable provider is excluded for the run), level exhausted → `unavailable`, unclassified → `failed`; reviewer errors → next reviewer, all failed → `needs_brain_review`; never escalates on an error.
 - `conductor/errors.py` — the error classes (transient, provider unusable, model unsuitable, unclassified) shared by worker and reviewer.
-- `conductor/log.py` — `.conductor/runs/<ts>/run.json` and `step-<id>/attempt-N.json`, with cost totals per step, model and run.
+- `conductor/log.py` — `.conductor/runs/<ts>/run.json` and `step-<id>/attempt-N.json`, with cost totals per step, model and run; the attempt records `second_opinion` and its cost is counted.
 - `conductor/merge.py` — merge approved worktree branches; conflicts and hooks refusing the merge are reported, not resolved.
 - `conductor/catalog.py` — provider model lists (`/models`), prices per million tokens, filtering and search.
 - `conductor/setup_state.py` — editable profiles, providers, five difficulty levels and validation for the setup UI.
@@ -29,8 +30,11 @@ Simple layering, no tactical DDD: a small tool with little business logic.
 - `conductor/credentials.py` — API keys from the environment first, then `auth.json`.
 - `conductor/settings.py` — export and import of the instance settings, with a `[conductor]` metadata table and no keys.
 - `conductor/billing.py` — provider balances (chosen by the profile's `base_url` host), the cross-project spend ledger and its totals.
-- `conductor/cli.py` — `conductor run plan.json --privacy low|medium|high`, `conductor validate plan.json [--config]` (warns about levels relying on one provider), `conductor billing [project|projects]`, `conductor setup`.
-Rule: no module imports OpenCode or provider specifics except `harness.py`, `reviewer.py`, `privacy.py`, `catalog.py` and `billing.py`.
+- `conductor/brain.py` — the brain's token usage per model, read from `opencode session export` (numbers and model names only, never message text).
+- `conductor/stats.py` — per-run and per-step statistics from run.json, git (hand commits after a run) and the brain's session.
+- `conductor/cli.py` — `conductor run plan.json --privacy low|medium|high`, `conductor validate plan.json [--config]` (warns about levels relying on one provider), `conductor billing [project|projects]`, `conductor stats`, `conductor setup`.
+- `conductor/commits.py` — the Conventional Commit message of an attempt: the plan's `commit` field, the worker's `COMMIT:` line, or the fallback.
+Rule: no module imports OpenCode or provider specifics except `harness.py`, `reviewer.py`, `privacy.py`, `catalog.py`, `billing.py` and `brain.py`.
 
 ## Commands
 - Setup: `python3 -m venv .venv && .venv/bin/pip install -e .[dev]`
@@ -39,11 +43,14 @@ Rule: no module imports OpenCode or provider specifics except `harness.py`, `rev
 - List candidate models per privacy level: `.venv/bin/python scripts/list-models.py --privacy medium`
 - Create or edit the configuration in a terminal UI: `.venv/bin/conductor setup`
 - Move the settings between machines: `.venv/bin/conductor config export FILE` / `config import FILE`
+- Replay a recorded attempt through the reviewer: `python scripts/replay-review.py .conductor/runs/<ts>/step-<id>/attempt-N.json`
+- Model benchmark: `.venv/bin/python scripts/benchmark.py run --repeat 3 --budget 12`, then `scripts/benchmark.py report benchmarks/results/<ts>` (see benchmarks/README.md)
 
 ## Environment
 - `OPENROUTER_API_KEY`, and for the default fallbacks `DEEPSEEK_API_KEY` (low), `AI_GATEWAY_API_KEY` (medium), `SCALEWAY_API_KEY` (high) — or the `api_key_env` named in the chosen profile — for the reviewer call: from the environment, or from `~/.local/share/conductor/auth.json` written by `conductor setup`.
 - The same key env names for `conductor billing`; `SCW_ORGANIZATION_ID` for Scaleway.
 - OpenCode providers are authenticated with `opencode auth login`, and a `claude-code` provider with a Claude Code subscription login (`claude`), both outside Conductor.
+- A `pi` provider (tested with Pi 0.73.1) is authenticated through its key variable, `OPENROUTER_API_KEY` for the OpenRouter example in `conductor.toml.example`: Conductor resolves it from the environment first, then from `auth.json`, and passes it in the Pi process's environment only, never to a file or a log. Pi's agent directory is per attempt, so no `pi` login is needed.
 - Repository secret `RELEASE_PLEASE_TOKEN`: fine-grained token (Contents and Pull requests, read and write, this repository only) used by release-please so that CI runs on its PRs. If it is missing or expired, release-please falls back to `GITHUB_TOKEN` and the `checks` run on the release PR must be approved by hand (`gh run rerun <id>` or "Approve and run" on the PR).
 - Never commit `.env`, `conductor.toml` with keys, or `.conductor/` run logs.
 
@@ -57,23 +64,28 @@ Rule: no module imports OpenCode or provider specifics except `harness.py`, `rev
 - **Privacy level** — `low` (free models, data may be used for training), `medium` (paid, no-training providers), `high` (EU data residency).
 - **Attempt** — one execution of a step on one model; a step has 1..N attempts.
 - **Reviewer** — the model that approves or rejects an attempt's diff.
+- **Second opinion** — the extra reviewer consulted once about a suspicious rejection; it is the next model of the profile's `reviewer` list.
+- **Commit message** — the Conventional Commit subject of an attempt: the plan's `commit` field, the worker's `COMMIT:` proposal (when it passes the strict format), or the fallback; the reviewer checks it matches the diff.
 - **Escalation** — re-running a rejected step on the next tier.
 - **Ledger** — `~/.local/share/conductor/ledger.jsonl`, one line per finished run with its project and cost.
 
 ## Project conventions
-- OpenCode steps run with `opencode run --auto --archived`; Claude Code steps run with `claude -p --setting-sources project --disable-slash-commands --permission-mode acceptEdits --allowedTools=Bash`, isolated from the user's personal Claude settings and skills and confined to the worktree, never with `--dangerously-skip-permissions`. Either way, workers may do anything inside their worktree, nothing outside.
-- Conductor's commits and merges use Conventional Commit messages (`chore(conductor): ...`) and never bypass the target repository's git hooks (decision 018).
+- OpenCode steps run with `opencode run --auto --archived`; Claude Code steps run with `claude -p --setting-sources project --disable-slash-commands --permission-mode acceptEdits --allowedTools=Bash`, isolated from the user's personal Claude settings and skills and confined to the worktree, never with `--dangerously-skip-permissions`. Pi steps run with `pi --mode json --no-session --no-skills --no-extensions --no-prompt-templates --no-themes --tools read,bash,edit,write`, with `PI_CODING_AGENT_DIR` pointing at the attempt's `.pi-agent/` directory, excluded from the diff via `.git/info/exclude` like `opencode.json`, so no personal Pi settings, skills or extensions reach a worker. Either way, workers may do anything inside their worktree, nothing outside.
+- Conductor's commits and merges use Conventional Commit messages; a worker attempt is committed with the plan's or the worker's Conventional Commit message (fallback `chore(conductor): apply step <id> attempt <n>`), merges with `chore(conductor): merge <branch>`, never bypassing the target repository's git hooks (decisions 018 and 020).
 - Worktrees are created and merged by Conductor (`git worktree add`), never with OpenCode's own `--worktree` flag.
 - Routing options are written to a per-worktree `opencode.json`, excluded from the diff via `.git/info/exclude`.
+- That `opencode.json` also denies every skill (OpenCode loads the user's personal ones from `~/.claude/skills` and `~/.agents/skills`) and, when the target has a `CLAUDE.md` but no `AGENTS.md`, lists `CLAUDE.md` in `instructions` (OpenCode 2 reads `AGENTS.md` only). Decision 019.
+- The `reviewer` list is used both for reviewer errors (the next reviewer takes over) and for second opinions on suspicious rejections (decision 023), so choose its second entry on a different model family than the first.
 - That `opencode.json` sets `small_model` to the first model of level 1 and repeats each provider's `request_options` at provider level: OpenCode sends title and summary requests to a model of its own choosing, and the profile's data policy must reach it too.
 
 ## Security & constraints
 - Settings export never includes keys, only provider names and the variables that hold them.
-- API keys come from the environment or from `auth.json` (mode `600`, directory `700`, written atomically by `conductor setup` only); never written to logs, `opencode.json`, `run.json`, the ledger or billing output. The environment wins over the file.
+- API keys come from the environment or from `auth.json` (mode `600`, directory `700`, written atomically by `conductor setup` only); never written to logs, `opencode.json`, `run.json`, the ledger or billing output. The environment wins over the file. Pi's `models.json` names the key's variable and never holds the key; Conductor resolves that variable (environment or `auth.json`) and passes it in the worker's environment.
+- Pi reports a cost only for the models it knows: without a declared price a Pi attempt costs 0 and only its tokens are recorded (#72).
 - A key is never sent to a `base_url` that is not `https`.
 - Worker output (transcripts, diffs, reviewer replies) is untrusted data: never executed, never fed to a shell.
 - `verify` commands come from the plan (written by the brain), never from worker output. They run in the worker's worktree, so they execute files the worker may have changed: no more than the worker can already run there with `--auto`.
-- Reviewer verdict must be parsed strictly as JSON; anything else is a reviewer error with reason "unparseable verdict": never approved, handed to the brain.
+- Reviewer verdict must be parsed strictly as JSON with a category from the closed list on every rejection; anything else is a reviewer error with reason "unparseable verdict": never approved, handed to the brain.
 
 ## Definition of Done (extra)
 - `conductor validate` still accepts `examples/plan.json`.

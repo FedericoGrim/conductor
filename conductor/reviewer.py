@@ -8,7 +8,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from conductor import credentials
+from conductor import credentials, rejections
 from conductor.config import Profile
 from conductor.errors import (
     MODEL_UNSUITABLE,
@@ -32,8 +32,18 @@ SYSTEM_PROMPT = (
     "and configuration need none.\n"
     "3. The domain rules hold: names, invariants and boundaries.\n"
     "4. There are no obvious bugs or security issues.\n"
+    "5. The commit message, when given, describes the diff and has the right Conventional "
+    "Commit type (new behaviour is feat, not fix or chore; a bug fix is fix; tests only is "
+    "test; documentation only is docs).\n"
+    "The verification commands already ran and passed: problems they check (imports, types, "
+    "syntax, formatting, lint, failing tests) are settled and never a reason to reject. The "
+    "diff shows only part of each file: code you cannot see (imports, definitions elsewhere "
+    "in a file) is not missing.\n"
     "On rejection, name the criterion and what to change. "
-    'Answer with JSON only: {"ok": true|false, "reason": "<one or two sentences>"}.'
+    "Answer with JSON only: "
+    f'{{"ok": true|false, "category": "<one of: {", ".join(rejections.CATEGORIES)}>", '
+    f'"reason": "<one or two sentences>"}}. '
+    "The category names the main criterion broken; it is required when ok is false."
 )
 CHECK_OUTPUT_LIMIT = 1000
 
@@ -49,6 +59,7 @@ class Verdict:
     raw: str
     usage: dict[str, Any] = field(default_factory=dict)
     error: ModelError | None = None
+    category: str | None = None
 
     @classmethod
     def failed(cls, error: ModelError, raw: str = "") -> Verdict:
@@ -69,7 +80,7 @@ def http_post(url: str, headers: dict[str, str], body: dict[str, Any]) -> dict[s
         return payload
 
 
-def parse_verdict(content: str) -> tuple[bool, str] | None:
+def parse_verdict(content: str) -> tuple[bool, str, str | None] | None:
     match = JSON_BLOCK.search(content)
     if not match:
         return None
@@ -79,7 +90,13 @@ def parse_verdict(content: str) -> tuple[bool, str] | None:
         return None
     if not isinstance(data, dict) or not isinstance(data.get("ok"), bool):
         return None
-    return data["ok"], str(data.get("reason", ""))
+    ok = data["ok"]
+    if not ok:
+        category = data.get("category")
+        if not isinstance(category, str) or category not in rejections.CATEGORIES:
+            return None
+        return ok, str(data.get("reason", "")), category
+    return ok, str(data.get("reason", "")), None
 
 
 def classify_http_error(error: urllib.error.HTTPError) -> ModelError:
@@ -94,7 +111,13 @@ def classify_http_error(error: urllib.error.HTTPError) -> ModelError:
     return ModelError.of(kind, f"http-{error.code}", body or str(error.reason))
 
 
-def review_request(spec: str, diff: str, rules: tuple[str, ...], checks: list[CheckResult]) -> str:
+def review_request(
+    spec: str,
+    diff: str,
+    rules: tuple[str, ...],
+    checks: list[CheckResult],
+    commit_message: str = "",
+) -> str:
     sections = [f"## Specification\n{spec}"]
     if rules:
         sections.append("## Domain rules\n" + "\n".join(f"- {rule}" for rule in rules))
@@ -104,7 +127,13 @@ def review_request(spec: str, diff: str, rules: tuple[str, ...], checks: list[Ch
             f"```\n{check.output[-CHECK_OUTPUT_LIMIT:].strip()}\n```"
             for check in checks
         )
-        sections.append(f"## Verification (run by Conductor)\n{outcomes}")
+        sections.append(
+            "## Verification (run by Conductor)\n"
+            "All verification commands passed (exit 0); what they check is settled.\n"
+            f"{outcomes}"
+        )
+    if commit_message:
+        sections.append(f"## Commit message\n```\n{commit_message}\n```")
     sections.append(f"## Diff\n```diff\n{diff}\n```")
     return "\n\n".join(sections)
 
@@ -117,6 +146,7 @@ def review(
     post: Post | None = None,
     rules: tuple[str, ...] = (),
     checks: list[CheckResult] | None = None,
+    commit_message: str = "",
 ) -> Verdict:
     post = post or http_post
     provider = profile.provider_for(model)
@@ -142,7 +172,10 @@ def review(
         "model": api_model_id(provider.name, model),
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": review_request(spec, diff, rules, checks or [])},
+            {
+                "role": "user",
+                "content": review_request(spec, diff, rules, checks or [], commit_message),
+            },
         ],
     }
     try:
@@ -166,4 +199,4 @@ def review(
     if parsed is None:
         unparseable = ModelError.of(MODEL_UNSUITABLE, "unparseable-verdict", content)
         return Verdict(False, UNPARSEABLE, content, usage, unparseable)
-    return Verdict(parsed[0], parsed[1], content, usage)
+    return Verdict(parsed[0], parsed[1], content, usage, category=parsed[2])

@@ -20,6 +20,9 @@ def cost_by_model(attempts: list[dict[str, Any]]) -> dict[str, float]:
         cost = attempt.get("cost") or {}
         review = attempt.get("review") or {}
         fallbacks = attempt.get("review_fallbacks") or []
+        second = attempt.get("second_opinion") or None
+        if second:
+            fallbacks = [*fallbacks, second]
         for model, amount in (
             (attempt.get("model"), cost.get("worker")),
             (review.get("model"), cost.get("reviewer")),
@@ -30,13 +33,24 @@ def cost_by_model(attempts: list[dict[str, Any]]) -> dict[str, float]:
     return totals
 
 
+def subscription_total(attempts: list[dict[str, Any]]) -> float | None:
+    values = [
+        attempt["cost"]["subscription"]
+        for attempt in attempts
+        if (attempt.get("cost") or {}).get("subscription") is not None
+    ]
+    return sum(values) if values else None
+
+
 @dataclass
 class RunLog:
     directory: Path
     run: dict[str, Any]
 
     @classmethod
-    def create(cls, repo: Path, plan: Plan, privacy: str) -> RunLog:
+    def create(
+        cls, repo: Path, plan: Plan, privacy: str, brain_session: str | None = None
+    ) -> RunLog:
         runs = repo / ".conductor" / "runs"
         runs.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now(UTC).strftime("%Y-%m-%dT%H-%M-%S")
@@ -52,6 +66,9 @@ class RunLog:
                 "started_at": now(),
                 "finished_at": None,
                 "privacy": privacy,
+                "brain_session": {"harness": "opencode", "id": brain_session}
+                if brain_session
+                else None,
                 "plan": asdict(plan),
                 "steps": {},
             },
@@ -72,11 +89,15 @@ class RunLog:
 
     def finish(self, results: dict[str, StepResult]) -> None:
         run_totals: dict[str, float] = {}
+        subscriptions: list[float] = []
         for step_id, result in results.items():
             count = len(result.attempts)
             step_totals = cost_by_model(result.attempts)
+            step_subscription = subscription_total(result.attempts)
             for model, amount in step_totals.items():
                 run_totals[model] = run_totals.get(model, 0.0) + amount
+            if step_subscription is not None:
+                subscriptions.append(step_subscription)
             self.run["steps"][step_id] = {
                 "status": result.status,
                 "detail": result.detail,
@@ -85,8 +106,10 @@ class RunLog:
                 "last_attempt": f"step-{step_id}/attempt-{count}.json" if count else None,
                 "question": result.attempts[-1].get("question") if count else None,
                 "cost": sum(step_totals.values()),
+                "subscription": step_subscription,
             }
         self.run["cost"] = sum(run_totals.values())
         self.run["cost_by_model"] = run_totals
+        self.run["subscription"] = sum(subscriptions) if subscriptions else None
         self.run["finished_at"] = now()
         self.write_run()

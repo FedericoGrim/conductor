@@ -14,7 +14,7 @@ from conductor.errors import (
     UNCLASSIFIED,
     ModelError,
 )
-from conductor.reviewer import Verdict, review
+from conductor.reviewer import Verdict, review, review_request
 from conductor.verify import CheckResult
 from tests.factories import make_profile
 
@@ -36,13 +36,16 @@ def test_sends_spec_and_diff_and_parses_verdict(monkeypatch: pytest.MonkeyPatch)
 
     def fake_post(url: str, headers: dict[str, str], body: dict[str, Any]) -> dict[str, Any]:
         captured.update(url=url, headers=headers, body=body)
-        return completion(json.dumps({"ok": False, "reason": "missing null check"}))
+        return completion(
+            json.dumps({"ok": False, "category": "logic", "reason": "missing null check"})
+        )
 
     verdict = review(
         PROFILE, PROFILE.reviewers[0], spec="add parser", diff="+def parse(): ...", post=fake_post
     )
     assert verdict.ok is False
     assert verdict.reason == "missing null check"
+    assert verdict.category == "logic"
     assert verdict.usage == {"total_tokens": 42}
     assert captured["url"] == "https://openrouter.ai/api/v1/chat/completions"
     assert captured["headers"]["Authorization"] == "Bearer sk-secret"
@@ -138,9 +141,46 @@ def test_a_parsed_verdict_has_no_error(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TEST_REVIEW_KEY", "k")
 
     def fake_post(url: str, headers: dict[str, str], body: dict[str, Any]) -> dict[str, Any]:
-        return completion('{"ok": false, "reason": "no tests"}')
+        return completion('{"ok": false, "category": "spec", "reason": "no tests"}')
 
     assert review(PROFILE, PROFILE.reviewers[0], spec="s", diff="d", post=fake_post).error is None
+
+
+def test_a_rejection_without_a_category_is_unparseable(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TEST_REVIEW_KEY", "k")
+
+    def fake_post(url: str, headers: dict[str, str], body: dict[str, Any]) -> dict[str, Any]:
+        return completion('{"ok": false, "reason": "no tests"}')
+
+    verdict = review(PROFILE, PROFILE.reviewers[0], spec="s", diff="d", post=fake_post)
+    assert verdict.ok is False
+    assert verdict.reason == "unparseable verdict"
+    assert verdict.error is not None
+    assert verdict.error.type == "unparseable-verdict"
+
+
+def test_a_rejection_with_an_unknown_category_is_unparseable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TEST_REVIEW_KEY", "k")
+
+    def fake_post(url: str, headers: dict[str, str], body: dict[str, Any]) -> dict[str, Any]:
+        return completion('{"ok": false, "category": "style", "reason": "messy"}')
+
+    verdict = review(PROFILE, PROFILE.reviewers[0], spec="s", diff="d", post=fake_post)
+    assert verdict.ok is False
+    assert verdict.reason == "unparseable verdict"
+
+
+def test_an_approval_without_a_category_is_ok(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TEST_REVIEW_KEY", "k")
+
+    def fake_post(url: str, headers: dict[str, str], body: dict[str, Any]) -> dict[str, Any]:
+        return completion('{"ok": true, "reason": "fine"}')
+
+    verdict = review(PROFILE, PROFILE.reviewers[0], spec="s", diff="d", post=fake_post)
+    assert verdict.ok is True
+    assert verdict.category is None
 
 
 def test_verdict_cost_comes_from_the_usage_reported_by_the_provider() -> None:
@@ -295,9 +335,21 @@ def test_the_verification_results_reach_the_reviewer(monkeypatch: pytest.MonkeyP
     passed = CheckResult("pytest -q", 0, "x" * 5000 + "12 passed", 3.0)
     body = captured_request(monkeypatch, checks=[passed])
     prompt = body["messages"][-1]["content"]
-    assert "## Verification (run by Conductor)\n- `pytest -q`: exit 0" in prompt
+    assert (
+        "## Verification (run by Conductor)\n"
+        "All verification commands passed (exit 0); what they check is settled.\n"
+        "- `pytest -q`: exit 0"
+    ) in prompt
     assert "12 passed" in prompt
     assert len(prompt) < 2500
+
+
+def test_the_verification_summary_precedes_the_commands(monkeypatch: pytest.MonkeyPatch) -> None:
+    passed = CheckResult("ruff check .", 0, "All checks passed", 1.0)
+    prompt = review_request("spec", "+diff", (), [passed])
+    summary = "All verification commands passed (exit 0); what they check is settled."
+    assert summary in prompt
+    assert prompt.index(summary) < prompt.index("`ruff check .`")
 
 
 def test_without_rules_or_checks_the_sections_are_left_out(
@@ -306,6 +358,7 @@ def test_without_rules_or_checks_the_sections_are_left_out(
     prompt = captured_request(monkeypatch)["messages"][-1]["content"]
     assert "## Domain rules" not in prompt
     assert "## Verification" not in prompt
+    assert "All verification commands passed" not in prompt
 
 
 def test_the_reviewer_judges_tests_and_domain_rules_explicitly(
@@ -314,3 +367,38 @@ def test_the_reviewer_judges_tests_and_domain_rules_explicitly(
     system = captured_request(monkeypatch)["messages"][0]["content"]
     for criterion in ("tests", "domain rules", "JSON only"):
         assert criterion in system
+
+
+def test_review_request_includes_the_commit_message_when_given() -> None:
+    prompt = review_request("spec", "+diff", (), [], "feat(parser): scan the input")
+    assert "## Commit message" in prompt
+    assert "feat(parser): scan the input" in prompt
+    assert prompt.index("## Commit message") < prompt.index("## Diff")
+
+
+def test_review_request_omits_the_commit_message_when_empty() -> None:
+    prompt = review_request("spec", "+diff", (), [])
+    assert "## Commit message" not in prompt
+
+
+def test_the_system_prompt_names_the_commit_message_criterion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    system = captured_request(monkeypatch)["messages"][0]["content"]
+    assert "commit message" in system
+    assert "Conventional Commit type" in system
+
+
+def test_the_system_prompt_says_what_passed_checks_settle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    system = captured_request(monkeypatch)["messages"][0]["content"]
+    assert "never a reason to reject" in system
+    assert "is not missing" in system
+
+
+def test_the_system_prompt_lists_the_categories(monkeypatch: pytest.MonkeyPatch) -> None:
+    system = captured_request(monkeypatch)["messages"][0]["content"]
+    assert '"category"' in system
+    for category in ("types", "imports", "failing-tests", "spec", "logic", "commit"):
+        assert category in system

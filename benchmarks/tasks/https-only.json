@@ -1,0 +1,10 @@
+{
+  "id": "https-only",
+  "title": "Never send the reviewer key to a base URL that is not https",
+  "difficulty": 1,
+  "base": "b8bf431",
+  "solution": "7cb879e",
+  "hidden_tests": ["tests/test_reviewer.py", "tests/test_config.py"],
+  "files": ["conductor/config.py", "conductor/reviewer.py", "tests/test_config.py", "tests/test_reviewer.py"],
+  "spec": "Conductor sends the reviewer's API key in an Authorization header to the provider's `base_url`. Today only the setup UI refuses a non-https URL, so a hand-written conductor.toml with `http://` sends the key in clear text. Enforce the rule in two places:\n\n1. conductor/config.py: give `Provider` a read-only property `is_https -> bool`, true when the scheme of `base_url` (parsed with `urllib.parse.urlsplit`) is exactly `https`. When a `Profile` is validated (where it already checks that every model names a known provider), raise `ConfigError` if the reviewer is a model (not `\"brain\"`) whose provider is not https, with the message `privacy.<profile name>: the reviewer '<reviewer>' needs an https base_url, because Conductor sends it the API key`. A `brain` reviewer needs no https provider.\n2. conductor/reviewer.py: in `review`, before reading the API key, if the reviewer's provider is not https return `Verdict.failed(ModelError.of(PROVIDER_UNUSABLE, \"insecure-base-url\", f\"refusing to send the API key to {provider.base_url}: base_url must be https\"))` without calling `post`. The key must never appear in the verdict.\n\nAdd tests: a profile whose reviewer provider is http is rejected; a brain reviewer on an http provider is accepted; review() on an http provider returns that error and never calls post."
+}

@@ -3,12 +3,14 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import subprocess
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from conductor import billing, reviewer, settings, setup_tui
+from conductor import billing, reviewer, settings, setup_tui, stats
+from conductor.commits import choose_commit_message
 from conductor.config import Config, ConfigError, Profile
 from conductor.escalation import RunState, run_step
 from conductor.harness import harness_for
@@ -19,7 +21,6 @@ from conductor.scheduler import APPROVED, CONFLICT, StepResult, run_plan
 from conductor.verify import CheckResult, run_checks
 from conductor.worker import (
     AttemptOutput,
-    attempt_commit_message,
     create_worktree,
     exclude_from_git,
     git,
@@ -96,13 +97,19 @@ async def execute_plan(
             model,
             prompt,
             extra_args,
-            attempt_commit_message(step.id, number),
             transient_attempts=profile.transient_attempts,
             harness=harness,
+            commit_message=lambda final_text: choose_commit_message(
+                step.id, number, model, final_text, step.commit
+            ),
         )
 
-    def judge(model: str, spec: str, diff: str, checks: list[CheckResult]) -> reviewer.Verdict:
-        return reviewer.review(profile, model, spec, diff, rules=rules, checks=checks)
+    def judge(
+        model: str, spec: str, diff: str, checks: list[CheckResult], commit_message: str
+    ) -> reviewer.Verdict:
+        return reviewer.review(
+            profile, model, spec, diff, rules=rules, checks=checks, commit_message=commit_message
+        )
 
     async def check(step: Step, number: int) -> list[CheckResult]:
         path = worktrees / f"{step.id}-{number}"
@@ -110,7 +117,15 @@ async def execute_plan(
 
     async def execute(step: Step) -> StepResult:
         result = await run_step(
-            step, profile, attempt, judge, log.attempt, goal=plan.goal, state=state, check=check
+            step,
+            profile,
+            attempt,
+            judge,
+            log.attempt,
+            goal=plan.goal,
+            state=state,
+            check=check,
+            verify=plan.verify_for(step),
         )
         print(f"[{step.id}] {result.status}: {result.detail}", flush=True)
         numbers = [a["attempt"] for a in result.attempts]
@@ -143,7 +158,8 @@ def run(args: argparse.Namespace) -> int:
     if git(repo, "status", "--porcelain").strip():
         print("error: repository has uncommitted changes; commit or stash them first")
         return 2
-    log = RunLog.create(repo, plan, profile.name)
+    brain_session = args.session or os.environ.get("OPENCODE_SESSION_ID") or None
+    log = RunLog.create(repo, plan, profile.name, brain_session=brain_session)
     print(f"run {log.directory.name}: {len(plan.steps)} steps, privacy {profile.name}")
     results = asyncio.run(execute_plan(repo, plan, profile, log, args.opencode_arg, rules))
     log.finish(results)
@@ -221,6 +237,13 @@ def show_projects_spend(args: argparse.Namespace) -> int:
     return 0
 
 
+def show_stats(args: argparse.Namespace) -> int:
+    project = project_root(args.repo.resolve())
+    for line in stats.format_report(stats.collect(project)):
+        print(line)
+    return 0
+
+
 def config_path(explicit: Path | None) -> Path:
     return explicit or next(
         (candidate for candidate in DEFAULT_CONFIG_PATHS if candidate.exists()),
@@ -287,6 +310,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=[],
         help="extra argument passed to every `opencode run` (repeatable)",
     )
+    execute.add_argument(
+        "--session",
+        help=(
+            "the brain's OpenCode session id, recorded in run.json (default: $OPENCODE_SESSION_ID)"
+        ),
+    )
     execute.set_defaults(handler=run)
 
     setup = commands.add_parser("setup", help="create or edit conductor.toml in a terminal UI")
@@ -322,6 +351,14 @@ def build_parser() -> argparse.ArgumentParser:
     projects = reports.add_parser("projects", help="spend of the last days, split by project")
     projects.add_argument("--days", type=int, default=30, help="length of the period in days")
     projects.set_defaults(handler=show_projects_spend)
+
+    statistics = commands.add_parser(
+        "stats",
+        help="per run and per step: status, attempts, cost, first-try approval, "
+        "hand commits and brain tokens",
+    )
+    statistics.add_argument("--repo", type=Path, default=Path("."), help="repository to report on")
+    statistics.set_defaults(handler=show_stats)
     return parser
 
 
