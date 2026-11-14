@@ -99,7 +99,10 @@ tiers = [
   ["openrouter/z-ai/glm-5.3-flash", "vercel/zai/glm-5.3-flash"],
   ["openrouter/minimax/minimax-m3.1-flash", "vercel/minimax/minimax-m3.1-flash"],
 ]
-reviewer = ["openrouter/openai/gpt-5.6-luna", "vercel/openai/gpt-5.6-luna"]
+# The reviewer list is used in order: a reviewer error moves to the next entry, and a
+# suspicious rejection asks the next entry once for a second opinion (decision 023), so
+# the second entry is a different model family and the last one a different provider.
+reviewer = ["openrouter/openai/gpt-5.6-luna", "openrouter/anthropic/claude-haiku-5.5", "vercel/openai/gpt-5.6-luna"]
 
 [privacy.medium.providers.openrouter]
 base_url = "https://openrouter.ai/api/v1"

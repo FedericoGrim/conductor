@@ -73,7 +73,11 @@ DEFAULT_PROFILES: tuple[Profile, ...] = (
             ("openrouter/z-ai/glm-5.3-flash", "vercel/zai/glm-5.3-flash"),
             ("openrouter/minimax/minimax-m3.1-flash", "vercel/minimax/minimax-m3.1-flash"),
         ),
-        ("openrouter/openai/gpt-5.6-luna", "vercel/openai/gpt-5.6-luna"),
+        (
+            "openrouter/openai/gpt-5.6-luna",
+            "openrouter/anthropic/claude-haiku-5.5",
+            "vercel/openai/gpt-5.6-luna",
+        ),
         4,
     ),
     profile(
