@@ -40,12 +40,12 @@ DEFAULT_PROFILES: tuple[Profile, ...] = (
         (OPENROUTER, DEEPSEEK),
         (
             (
-                "openrouter/thinkingmachines/inkling-2-small:free",
                 "openrouter/dots-studio/dots-3-note-preview:free",
+                "openrouter/cohere/north-mini-code:free",
             ),
             (
                 "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
-                "openrouter/recursive/flint-v1.0:free",
+                "openrouter/inclusionai/ling-3.2-flash:free",
             ),
             ("openrouter/anthropic/claude-haiku-5.5", "deepseek/deepseek-flash"),
             (
