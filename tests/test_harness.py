@@ -6,12 +6,13 @@ import pytest
 
 from conductor import catalog, credentials
 from conductor.config import HARNESS_NAMES, Profile, Provider
-from conductor.errors import PROVIDER_UNUSABLE
+from conductor.errors import MODEL_UNSUITABLE, PROVIDER_UNUSABLE, TRANSIENT
 from conductor.harness import (
     CLAUDE_CODE,
     HARNESSES,
     OPENCODE,
     PI,
+    classify_opencode_error,
     claude_billed_cost,
     claude_build_command,
     claude_error,
@@ -144,6 +145,45 @@ def test_an_unclassified_failure_names_the_exit_code() -> None:
 
 def test_a_successful_run_has_no_error() -> None:
     assert claude_error([CLAUDE_INIT, CLAUDE_RESULT], exit_code=0, stderr="") is None
+
+
+@pytest.mark.parametrize(
+    ("event", "expected_kind"),
+    [
+        (
+            {"type": "provider.auth", "message": "This model is not available in your region."},
+            MODEL_UNSUITABLE,
+        ),
+        (
+            {"type": "provider.auth", "message": "This model is not available for your account."},
+            MODEL_UNSUITABLE,
+        ),
+        (
+            {"type": "provider.auth", "message": "Model not available"},
+            MODEL_UNSUITABLE,
+        ),
+        (
+            {"type": "provider.auth", "message": "Incorrect API key provided"},
+            PROVIDER_UNUSABLE,
+        ),
+        (
+            {
+                "type": "provider.invalid-request",
+                "message": "This model's maximum context length is 8192 tokens.",
+            },
+            MODEL_UNSUITABLE,
+        ),
+        (
+            {"type": "provider.rate-limit", "message": "Rate limit exceeded"},
+            TRANSIENT,
+        ),
+    ],
+)
+def test_classify_opencode_error_unavailable_model(
+    event: dict[str, str], expected_kind: str
+) -> None:
+    error = classify_opencode_error(event)
+    assert error.kind == expected_kind
 
 
 def test_the_claude_code_harness_is_registered() -> None:

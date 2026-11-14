@@ -14,6 +14,7 @@ from conductor.errors import (
     UNCLASSIFIED,
     ModelError,
     mentions_context_limit,
+    mentions_unavailable_model,
 )
 from conductor.privacy import (
     PI_AGENT_DIR,
@@ -102,6 +103,8 @@ def classify_opencode_error(error: dict[str, Any]) -> ModelError:
     message = str(error.get("message", ""))
     kind = ERROR_KINDS.get(error_type, UNCLASSIFIED)
     if error_type == "provider.invalid-request" and mentions_context_limit(message):
+        kind = MODEL_UNSUITABLE
+    if mentions_unavailable_model(message):
         kind = MODEL_UNSUITABLE
     return ModelError.of(kind, error_type, message)
 

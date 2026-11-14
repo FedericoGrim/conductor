@@ -10,10 +10,18 @@ UNCLASSIFIED = "unclassified"
 
 MESSAGE_LIMIT = 500
 CONTEXT_EXCEEDED = re.compile(r"context (length|window)|too many tokens", re.IGNORECASE)
+UNAVAILABLE_MODEL = re.compile(
+    r"not available in your region|not available for your account|model not available",
+    re.IGNORECASE,
+)
 
 
 def mentions_context_limit(message: str) -> bool:
     return CONTEXT_EXCEEDED.search(message) is not None
+
+
+def mentions_unavailable_model(message: str) -> bool:
+    return UNAVAILABLE_MODEL.search(message) is not None
 
 
 @dataclass(frozen=True)
