@@ -17,6 +17,8 @@ from conductor.setup_tui import (
     PROVIDER,
     PROVIDERADD,
     PROVIDERS,
+    ROUTING,
+    ROUTINGEDIT,
     Editor,
     render,
     save_config,
@@ -44,11 +46,23 @@ api_key_env = "TEST_TUI_KEY"
 """
 
 
+ROUTED = (
+    CONFIG
+    + """
+[privacy.medium.providers.openrouter.models.m2]
+request_options = { provider = { order = ["relace"] } }
+"""
+)
+
+
 def editor(
-    tmp_path: Path, fetcher: Callable[[str], list[CatalogModel]] | None = None, store: object = None
+    tmp_path: Path,
+    fetcher: Callable[[str], list[CatalogModel]] | None = None,
+    store: object = None,
+    config: str = CONFIG,
 ) -> Editor:
     path = tmp_path / "conductor.toml"
-    path.write_text(CONFIG)
+    path.write_text(config)
     return Editor(
         SetupState.from_config(Config.load(path)),
         path=str(path),
@@ -357,3 +371,114 @@ def test_a_managed_provider_says_so_and_offers_no_endpoint_to_edit(tmp_path: Pat
     view.handle_key("b")
     assert "managed" in view.message
     assert view.screen == PROVIDERS
+
+
+def routing_view(tmp_path: Path, config: str = ROUTED) -> Editor:
+    view = editor(tmp_path, config=config)
+    view.handle_key("enter")
+    view.handle_key("R")
+    assert view.screen == ROUTING
+    return view
+
+
+def test_r_lists_the_routable_models_with_their_options(tmp_path: Path) -> None:
+    view = routing_view(tmp_path)
+    lines = render(view)
+    assert "> openrouter/m1  (default)" in lines
+    assert '  openrouter/m2  {"provider": {"order": ["relace"]}}' in lines
+    assert "  openrouter/m5  (default)" in lines
+    view.handle_key("down")
+    view.handle_key("j")
+    assert render(view)[1:4] == [
+        "  openrouter/m1  (default)",
+        '  openrouter/m2  {"provider": {"order": ["relace"]}}',
+        "> openrouter/m3  (default)",
+    ]
+    view.handle_key("esc")
+    assert view.screen == EDITOR
+
+
+def test_enter_loads_the_current_options_of_the_model(tmp_path: Path) -> None:
+    view = routing_view(tmp_path)
+    view.handle_key("down")
+    view.handle_key("enter")
+    assert view.screen == ROUTINGEDIT
+    assert view.target == "openrouter/m2"
+    assert view.text == '{"provider": {"order": ["relace"]}}'
+    view.handle_key("esc")
+    assert view.screen == ROUTING
+    assert view.state.draft().providers["openrouter"].model_options["m2"] == {
+        "provider": {"order": ["relace"]}
+    }
+
+
+def test_typed_options_are_stored_and_saved_as_a_model_table(tmp_path: Path) -> None:
+    view = routing_view(tmp_path)
+    view.handle_key("enter")
+    assert view.text == "{}"
+    for _ in range(2):
+        view.handle_key("backspace")
+    type_text(view, '{"provider": {"order": ["relace"]}}')
+    view.handle_key("enter")
+    assert view.screen == ROUTING
+    assert view.state.model_options_of("openrouter/m1") == {"provider": {"order": ["relace"]}}
+    view.handle_key("esc")
+    view.handle_key("esc")
+    assert view.handle_key("s") is True
+    path = tmp_path / "conductor.toml"
+    assert "[privacy.medium.providers.openrouter.models.m1]" in path.read_text()
+    saved = Config.load(path).profiles["medium"].providers["openrouter"]
+    assert saved.model_options["m1"] == {"provider": {"order": ["relace"]}}
+
+
+def test_invalid_json_shows_an_error_and_stays_on_the_editor(tmp_path: Path) -> None:
+    view = routing_view(tmp_path)
+    view.handle_key("enter")
+    for _ in range(2):
+        view.handle_key("backspace")
+    type_text(view, '{"provider": ')
+    view.handle_key("enter")
+    assert view.screen == ROUTINGEDIT
+    assert "valid JSON" in view.message
+    assert view.state.model_options_of("openrouter/m1") == {}
+
+
+def test_esc_in_the_editor_keeps_the_options_unchanged(tmp_path: Path) -> None:
+    view = routing_view(tmp_path)
+    view.handle_key("down")
+    view.handle_key("enter")
+    type_text(view, "x")
+    view.handle_key("esc")
+    assert view.screen == ROUTING
+    assert view.state.model_options_of("openrouter/m2") == {"provider": {"order": ["relace"]}}
+
+
+def test_d_removes_the_options_of_the_model_under_the_cursor(tmp_path: Path) -> None:
+    view = routing_view(tmp_path)
+    view.handle_key("down")
+    view.handle_key("d")
+    assert view.state.model_options_of("openrouter/m2") == {}
+    assert "> openrouter/m2  (default)" in render(view)
+    assert 'openrouter/m2  {"provider"' not in "\n".join(render(view))
+
+
+def test_hand_written_options_of_another_model_survive_a_save(tmp_path: Path) -> None:
+    config = (
+        CONFIG
+        + """
+[privacy.medium.providers.openrouter.models.m1]
+request_options = { provider = { order = ["deepinfra"] } }
+"""
+    )
+    view = routing_view(tmp_path, config)
+    view.handle_key("down")
+    view.handle_key("down")
+    view.handle_key("enter")
+    type_text(view, "x")
+    view.handle_key("backspace")
+    view.handle_key("enter")
+    view.handle_key("esc")
+    view.handle_key("esc")
+    assert view.handle_key("s") is True
+    saved = Config.load(tmp_path / "conductor.toml").profiles["medium"].providers["openrouter"]
+    assert saved.model_options["m1"] == {"provider": {"order": ["deepinfra"]}}
