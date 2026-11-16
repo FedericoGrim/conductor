@@ -94,3 +94,26 @@ def _format_duration(seconds: float) -> str:
         minutes, rest = divmod(whole, 60)
         return f"{minutes}m{rest:02d}s"
     return f"{whole}s"
+
+
+CLEAR_LINE = "\r\x1b[2K"
+
+
+@dataclass
+class StatusLine:
+    write: Callable[[str], None]
+    is_terminal: bool
+    shown: str = ""
+
+    def update(self, summary: str) -> None:
+        self.shown = summary
+        if self.is_terminal:
+            self.write(CLEAR_LINE + summary)
+
+    def step_done(self, summary: str) -> None:
+        self.shown = ""
+        self.write((CLEAR_LINE if self.is_terminal else "") + summary + "\n")
+
+    def clear(self) -> None:
+        if self.is_terminal and self.shown:
+            self.write(CLEAR_LINE)

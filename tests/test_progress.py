@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from conductor.progress import Progress
+from conductor.progress import Progress, StatusLine
 
 
 class FakeClock:
@@ -148,3 +148,28 @@ def test_elapsed_is_measured_from_creation() -> None:
     clock.now = 130.0
 
     assert progress.elapsed() == pytest.approx(30.0)
+
+
+def test_a_terminal_status_line_is_rewritten_and_cleared_before_other_output() -> None:
+    written: list[str] = []
+    line = StatusLine(write=written.append, is_terminal=True)
+    line.update("progress: one")
+    line.clear()
+    line.update("progress: two")
+    line.step_done("progress: done")
+    line.clear()
+    assert written == [
+        "\r\x1b[2Kprogress: one",
+        "\r\x1b[2K",
+        "\r\x1b[2Kprogress: two",
+        "\r\x1b[2Kprogress: done\n",
+    ]
+
+
+def test_redirected_output_gets_only_the_finished_step_lines() -> None:
+    written: list[str] = []
+    line = StatusLine(write=written.append, is_terminal=False)
+    line.update("progress: one")
+    line.clear()
+    line.step_done("progress: done")
+    assert written == ["progress: done\n"]
