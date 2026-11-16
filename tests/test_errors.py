@@ -6,6 +6,7 @@ from conductor.errors import (
     TRANSIENT,
     UNCLASSIFIED,
     ModelError,
+    mentions_unavailable_model,
 )
 from conductor.harness import attempt_error, classify_opencode_error
 
@@ -65,3 +66,19 @@ def test_retry_events_alone_are_transient() -> None:
 def test_failure_without_error_event_is_unclassified_with_stderr() -> None:
     error = attempt_error([], exit_code=2, stderr="panic: something\n")
     assert error == ModelError(UNCLASSIFIED, "exit 2", "panic: something")
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        ("This model is not available in your region.", True),
+        ("This model is not available for your account.", True),
+        ("Model not available", True),
+        ("model not available in your region", True),
+        ("MODEL NOT AVAILABLE FOR YOUR ACCOUNT", True),
+        ("Incorrect API key provided", False),
+        ("", False),
+    ],
+)
+def test_mentions_unavailable_model(message: str, expected: bool) -> None:
+    assert mentions_unavailable_model(message) == expected

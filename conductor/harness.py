@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from conductor import credentials
+from conductor import catalog, credentials
 from conductor.config import Profile, provider_of
 from conductor.errors import (
     MODEL_UNSUITABLE,
@@ -14,6 +14,7 @@ from conductor.errors import (
     UNCLASSIFIED,
     ModelError,
     mentions_context_limit,
+    mentions_unavailable_model,
 )
 from conductor.privacy import (
     PI_AGENT_DIR,
@@ -102,6 +103,8 @@ def classify_opencode_error(error: dict[str, Any]) -> ModelError:
     message = str(error.get("message", ""))
     kind = ERROR_KINDS.get(error_type, UNCLASSIFIED)
     if error_type == "provider.invalid-request" and mentions_context_limit(message):
+        kind = MODEL_UNSUITABLE
+    if mentions_unavailable_model(message):
         kind = MODEL_UNSUITABLE
     return ModelError.of(kind, error_type, message)
 
@@ -275,8 +278,18 @@ def pi_environment(worktree: Path) -> dict[str, str]:
     return environment
 
 
+def pi_prices(profile: Profile) -> dict[str, dict[str, float]]:
+    """The catalog prices of the profile's Pi providers; an earlier provider's price wins."""
+    prices: dict[str, dict[str, float]] = {}
+    for provider in profile.providers.values():
+        if provider.harness == "pi" and provider.has_endpoint:
+            for model_id, price in catalog.model_costs(provider.base_url).items():
+                prices.setdefault(model_id, price)
+    return prices
+
+
 def pi_prepare(worktree: Path, profile: Profile) -> None:
-    write_pi_config(worktree, pi_config(profile))
+    write_pi_config(worktree, pi_config(profile, pi_prices(profile)))
 
 
 def pi_session_id(events: Events) -> str | None:

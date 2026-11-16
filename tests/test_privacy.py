@@ -186,6 +186,20 @@ def test_pi_config_lists_every_model_of_tiers_and_reviewers_with_its_api_id() ->
     }
 
 
+def test_pi_config_adds_the_cost_of_exactly_the_models_it_names() -> None:
+    costs = {"deepseek/v4": {"input": 0.3, "output": 1.2, "cacheRead": 0.03, "cacheWrite": 0.0}}
+    models = pi_config(PI_PROFILE, costs)["providers"]["openrouter"]["models"]
+    assert models == [
+        {"id": "deepseek/v4", "cost": costs["deepseek/v4"]},
+        {"id": "anthropic/sonnet"},
+    ]
+
+
+def test_pi_config_has_no_cost_without_a_costs_mapping() -> None:
+    models = pi_config(PI_PROFILE)["providers"]["openrouter"]["models"]
+    assert all("cost" not in model for model in models)
+
+
 def test_pi_config_skips_providers_of_other_harnesses() -> None:
     profile = Profile(
         "medium",

@@ -4,14 +4,15 @@ from typing import Any
 
 import pytest
 
-from conductor import credentials
+from conductor import catalog, credentials
 from conductor.config import HARNESS_NAMES, Profile, Provider
-from conductor.errors import PROVIDER_UNUSABLE
+from conductor.errors import MODEL_UNSUITABLE, PROVIDER_UNUSABLE, TRANSIENT
 from conductor.harness import (
     CLAUDE_CODE,
     HARNESSES,
     OPENCODE,
     PI,
+    classify_opencode_error,
     claude_billed_cost,
     claude_build_command,
     claude_error,
@@ -144,6 +145,45 @@ def test_an_unclassified_failure_names_the_exit_code() -> None:
 
 def test_a_successful_run_has_no_error() -> None:
     assert claude_error([CLAUDE_INIT, CLAUDE_RESULT], exit_code=0, stderr="") is None
+
+
+@pytest.mark.parametrize(
+    ("event", "expected_kind"),
+    [
+        (
+            {"type": "provider.auth", "message": "This model is not available in your region."},
+            MODEL_UNSUITABLE,
+        ),
+        (
+            {"type": "provider.auth", "message": "This model is not available for your account."},
+            MODEL_UNSUITABLE,
+        ),
+        (
+            {"type": "provider.auth", "message": "Model not available"},
+            MODEL_UNSUITABLE,
+        ),
+        (
+            {"type": "provider.auth", "message": "Incorrect API key provided"},
+            PROVIDER_UNUSABLE,
+        ),
+        (
+            {
+                "type": "provider.invalid-request",
+                "message": "This model's maximum context length is 8192 tokens.",
+            },
+            MODEL_UNSUITABLE,
+        ),
+        (
+            {"type": "provider.rate-limit", "message": "Rate limit exceeded"},
+            TRANSIENT,
+        ),
+    ],
+)
+def test_classify_opencode_error_unavailable_model(
+    event: dict[str, str], expected_kind: str
+) -> None:
+    error = classify_opencode_error(event)
+    assert error.kind == expected_kind
 
 
 def test_the_claude_code_harness_is_registered() -> None:
@@ -485,9 +525,70 @@ def test_opencode_workers_get_no_extra_instructions_otherwise(
     assert "instructions" not in written_config(worktree)
 
 
-def test_pi_prepare_writes_the_profile_into_the_worktrees_agent_dir(tmp_path: Path) -> None:
+def test_pi_prepare_writes_the_profile_into_the_worktrees_agent_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(catalog, "model_costs", lambda base_url, get=None: {})
     worktree = init_worktree(tmp_path)
     pi_prepare(worktree, pi_profile())
     config: dict[str, Any] = json.loads((worktree / ".pi-agent" / "models.json").read_text())
     assert config["providers"]["piprovider"]["apiKey"] == "PI_TEST_KEY"
     assert ".pi-agent/" in (worktree / ".git" / "info" / "exclude").read_text()
+
+
+def test_pi_prepare_writes_the_prices_the_catalog_returned(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    asked: list[str] = []
+    price = {"input": 0.5, "output": 2.0, "cacheRead": 0.05, "cacheWrite": 0.0}
+
+    def model_costs(base_url: str, get: object = None) -> dict[str, dict[str, float]]:
+        asked.append(base_url)
+        return {"m1": price}
+
+    monkeypatch.setattr(catalog, "model_costs", model_costs)
+    worktree = init_worktree(tmp_path)
+    pi_prepare(worktree, pi_profile())
+    config: dict[str, Any] = json.loads((worktree / ".pi-agent" / "models.json").read_text())
+    assert config["providers"]["piprovider"]["models"] == [{"id": "m1", "cost": price}]
+    assert asked == ["https://example.com/v1"]
+
+
+def test_pi_prepare_keeps_the_models_without_a_price(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(catalog, "model_costs", lambda base_url, get=None: {})
+    worktree = init_worktree(tmp_path)
+    pi_prepare(worktree, pi_profile())
+    config: dict[str, Any] = json.loads((worktree / ".pi-agent" / "models.json").read_text())
+    assert config["providers"]["piprovider"]["models"] == [{"id": "m1"}]
+
+
+def test_a_later_pi_provider_does_not_overwrite_an_earlier_price(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first = {"input": 1.0, "output": 1.0, "cacheRead": 0.0, "cacheWrite": 0.0}
+    second = {"input": 9.0, "output": 9.0, "cacheRead": 0.0, "cacheWrite": 0.0}
+    catalogs = {
+        "https://one.example/v1": {"shared": first},
+        "https://two.example/v1": {"shared": second, "other": second},
+    }
+    monkeypatch.setattr(
+        catalog, "model_costs", lambda base_url, get=None: catalogs.get(base_url, {})
+    )
+    profile = Profile(
+        "medium",
+        {
+            "one": Provider("one", "https://one.example/v1", "ONE_KEY", harness="pi"),
+            "two": Provider("two", "https://two.example/v1", "TWO_KEY", harness="pi"),
+        },
+        (("one/shared",), ("two/shared", "two/other")),
+        ("one/shared",),
+    )
+    worktree = init_worktree(tmp_path)
+    pi_prepare(worktree, profile)
+    config: dict[str, Any] = json.loads((worktree / ".pi-agent" / "models.json").read_text())
+    assert config["providers"]["two"]["models"] == [
+        {"id": "shared", "cost": first},
+        {"id": "other", "cost": second},
+    ]
