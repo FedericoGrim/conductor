@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
 from typing import Any
@@ -18,6 +19,8 @@ from conductor.defaults import DIFFICULTY_LEVELS, default_config
 PROFILE_NAME = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 
 EMPTY_SLOT = ""
+
+ROUTING_SORTS = ("price", "throughput", "latency")
 
 
 class SetupError(ValueError):
@@ -321,6 +324,90 @@ class SetupState:
         profile.reviewer = model.strip()
         if profile.reviewer == "brain":
             profile.reviewer_fallbacks = []
+        return profile
+
+    def routed_models(self) -> list[str]:
+        profile = self.draft()
+        return [
+            f"{name}/{model}"
+            for name, provider in profile.providers.items()
+            for model in provider.model_options
+        ]
+
+    def routable_models(self) -> list[str]:
+        profile = self.draft()
+        models = [
+            model
+            for tier, fallbacks in zip(profile.tiers, profile.fallbacks, strict=True)
+            if tier != EMPTY_SLOT
+            for model in (tier, *fallbacks)
+        ]
+        if profile.reviewer not in (EMPTY_SLOT, "brain"):
+            models += [profile.reviewer, *profile.reviewer_fallbacks]
+        return list(dict.fromkeys(models))
+
+    def model_options_text(self, model: str) -> str:
+        return json.dumps(self.model_options_of(model), sort_keys=True)
+
+    def set_model_options(self, model: str, text: str) -> ProfileDraft:
+        try:
+            options = json.loads(text)
+        except json.JSONDecodeError as error:
+            raise SetupError(f"request options must be valid JSON: {error.msg}") from error
+        if not isinstance(options, dict):
+            raise SetupError("request options must be a JSON object")
+        return self.store_model_options(model, options)
+
+    def set_openrouter_routing(
+        self,
+        model: str,
+        *,
+        order: list[str] | None = None,
+        only: list[str] | None = None,
+        ignore: list[str] | None = None,
+        allow_fallbacks: bool | None = None,
+        sort: str | None = None,
+    ) -> ProfileDraft:
+        if sort is not None and sort not in ROUTING_SORTS:
+            raise SetupError(f"sort must be one of {', '.join(ROUTING_SORTS)}")
+        options = self.model_options_of(model)
+        routing = options.get("provider", {})
+        if not isinstance(routing, dict):
+            raise SetupError("the provider routing of a model must be a JSON object")
+        updates = {
+            "order": order,
+            "only": only,
+            "ignore": ignore,
+            "allow_fallbacks": allow_fallbacks,
+            "sort": sort,
+        }
+        options["provider"] = {
+            **routing,
+            **{key: value for key, value in updates.items() if value is not None},
+        }
+        return self.store_model_options(model, options)
+
+    def model_options_of(self, model: str) -> dict[str, Any]:
+        profile = self.draft()
+        provider = profile.providers.get(provider_of(model))
+        if provider is None:
+            return {}
+        return dict(provider.model_options.get(model[len(provider.name) + 1 :], {}))
+
+    def store_model_options(self, model: str, options: dict[str, Any]) -> ProfileDraft:
+        profile = self.draft()
+        if model not in self.routable_models():
+            raise SetupError(
+                f"{model} is not a level model or a reviewer of profile {profile.name}"
+            )
+        provider = profile.providers.get(provider_of(model))
+        if provider is None:
+            raise SetupError(f"add provider '{provider_of(model)}' first")
+        key = model[len(provider.name) + 1 :]
+        if options:
+            provider.model_options[key] = options
+        else:
+            provider.model_options.pop(key, None)
         return profile
 
     def set_default_privacy(self, name: str) -> None:
