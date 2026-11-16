@@ -17,6 +17,7 @@ from conductor.escalation import RunState, run_step
 from conductor.harness import harness_for
 from conductor.log import RunLog
 from conductor.merge import merge_branch
+from conductor.overlap import describe, parallel_overlaps
 from conductor.plan import Plan, PlanError, Step
 from conductor.scheduler import APPROVED, CONFLICT, NEEDS_MERGE, StepResult, run_plan
 from conductor.verify import CheckResult, run_checks
@@ -67,6 +68,8 @@ def validate(args: argparse.Namespace) -> int:
     profile_ceiling = config.profile(None).autonomy if config else DEFAULT_AUTONOMY
     plan.check_ceiling(args.autonomy or profile_ceiling)
     print(f"ok: {len(plan.steps)} steps")
+    for overlap in parallel_overlaps(plan):
+        print(f"warning: {describe(overlap)}")
     if config is None:
         return 0
     for profile in config.profiles.values():
@@ -195,6 +198,8 @@ def run(args: argparse.Namespace) -> int:
     brain_session = args.session or os.environ.get("OPENCODE_SESSION_ID") or None
     log = RunLog.create(repo, plan, profile.name, brain_session=brain_session, autonomy=ceiling)
     print(f"run {log.directory.name}: {len(plan.steps)} steps, privacy {profile.name}")
+    for overlap in parallel_overlaps(plan):
+        print(f"warning: {describe(overlap)}")
     results = asyncio.run(execute_plan(repo, plan, profile, log, args.opencode_arg, rules))
     log.finish(results)
     try:

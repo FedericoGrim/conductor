@@ -33,8 +33,9 @@ Simple layering, no tactical DDD: a small tool with little business logic.
 - `conductor/billing.py` — provider balances (chosen by the profile's `base_url` host), the cross-project spend ledger and its totals.
 - `conductor/brain.py` — the brain's token usage per model, read from `opencode session export` (numbers and model names only, never message text).
 - `conductor/stats.py` — per-run and per-step statistics from run.json, git (hand commits after a run) and the brain's session.
-- `conductor/cli.py` — `conductor run plan.json --privacy low|medium|high [--autonomy ask|guided|free]` (only `free` runs until the other levels land), `conductor validate plan.json [--config] [--autonomy]` (rejects a step above the ceiling; warns about levels relying on one provider and about `pi` providers, which ignore the fixed denials), `conductor billing [project|projects]`, `conductor stats`, `conductor setup`.
+- `conductor/cli.py` — `conductor run plan.json --privacy low|medium|high [--autonomy ask|guided|free]` (only `free` runs until the other levels land), `conductor validate plan.json [--config] [--autonomy]` (rejects a step above the ceiling; warns about levels relying on one provider, about parallel steps listing the same files and about `pi` providers, which ignore the fixed denials), `conductor billing [project|projects]`, `conductor stats`, `conductor setup`.
 - `conductor/commits.py` — the Conventional Commit message of an attempt: the plan's `commit` field, the worker's `COMMIT:` line, or the fallback.
+- `conductor/overlap.py` — parallel steps listing the same files (directories and globs included), for `validate` and `run`.
 Rule: no module imports OpenCode or provider specifics except `harness.py`, `reviewer.py`, `privacy.py`, `catalog.py`, `billing.py` and `brain.py`.
 
 ## Commands
