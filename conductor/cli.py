@@ -6,8 +6,10 @@ import json
 import os
 import subprocess
 import sys
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any, TextIO
 
 from conductor import billing, reviewer, settings, setup_tui, stats
 from conductor.autonomy import DEFAULT_AUTONOMY, FREE, LEVELS, effective, is_protected
@@ -19,6 +21,7 @@ from conductor.log import RunLog
 from conductor.merge import merge_branch
 from conductor.overlap import describe, parallel_overlaps
 from conductor.plan import Plan, PlanError, Step
+from conductor.progress import Progress, StatusLine
 from conductor.scheduler import APPROVED, CONFLICT, NEEDS_MERGE, StepResult, run_plan
 from conductor.verify import CheckResult, run_checks
 from conductor.worker import (
@@ -92,6 +95,11 @@ def domain_rules(repo: Path, plan: Plan) -> tuple[str, ...]:
     return (*plan.rules, text) if text else plan.rules
 
 
+def tier_of(profile: Profile, model: str, step: Step) -> int:
+    level = next((index for index, models in enumerate(profile.tiers) if model in models), None)
+    return step.difficulty if level is None else level + 1
+
+
 async def execute_plan(
     repo: Path,
     plan: Plan,
@@ -99,11 +107,22 @@ async def execute_plan(
     log: RunLog,
     extra_args: list[str],
     rules: tuple[str, ...] = (),
+    progress: Progress | None = None,
+    status: StatusLine | None = None,
 ) -> dict[str, StepResult]:
     base = git(repo, "rev-parse", "--abbrev-ref", "HEAD").strip()
     run_name = log.directory.name
     worktrees = repo / ".conductor" / "worktrees" / run_name
     state = RunState()
+
+    def say(line: str) -> None:
+        if status is not None:
+            status.clear()
+        print(line, flush=True)
+
+    def show_progress() -> None:
+        if progress is not None and status is not None:
+            status.update(progress.summary())
 
     async def attempt(step: Step, number: int, model: str, prompt: str) -> AttemptOutput:
         branch = f"conductor/{run_name}/{step.id}-{number}"
@@ -111,7 +130,10 @@ async def execute_plan(
         create_worktree(repo, path, branch, base)
         harness = harness_for(profile, model)
         harness.prepare(path, profile)
-        print(f"[{step.id}] attempt {number} on {model}", flush=True)
+        say(f"[{step.id}] attempt {number} on {model}")
+        if progress is not None:
+            progress.attempt_started(step.id, number, tier_of(profile, model, step), model)
+            show_progress()
         return await run_attempt(
             path,
             base,
@@ -136,13 +158,20 @@ async def execute_plan(
         path = worktrees / f"{step.id}-{number}"
         return await run_checks(plan.verify_for(step), path, repo, plan.verify_timeout)
 
+    def record(step: Step, entry: dict[str, Any]) -> object:
+        written = log.attempt(step, entry)
+        if progress is not None:
+            progress.attempt_finished(step.id)
+            show_progress()
+        return written
+
     async def execute(step: Step) -> StepResult:
         result = await run_step(
             step,
             profile,
             attempt,
             judge,
-            log.attempt,
+            record,
             goal=plan.goal,
             state=state,
             check=check,
@@ -153,7 +182,11 @@ async def execute_plan(
             discard(step, number)
         if result.status == APPROVED and numbers:
             merge_approved(step, numbers[-1], result)
-        print(f"[{step.id}] {result.status}: {result.detail}", flush=True)
+        say(f"[{step.id}] {result.status}: {result.detail}")
+        if progress is not None:
+            progress.step_finished(step.id, result.status)
+            if status is not None:
+                status.step_done(progress.summary())
         return result
 
     def merge_approved(step: Step, number: int, result: StepResult) -> None:
@@ -180,6 +213,14 @@ async def execute_plan(
     return await run_plan(plan, profile.max_parallel, execute)
 
 
+def progress_writer(stream: TextIO) -> Callable[[str], None]:
+    def write(text: str) -> None:
+        stream.write(text)
+        stream.flush()
+
+    return write
+
+
 def run(args: argparse.Namespace) -> int:
     repo = args.repo.resolve()
     config = Config.load(find_config(args.config))
@@ -197,10 +238,28 @@ def run(args: argparse.Namespace) -> int:
         return 2
     brain_session = args.session or os.environ.get("OPENCODE_SESSION_ID") or None
     log = RunLog.create(repo, plan, profile.name, brain_session=brain_session, autonomy=ceiling)
-    print(f"run {log.directory.name}: {len(plan.steps)} steps, privacy {profile.name}")
+    print(
+        f"run {log.directory.name}: {len(plan.steps)} steps, "
+        f"privacy {profile.name}, autonomy {ceiling}"
+    )
     for overlap in parallel_overlaps(plan):
         print(f"warning: {describe(overlap)}")
-    results = asyncio.run(execute_plan(repo, plan, profile, log, args.opencode_arg, rules))
+    progress = Progress(
+        step_ids=[step.id for step in plan.steps], max_parallel=profile.max_parallel
+    )
+    status = StatusLine(write=progress_writer(sys.stderr), is_terminal=sys.stderr.isatty())
+    results = asyncio.run(
+        execute_plan(
+            repo,
+            plan,
+            profile,
+            log,
+            args.opencode_arg,
+            rules,
+            progress=progress,
+            status=status,
+        )
+    )
     log.finish(results)
     try:
         billing.record_run(

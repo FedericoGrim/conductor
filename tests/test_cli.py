@@ -1,6 +1,7 @@
 import json
 import os
 import stat
+import sys
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -839,3 +840,64 @@ def test_run_never_merges_into_a_protected_branch(
     assert "chore(conductor): merge" not in git(repo, "log", "--oneline")
     assert git(repo, "branch", "--list", branch).strip()
     assert git(repo, "worktree", "list").count("\n") == 1
+
+
+def run_two_steps_with_progress(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    is_terminal: bool,
+) -> tuple[str, str]:
+    repo = init_repo(tmp_path)
+    install_fake_opencode(tmp_path, monkeypatch)
+    monkeypatch.setenv("TEST_CLI_KEY", "k")
+    config = tmp_path / "conductor.toml"
+    config.write_text(CONFIG)
+    plan = tmp_path / "plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "goal": "demo",
+                "steps": [
+                    {"id": "a", "spec": "write output", "difficulty": 1},
+                    {"id": "b", "spec": "write more", "difficulty": 1, "depends_on": ["a"]},
+                ],
+            }
+        )
+    )
+
+    def approve(url: str, headers: dict[str, str], body: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "choices": [{"message": {"content": '{"ok": true, "reason": "good"}'}}],
+            "usage": {"cost": 0.001},
+        }
+
+    monkeypatch.setattr(reviewer, "http_post", approve)
+    monkeypatch.setattr(sys.stderr, "isatty", lambda: is_terminal)
+    code = cli.main(["run", str(plan), "--config", str(config), "--repo", str(repo)])
+    assert code == 0
+    captured = capsys.readouterr()
+    return captured.out, captured.err
+
+
+def test_a_terminal_gets_a_status_line_rewritten_after_every_event(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out, err = run_two_steps_with_progress(tmp_path, monkeypatch, capsys, is_terminal=True)
+    assert "[a] approved: good" in out and "[b] approved: good" in out
+    updates = [chunk for chunk in err.split("\r\x1b[2K") if chunk.startswith("progress:")]
+    assert len(updates) >= 6
+    assert err.endswith("\n")
+    assert err.count("\n") == 2
+
+
+def test_redirected_output_gets_one_plain_line_per_finished_step(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out, err = run_two_steps_with_progress(tmp_path, monkeypatch, capsys, is_terminal=False)
+    assert "[a] attempt 1 on openrouter/cheap" in out
+    assert "\x1b" not in err and "\r" not in err
+    lines = err.splitlines()
+    assert len(lines) == 2
+    assert lines[0].startswith("progress: 1/2 done")
+    assert lines[1].startswith("progress: 2/2 done")
