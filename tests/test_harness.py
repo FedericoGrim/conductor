@@ -21,7 +21,9 @@ from conductor.harness import (
     claude_is_retry,
     claude_session_id,
     claude_subscription_cost,
+    claude_tokens,
     harness_for,
+    opencode_tokens,
     pi_command,
     pi_cost,
     pi_environment,
@@ -30,8 +32,10 @@ from conductor.harness import (
     pi_is_retry,
     pi_prepare,
     pi_session_id,
+    pi_tokens,
     prepare_opencode,
 )
+from conductor.tokens import Tokens
 from conductor.worker import Events, git, parse_events
 from tests.factories import make_profile
 
@@ -601,3 +605,132 @@ def test_a_later_pi_provider_does_not_overwrite_an_earlier_price(
         {"id": "shared", "cost": first},
         {"id": "other", "cost": second},
     ]
+
+
+# Token reader tests
+
+
+def test_opencode_tokens_sums_step_finish_events() -> None:
+    events: Events = [
+        {
+            "type": "step_finish",
+            "part": {
+                "cost": 0.01,
+                "tokens": {
+                    "input": 4952,
+                    "output": 306,
+                    "reasoning": 100,
+                    "cache": {"read": 8768, "write": 0},
+                },
+            },
+        },
+        {
+            "type": "step_finish",
+            "part": {
+                "cost": 0.02,
+                "tokens": {
+                    "input": 1000,
+                    "output": 200,
+                    "reasoning": 50,
+                    "cache": {"read": 500, "write": 100},
+                },
+            },
+        },
+    ]
+    tokens = opencode_tokens(events)
+    assert tokens.input == 5952
+    assert tokens.output == 506
+    assert tokens.reasoning == 150
+    assert tokens.cache_read == 9268
+    assert tokens.cache_write == 100
+
+
+def test_opencode_tokens_without_tokens_returns_all_none() -> None:
+    events: Events = [
+        {"type": "step_finish", "part": {"cost": 0.01}},
+        {"type": "text", "part": {"text": "hello"}},
+    ]
+    tokens = opencode_tokens(events)
+    assert tokens == Tokens()
+
+
+def test_claude_tokens_reads_last_result_usage() -> None:
+    events: Events = [
+        {"type": "system", "subtype": "init", "session_id": "abc"},
+        {
+            "type": "result",
+            "subtype": "success",
+            "usage": {
+                "input_tokens": 1500,
+                "output_tokens": 250,
+                "cache_read_input_tokens": 300,
+                "cache_creation_input_tokens": 50,
+            },
+        },
+    ]
+    tokens = claude_tokens(events)
+    assert tokens.input == 1500
+    assert tokens.output == 250
+    assert tokens.reasoning is None
+    assert tokens.cache_read == 300
+    assert tokens.cache_write == 50
+
+
+def test_claude_tokens_no_result_returns_empty() -> None:
+    events: Events = [
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": "hi"}]}}
+    ]
+    tokens = claude_tokens(events)
+    assert tokens == Tokens()
+
+
+def test_claude_tokens_missing_fields_are_none() -> None:
+    events: Events = [
+        {
+            "type": "result",
+            "subtype": "success",
+            "usage": {"input_tokens": 100},  # missing output, cache fields
+        },
+    ]
+    tokens = claude_tokens(events)
+    assert tokens.input == 100
+    assert tokens.output is None
+    assert tokens.reasoning is None
+    assert tokens.cache_read is None
+    assert tokens.cache_write is None
+
+
+def test_pi_tokens_sums_turn_end_events() -> None:
+    events: Events = [
+        {
+            "type": "turn_end",
+            "message": {"usage": {"input": 1000, "output": 100, "cacheRead": 200, "cacheWrite": 0}},
+        },
+        {
+            "type": "turn_end",
+            "message": {"usage": {"input": 500, "output": 50, "cacheRead": 100, "cacheWrite": 20}},
+        },
+    ]
+    tokens = pi_tokens(events)
+    assert tokens.input == 1500
+    assert tokens.output == 150
+    assert tokens.reasoning is None
+    assert tokens.cache_read == 300
+    assert tokens.cache_write == 20
+
+
+def test_pi_tokens_reasoning_is_none() -> None:
+    events: Events = [
+        {
+            "type": "turn_end",
+            "message": {"usage": {"input": 1000, "output": 100, "cacheRead": 200, "cacheWrite": 0}},
+        },
+    ]
+    tokens = pi_tokens(events)
+    assert tokens.reasoning is None
+
+
+def test_each_harness_has_its_token_reader() -> None:
+    assert OPENCODE.tokens is opencode_tokens
+    assert CLAUDE_CODE.tokens is claude_tokens
+    assert PI.tokens is pi_tokens
