@@ -59,6 +59,7 @@ class AttemptOutput:
     commit_message: str = ""
     subscription_cost: float = 0.0
     commit_rejection: str | None = None
+    tokens: Tokens = field(default_factory=Tokens)
 
 
 def git(cwd: Path, *args: str) -> str:
@@ -221,4 +222,5 @@ async def run_attempt(
         commit_message=message,
         subscription_cost=harness.subscription_cost(events) if harness.subscription_cost else 0.0,
         commit_rejection=commit_rejection,
+        tokens=harness.tokens(events),
     )

@@ -449,3 +449,39 @@ def test_run_attempt_commits_with_the_callables_message(tmp_path: Path) -> None:
         "Written by a Conductor worker: step s1, attempt 1, on openrouter/a/b."
     )
     assert git(worktree, "log", "-1", "--format=%B").strip() == output.commit_message
+
+
+def test_run_attempt_records_worker_tokens(tmp_path: Path) -> None:
+    from conductor.tokens import Tokens
+
+    repo = init_repo(tmp_path)
+    worktree = tmp_path / "wt"
+    create_worktree(repo, worktree, branch="conductor/s1-1", base="main")
+
+    async def writing_runner(
+        cmd: list[str],
+        cwd: Path,
+        should_stop: Callable[[str], bool],
+        environment: dict[str, str],
+    ) -> tuple[int, str, str]:
+        (cwd / "made.txt").write_text("x = 1\n")
+        events = [text_event("done"), step_finish(0.02)]
+        return 0, "".join(json.dumps(event) + "\n" for event in events), ""
+
+    known_tokens = Tokens(input=100, output=50, reasoning=10, cache_read=5, cache_write=2)
+    harness = replace(OPENCODE, tokens=lambda events: known_tokens)
+
+    output = asyncio.run(
+        run_attempt(
+            worktree,
+            base="main",
+            model="openrouter/a/b",
+            prompt="do it",
+            extra_args=[],
+            commit_message=lambda final_text: "chore(conductor): apply step s1 attempt 1",
+            transient_attempts=3,
+            harness=harness,
+            runner=writing_runner,
+        )
+    )
+    assert output.tokens == known_tokens

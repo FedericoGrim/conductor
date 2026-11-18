@@ -402,3 +402,80 @@ def test_the_system_prompt_lists_the_categories(monkeypatch: pytest.MonkeyPatch)
     assert '"category"' in system
     for category in ("types", "imports", "failing-tests", "spec", "logic", "commit"):
         assert category in system
+
+
+def test_usage_tokens_with_full_openrouter_usage() -> None:
+    from conductor.reviewer import usage_tokens
+    from conductor.tokens import Tokens
+
+    usage = {
+        "prompt_tokens": 1200,
+        "completion_tokens": 300,
+        "completion_tokens_details": {"reasoning_tokens": 50},
+        "prompt_tokens_details": {"cached_tokens": 200},
+    }
+    tokens = usage_tokens(usage)
+    assert tokens == Tokens(input=1000, output=300, reasoning=50, cache_read=200, cache_write=None)
+
+
+def test_usage_tokens_with_only_prompt_and_completion() -> None:
+    from conductor.reviewer import usage_tokens
+    from conductor.tokens import Tokens
+
+    usage = {"prompt_tokens": 500, "completion_tokens": 150}
+    tokens = usage_tokens(usage)
+    assert tokens == Tokens(
+        input=500, output=150, reasoning=None, cache_read=None, cache_write=None
+    )
+
+
+def test_usage_tokens_with_empty_dict() -> None:
+    from conductor.reviewer import usage_tokens
+    from conductor.tokens import Tokens
+
+    usage: dict[str, Any] = {}
+    tokens = usage_tokens(usage)
+    assert tokens == Tokens()
+
+
+def test_usage_tokens_with_non_int_values() -> None:
+    from conductor.reviewer import usage_tokens
+    from conductor.tokens import Tokens
+
+    usage = {
+        "prompt_tokens": "many",
+        "completion_tokens": True,
+        "completion_tokens_details": {"reasoning_tokens": "some"},
+        "prompt_tokens_details": {"cached_tokens": 1.5},
+    }
+    tokens = usage_tokens(usage)
+    assert tokens == Tokens()
+
+
+def test_usage_tokens_with_cache_write() -> None:
+    from conductor.reviewer import usage_tokens
+    from conductor.tokens import Tokens
+
+    usage = {
+        "prompt_tokens": 1000,
+        "completion_tokens": 200,
+        "prompt_tokens_details": {"cached_tokens": 100, "cache_write_tokens": 50},
+    }
+    tokens = usage_tokens(usage)
+    assert tokens == Tokens(input=900, output=200, reasoning=None, cache_read=100, cache_write=50)
+
+
+def test_verdict_tokens_property() -> None:
+    from conductor.reviewer import Verdict
+    from conductor.tokens import Tokens
+
+    usage = {
+        "prompt_tokens": 800,
+        "completion_tokens": 200,
+        "completion_tokens_details": {"reasoning_tokens": 30},
+        "prompt_tokens_details": {"cached_tokens": 100},
+    }
+    verdict = Verdict(True, "ok", "{}", usage=usage)
+    assert verdict.tokens == Tokens(
+        input=700, output=200, reasoning=30, cache_read=100, cache_write=None
+    )

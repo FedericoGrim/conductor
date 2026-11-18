@@ -745,3 +745,133 @@ def test_an_errored_second_opinion_does_not_overrule_the_first_rejection() -> No
     assert "bad imports" in calls[1][2]
     assert recorded[0]["review"]["model"] == "openrouter/r"
     assert recorded[0]["second_opinion"]["error"]["kind"] == TRANSIENT
+
+
+def test_attempt_entry_records_worker_and_reviewer_tokens() -> None:
+    from conductor.escalation import attempt_entry
+    from conductor.tokens import Tokens
+
+    worker_tokens = Tokens(input=100, output=50, reasoning=10, cache_read=5, cache_write=2)
+    output = AttemptOutput(
+        exit_code=0,
+        session_id="ses",
+        events=[],
+        diff="+code",
+        cost=0.01,
+        tokens=worker_tokens,
+    )
+    entry = attempt_entry(1, 0, "openrouter/t1", "prompt", output)
+    assert entry["tokens"] == {"worker": worker_tokens.to_dict(), "reviewer": None}
+
+
+def test_review_entry_records_reviewer_tokens() -> None:
+    from conductor.escalation import review_entry
+    from conductor.reviewer import Verdict
+    from conductor.tokens import Tokens
+
+    reviewer_tokens = Tokens(input=190, output=80, reasoning=20, cache_read=10, cache_write=5)
+    verdict = Verdict(True, "ok", "{}", usage={"prompt_tokens": 200, "completion_tokens": 80})
+    verdict.usage = {
+        "prompt_tokens": 200,
+        "completion_tokens": 80,
+        "completion_tokens_details": {"reasoning_tokens": 20},
+        "prompt_tokens_details": {"cached_tokens": 10, "cache_write_tokens": 5},
+    }
+    entry = review_entry("openrouter/r", verdict, [])
+    assert entry["tokens"] == reviewer_tokens.to_dict()
+
+
+def test_consult_reviewers_records_tokens_in_attempt_and_reviews() -> None:
+    import asyncio
+
+    from conductor.escalation import RunState, run_step
+    from conductor.plan import Step
+    from conductor.reviewer import Verdict
+    from conductor.tokens import Tokens
+    from conductor.verify import CheckResult
+
+    profile = REVIEWERS_PROFILE
+    step = STEP
+    passed = CheckResult("mypy --strict .", 0, "Success", 1.0)
+
+    # First reviewer rejects suspiciously, second approves
+    verdict1 = Verdict(False, "bad imports", "{}", category="imports")
+    verdict1.usage = {
+        "prompt_tokens": 300,
+        "completion_tokens": 100,
+        "completion_tokens_details": {"reasoning_tokens": 15},
+        "prompt_tokens_details": {"cached_tokens": 50},
+    }
+    verdict2 = Verdict(True, "actually fine", "{}")
+    verdict2.usage = {
+        "prompt_tokens": 250,
+        "completion_tokens": 90,
+        "completion_tokens_details": {"reasoning_tokens": 10},
+        "prompt_tokens_details": {"cached_tokens": 40},
+    }
+
+    async def attempt(step: Step, number: int, model: str, prompt: str) -> AttemptOutput:
+        worker_tokens = Tokens(input=500, output=200, reasoning=25, cache_read=30, cache_write=10)
+        return AttemptOutput(
+            exit_code=0,
+            session_id="ses",
+            events=[],
+            diff="+code",
+            cost=0.05,
+            tokens=worker_tokens,
+            commit_message="feat: add feature",
+        )
+
+    reviewed: list[str] = []
+
+    def judge(
+        model: str, spec: str, diff: str, checks: list[CheckResult], commit_message: str
+    ) -> Verdict:
+        reviewed.append(model)
+        return verdict1 if model == "openrouter/r" else verdict2
+
+    recorded: list[dict[str, Any]] = []
+
+    def record(step: Step, data: dict[str, Any]) -> None:
+        recorded.append(data)
+
+    async def check(step: Step, number: int) -> list[CheckResult]:
+        return [passed]
+
+    result = asyncio.run(
+        run_step(
+            step,
+            profile,
+            attempt=attempt,
+            judge=judge,
+            record=record,
+            state=RunState(),
+            check=check,
+        )
+    )
+
+    assert result.status == "approved"
+    assert len(recorded) == 1
+    entry = recorded[0]
+
+    # Check attempt entry has worker tokens and reviewer tokens
+    assert (
+        entry["tokens"]["worker"]
+        == Tokens(input=500, output=200, reasoning=25, cache_read=30, cache_write=10).to_dict()
+    )
+    assert entry["tokens"]["reviewer"] == verdict2.tokens.to_dict()
+
+    # Check review entry has tokens
+    assert entry["review"]["tokens"] == verdict2.tokens.to_dict()
+
+    # Check review_fallbacks entry has tokens (verdict1: input=300-50=250)
+    assert (
+        entry["review_fallbacks"][0]["tokens"]
+        == Tokens(input=250, output=100, reasoning=15, cache_read=50, cache_write=None).to_dict()
+    )
+
+    # Check second_opinion entry has tokens (verdict2: input=250-40=210)
+    assert (
+        entry["second_opinion"]["tokens"]
+        == Tokens(input=210, output=90, reasoning=10, cache_read=40, cache_write=None).to_dict()
+    )
