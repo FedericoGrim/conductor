@@ -19,6 +19,7 @@ from conductor.errors import (
     mentions_context_limit,
 )
 from conductor.privacy import api_model_id
+from conductor.tokens import Tokens
 from conductor.verify import CheckResult
 
 Post = Callable[[str, dict[str, str], dict[str, Any]], dict[str, Any]]
@@ -69,6 +70,49 @@ class Verdict:
     def cost(self) -> float | None:
         reported = self.usage.get("cost")
         return float(reported) if isinstance(reported, int | float) else None
+
+    @property
+    def tokens(self) -> Tokens:
+        return usage_tokens(self.usage)
+
+
+def usage_tokens(usage: dict[str, Any]) -> Tokens:
+    """The tokens of an OpenAI-compatible usage dict; a field nobody reported stays None."""
+    prompt_tokens = usage.get("prompt_tokens")
+    completion_tokens = usage.get("completion_tokens")
+    completion_details_raw = usage.get("completion_tokens_details")
+    prompt_details_raw = usage.get("prompt_tokens_details")
+    completion_details: dict[str, Any] = (
+        completion_details_raw if isinstance(completion_details_raw, dict) else {}
+    )
+    prompt_details: dict[str, Any] = (
+        prompt_details_raw if isinstance(prompt_details_raw, dict) else {}
+    )
+
+    reasoning = _int_or_none(completion_details.get("reasoning_tokens"))
+    cache_read = _int_or_none(prompt_details.get("cached_tokens"))
+    cache_write = _int_or_none(prompt_details.get("cache_write_tokens"))
+
+    if isinstance(prompt_tokens, int) and not isinstance(prompt_tokens, bool):
+        input_tokens = prompt_tokens - cache_read if isinstance(cache_read, int) else prompt_tokens
+    else:
+        input_tokens = None
+
+    output_tokens = _int_or_none(completion_tokens)
+
+    return Tokens(
+        input=input_tokens,
+        output=output_tokens,
+        reasoning=reasoning,
+        cache_read=cache_read,
+        cache_write=cache_write,
+    )
+
+
+def _int_or_none(value: object) -> int | None:
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    return None
 
 
 def http_post(url: str, headers: dict[str, str], body: dict[str, Any]) -> dict[str, Any]:

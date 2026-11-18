@@ -9,6 +9,7 @@ from typing import Any
 from conductor.autonomy import DEFAULT_AUTONOMY, effective
 from conductor.plan import Plan, Step
 from conductor.scheduler import StepResult
+from conductor.tokens import Tokens
 
 
 def now() -> str:
@@ -31,6 +32,27 @@ def cost_by_model(attempts: list[dict[str, Any]]) -> dict[str, float]:
         ):
             if model and amount:
                 totals[model] = totals.get(model, 0.0) + amount
+    return totals
+
+
+def tokens_by_model(attempts: list[dict[str, Any]]) -> dict[str, Tokens]:
+    totals: dict[str, Tokens] = {}
+    for attempt in attempts:
+        tokens = attempt.get("tokens") or {}
+        review = attempt.get("review") or {}
+        fallbacks = attempt.get("review_fallbacks") or []
+        second = attempt.get("second_opinion") or None
+        if second:
+            fallbacks = [*fallbacks, second]
+        entries = [
+            (attempt.get("model"), tokens.get("worker")),
+            (review.get("model"), tokens.get("reviewer")),
+            *((fallback.get("model"), fallback.get("tokens")) for fallback in fallbacks),
+        ]
+        for model, reported in entries:
+            if not model or not isinstance(reported, dict):
+                continue
+            totals[model] = totals.get(model, Tokens()).plus(Tokens.from_dict(reported))
     return totals
 
 
@@ -115,10 +137,21 @@ class RunLog:
                 "question": result.attempts[-1].get("question") if count else None,
                 "cost": sum(step_totals.values()),
                 "subscription": step_subscription,
+                "tokens": {
+                    model: tokens.to_dict()
+                    for model, tokens in tokens_by_model(result.attempts).items()
+                },
                 "autonomy": effective(self.run["autonomy"], requested.get(step_id)),
             }
+        run_token_totals: dict[str, Tokens] = {}
+        for result in results.values():
+            for model, tokens in tokens_by_model(result.attempts).items():
+                run_token_totals[model] = run_token_totals.get(model, Tokens()).plus(tokens)
         self.run["cost"] = sum(run_totals.values())
         self.run["cost_by_model"] = run_totals
+        self.run["tokens_by_model"] = {
+            model: tokens.to_dict() for model, tokens in run_token_totals.items()
+        }
         self.run["subscription"] = sum(subscriptions) if subscriptions else None
         self.run["finished_at"] = now()
         self.write_run()

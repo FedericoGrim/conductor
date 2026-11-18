@@ -3,9 +3,10 @@ from pathlib import Path
 
 import pytest
 
-from conductor.log import RunLog, cost_by_model
+from conductor.log import RunLog, cost_by_model, tokens_by_model
 from conductor.plan import Plan, Step
 from conductor.scheduler import StepResult
+from conductor.tokens import Tokens
 
 PLAN = Plan("goal", (Step("s1", "S1", "do", ("a.py",), 1, ()),))
 
@@ -194,3 +195,75 @@ def test_run_json_has_no_question_for_other_steps(tmp_path: Path) -> None:
     log = RunLog.create(tmp_path, PLAN, privacy="medium")
     log.finish({"s1": StepResult("s1", "approved", "fine", attempts=[{"attempt": 1}])})
     assert json.loads((log.directory / "run.json").read_text())["steps"]["s1"]["question"] is None
+
+
+def tok(**values: object) -> dict[str, object]:
+    fields: dict[str, object] = {"input": None, "output": None, "reasoning": None}
+    return {**fields, "cache_read": None, "cache_write": None, **values}
+
+
+def test_tokens_by_model_sums_worker_reviewer_and_second_opinion() -> None:
+    attempts = [
+        {
+            "attempt": 1,
+            "model": "openrouter/cheap",
+            "tokens": {
+                "worker": tok(input=100, output=50, reasoning=10, cache_read=5, cache_write=1),
+                "reviewer": tok(input=20, output=8),
+            },
+            "review": {"model": "openrouter/judge"},
+        },
+        {
+            "attempt": 2,
+            "model": "openrouter/cheap",
+            "tokens": {"worker": tok(input=30, output=10), "reviewer": None},
+            "review": {"model": "openrouter/judge"},
+            "second_opinion": {"model": "openrouter/second", "tokens": tok(input=7, output=3)},
+        },
+    ]
+
+    totals = tokens_by_model(attempts)
+
+    assert totals["openrouter/cheap"] == Tokens(
+        input=130, output=60, reasoning=10, cache_read=5, cache_write=1
+    )
+    assert totals["openrouter/judge"] == Tokens(input=20, output=8)
+    assert totals["openrouter/second"] == Tokens(input=7, output=3)
+
+
+def test_tokens_by_model_ignores_attempts_without_tokens() -> None:
+    assert tokens_by_model([{"attempt": 1, "model": "openrouter/cheap"}]) == {}
+
+
+def test_finish_records_the_tokens_per_step_and_per_model(tmp_path: Path) -> None:
+    log = RunLog.create(tmp_path, PLAN, privacy="medium")
+    attempts = [
+        {
+            "attempt": 1,
+            "model": "openrouter/cheap",
+            "tokens": {
+                "worker": tok(input=100, output=50, cache_read=10),
+                "reviewer": tok(input=20, output=5),
+            },
+            "review": {"model": "openrouter/judge", "tokens": tok(input=20, output=5)},
+            "cost": {"worker": 0.01, "reviewer": 0.001},
+        }
+    ]
+    log.finish({"s1": StepResult("s1", "approved", "fine", attempts=attempts)})
+
+    run = json.loads((log.directory / "run.json").read_text())
+    expected = {
+        "openrouter/cheap": tok(input=100, output=50, cache_read=10),
+        "openrouter/judge": tok(input=20, output=5),
+    }
+    assert run["steps"]["s1"]["tokens"] == expected
+    assert run["tokens_by_model"] == expected
+
+
+def test_finish_records_no_tokens_for_an_older_run(tmp_path: Path) -> None:
+    log = RunLog.create(tmp_path, PLAN, privacy="medium")
+    attempts: list[dict[str, object]] = [{"attempt": 1, "model": "m"}]
+    log.finish({"s1": StepResult("s1", "approved", "fine", attempts=attempts)})
+    run = json.loads((log.directory / "run.json").read_text())
+    assert run["steps"]["s1"]["tokens"] == {}
+    assert run["tokens_by_model"] == {}
