@@ -65,13 +65,14 @@ Whether Conductor pays off is measured with the protocol in [docs/measurements.m
 
 ## Statistics
 
-`conductor stats [--repo PATH]` reads the run logs under `.conductor/runs` of a repository and reports, per run and per step: the status, the attempts, the models, the cost, whether the step was approved on the first try, the hand commits (human commits on the step's files since the run finished) and the brain's token usage. It backs the measurement protocol in [docs/measurements.md](docs/measurements.md).
+`conductor stats [--repo PATH]` reads the run logs under `.conductor/runs` of a repository and reports, per run and per step: the status, the attempts, the models, the cost, whether the step was approved on the first try, the hand commits (human commits on the step's files since the run finished), the tokens of the workers and reviewers (input, output, reasoning, cache read and cache written, with the share read from the cache) and the brain's token usage. Every harness reports what its provider gives: OpenCode's `step_finish` events carry input, output, reasoning and the cache, Claude Code reports usage only at the end of the run and Pi's `turn_end` events carry everything but the reasoning. A value nobody reported prints `n/a`, never `0`, so "no cache" and "the provider does not report it" stay apart. It backs the measurement protocol in [docs/measurements.md](docs/measurements.md).
 
 ```
 $ conductor stats
 run 2026-11-13T15-32-28  privacy dogfood  finished 2026-11-13T15:32:37+00:00
-  step hello-script  approved  attempts 1  first try yes  models claude-code/sonnet  cost 0.0000 USD  subscription 0.0497 USD  hand commits 0
+  step hello-script  approved  attempts 1  first try yes  models claude-code/sonnet  cost 0.0000 USD  subscription 0.0497 USD  hand commits 0  tokens in 4952 out 306 reasoning 100 cache read 8768 (64%)
   total  cost 0.0000 USD  subscription 0.0497 USD
+  tokens claude-code/sonnet  in 4952 out 306 reasoning 100 cache read 8768 cache write 0 cache share 64%
   brain ses_abc  claude-agent/opus  replies 12  output 3400  reasoning 900  input 50  cache write 12000  cache read 45000
 ```
 

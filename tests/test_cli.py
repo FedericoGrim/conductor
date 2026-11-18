@@ -412,7 +412,7 @@ def test_stats_prints_the_run_and_step_lines(
     )
     assert lines[1] == (
         "  step a  approved  attempts 1  first try yes  models openrouter/cheap  "
-        "cost 0.0100 USD  subscription 0.0200 USD  hand commits 0"
+        "cost 0.0100 USD  subscription 0.0200 USD  hand commits 0  tokens n/a"
     )
     assert lines[2] == "  total  cost 0.0100 USD  subscription 0.0200 USD"
     assert lines[3] == "  brain n/a"
