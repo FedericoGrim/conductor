@@ -11,6 +11,7 @@ from typing import Any
 
 from conductor.config import Profile
 from conductor.errors import ModelError
+from conductor.tokens import Tokens, no_tokens
 
 EVENT_LINE_LIMIT = 64 * 1024 * 1024
 STOP_GRACE_SECONDS = 10
@@ -41,6 +42,7 @@ class Harness:
     error: Callable[[Events, int, str], ModelError | None]
     final_text: Callable[[Events], str]
     subscription_cost: Callable[[Events], float] | None = None
+    tokens: Callable[[Events], Tokens] = no_tokens
 
 
 @dataclass
