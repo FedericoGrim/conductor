@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import urllib.parse
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -99,20 +99,30 @@ def pi_compat(provider: Provider, options: dict[str, Any]) -> dict[str, Any] | N
     return {"openRouterRouting": routing}
 
 
-def pi_model(model_id: str, costs: Mapping[str, Mapping[str, float]] | None) -> dict[str, Any]:
-    if costs is None or model_id not in costs:
-        return {"id": model_id}
-    return {"id": model_id, "cost": dict(costs[model_id])}
+def pi_model(
+    model_id: str,
+    costs: Mapping[str, Mapping[str, float]] | None,
+    reasoning: Collection[str] = (),
+) -> dict[str, Any]:
+    model: dict[str, Any] = {"id": model_id}
+    if costs is not None and model_id in costs:
+        model["cost"] = dict(costs[model_id])
+    if model_id in reasoning:
+        model["reasoning"] = True
+    return model
 
 
 def pi_config(
-    profile: Profile, costs: Mapping[str, Mapping[str, float]] | None = None
+    profile: Profile,
+    costs: Mapping[str, Mapping[str, float]] | None = None,
+    reasoning: Collection[str] = (),
 ) -> dict[str, Any]:
     """The models.json for Pi: one entry per provider of the profile on the pi harness.
 
     apiKey is the environment variable NAME, never a value; the Vercel gateway training flag
     has no Pi equivalent and is refused when the profile loads. costs maps an API model id to
-    its prices; a model without one gets no cost, and Pi then reports 0 for it.
+    its prices; a model without one gets no cost, and Pi then reports 0 for it. reasoning
+    lists the API model ids the catalog marks as reasoning; only those get "reasoning": true.
     """
     written = {
         name: provider
@@ -130,7 +140,7 @@ def pi_config(
             "baseUrl": provider.base_url,
             "api": "openai-completions",
             "apiKey": provider.api_key_env,
-            "models": [pi_model(model_id, costs) for model_id in model_ids],
+            "models": [pi_model(model_id, costs, reasoning) for model_id in model_ids],
         }
         compat = pi_compat(provider, provider.request_options)
         if compat is not None:
