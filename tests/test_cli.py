@@ -148,6 +148,7 @@ def test_run_executes_reviews_and_merges(
         "question": None,
         "cost": pytest.approx(0.022),
         "subscription": None,
+        "autonomy": "free",
     }
     assert run["brain_session"] is None
     assert run["subscription"] is None
