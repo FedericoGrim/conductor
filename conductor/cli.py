@@ -19,6 +19,7 @@ from conductor.escalation import RunState, run_step
 from conductor.harness import harness_for
 from conductor.log import RunLog
 from conductor.merge import merge_branch
+from conductor.overlap import describe, parallel_overlaps
 from conductor.plan import Plan, PlanError, Step
 from conductor.progress import Progress, StatusLine
 from conductor.scheduler import APPROVED, CONFLICT, NEEDS_MERGE, StepResult, run_plan
@@ -70,6 +71,8 @@ def validate(args: argparse.Namespace) -> int:
     profile_ceiling = config.profile(None).autonomy if config else DEFAULT_AUTONOMY
     plan.check_ceiling(args.autonomy or profile_ceiling)
     print(f"ok: {len(plan.steps)} steps")
+    for overlap in parallel_overlaps(plan):
+        print(f"warning: {describe(overlap)}")
     if config is None:
         return 0
     for profile in config.profiles.values():
@@ -239,6 +242,8 @@ def run(args: argparse.Namespace) -> int:
         f"run {log.directory.name}: {len(plan.steps)} steps, "
         f"privacy {profile.name}, autonomy {ceiling}"
     )
+    for overlap in parallel_overlaps(plan):
+        print(f"warning: {describe(overlap)}")
     progress = Progress(
         step_ids=[step.id for step in plan.steps], max_parallel=profile.max_parallel
     )

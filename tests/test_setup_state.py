@@ -336,3 +336,69 @@ def test_the_reviewer_takes_fallbacks_unless_it_is_the_brain() -> None:
 def test_drafts_keep_the_harness_of_a_provider() -> None:
     managed = Provider("subscription", "", "", harness="opencode")
     assert ProviderDraft.from_provider(managed).to_provider() == managed
+
+
+def test_routable_models_lists_fallbacks_and_reviewers_but_not_brain() -> None:
+    model = SetupState.from_config(fallback_config())
+    assert model.routable_models() == [
+        TIERS[0],
+        TIERS[1],
+        "scaleway/b2",
+        "openrouter/b3",
+        TIERS[2],
+        TIERS[3],
+        TIERS[4],
+        "scaleway/r2",
+    ]
+    model.set_reviewer("brain")
+    assert "brain" not in model.routable_models()
+
+
+def test_a_brain_reviewer_is_not_routable_even_with_stale_fallbacks() -> None:
+    model = SetupState.from_config(fallback_config())
+    model.draft().reviewer = "brain"
+    assert model.draft().reviewer_fallbacks == ["scaleway/r2"]
+    assert "scaleway/r2" not in model.routable_models()
+    assert "brain" not in model.routable_models()
+
+
+def test_model_options_are_set_and_read_back() -> None:
+    model = state()
+    assert model.model_options_text("openrouter/m1") == "{}"
+    model.set_model_options("openrouter/m1", '{"provider": {"order": ["relace"]}}')
+    assert model.model_options_text("openrouter/m1") == '{"provider": {"order": ["relace"]}}'
+    assert model.draft().providers["openrouter"].model_options == {
+        "m1": {"provider": {"order": ["relace"]}}
+    }
+
+
+def test_empty_model_options_remove_the_entry() -> None:
+    model = state()
+    model.set_model_options("openrouter/m1", '{"provider": {"order": ["relace"]}}')
+    model.set_model_options("openrouter/m1", "{}")
+    assert model.draft().providers["openrouter"].model_options == {}
+
+
+def test_model_options_are_refused_when_invalid() -> None:
+    model = state()
+    for text in ("{not json", "[]", '"relace"', "1", "null"):
+        with pytest.raises(SetupError, match="JSON"):
+            model.set_model_options("openrouter/m1", text)
+    with pytest.raises(SetupError, match="openrouter/nope is not a level model or a reviewer"):
+        model.set_model_options("openrouter/nope", "{}")
+    with pytest.raises(SetupError, match="not a level model or a reviewer of profile low"):
+        model.set_model_options("scaleway/glm-5.3", "{}")
+
+
+def test_hand_written_model_options_survive_an_edit_and_the_round_trip(tmp_path: Path) -> None:
+    model = state()
+    model.draft().providers["openrouter"].model_options["m2"] = {"provider": {"order": ["relace"]}}
+    model.set_model_options("openrouter/m1", '{"temperature": 0}')
+    written = tmp_path / "conductor.toml"
+    written.write_text(model.to_config().dump())
+    again = SetupState.from_config(Config.load(written))
+    assert again.draft().providers["openrouter"].model_options == {
+        "m1": {"temperature": 0},
+        "m2": {"provider": {"order": ["relace"]}},
+    }
+    assert again.to_config() == model.to_config()

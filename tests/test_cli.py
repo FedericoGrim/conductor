@@ -63,6 +63,115 @@ def test_validate_accepts_the_example_plan(
     assert capsys.readouterr().out == "ok: 3 steps\n"
 
 
+def test_validate_warns_about_parallel_steps_with_overlapping_files(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(cli, "DEFAULT_CONFIG_PATHS", ())
+    plan = tmp_path / "plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "goal": "demo",
+                "steps": [
+                    {"id": "a", "spec": "write a", "files": ["src/a.py"], "difficulty": 1},
+                    {"id": "b", "spec": "write b", "files": ["src/a.py"], "difficulty": 1},
+                ],
+            }
+        )
+    )
+    assert cli.main(["validate", str(plan)]) == 0
+    out = capsys.readouterr().out
+    assert "ok: 2 steps" in out
+    assert "warning: steps 'a' and 'b' can run in parallel and both list src/a.py" in out
+
+
+def test_validate_no_warning_when_steps_depend_on_each_other(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(cli, "DEFAULT_CONFIG_PATHS", ())
+    plan = tmp_path / "plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "goal": "demo",
+                "steps": [
+                    {"id": "a", "spec": "write a", "files": ["src/a.py"], "difficulty": 1},
+                    {
+                        "id": "b",
+                        "spec": "write b",
+                        "files": ["src/a.py"],
+                        "difficulty": 1,
+                        "depends_on": ["a"],
+                    },
+                ],
+            }
+        )
+    )
+    assert cli.main(["validate", str(plan)]) == 0
+    out = capsys.readouterr().out
+    assert "ok: 2 steps" in out
+    assert "warning:" not in out
+
+
+def test_validate_no_warning_when_no_overlap(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(cli, "DEFAULT_CONFIG_PATHS", ())
+    plan = tmp_path / "plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "goal": "demo",
+                "steps": [
+                    {"id": "a", "spec": "write a", "files": ["src/a.py"], "difficulty": 1},
+                    {"id": "b", "spec": "write b", "files": ["src/b.py"], "difficulty": 1},
+                ],
+            }
+        )
+    )
+    assert cli.main(["validate", str(plan)]) == 0
+    out = capsys.readouterr().out
+    assert "ok: 2 steps" in out
+    assert "warning:" not in out
+
+
+def test_run_warns_about_parallel_steps_with_overlapping_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = init_repo(tmp_path)
+    install_fake_opencode(tmp_path, monkeypatch)
+    monkeypatch.setenv("TEST_CLI_KEY", "k")
+    config = tmp_path / "conductor.toml"
+    config.write_text(CONFIG)
+    plan = tmp_path / "plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "goal": "demo",
+                "steps": [
+                    {"id": "a", "spec": "write a", "files": ["src/a.py"], "difficulty": 1},
+                    {"id": "b", "spec": "write b", "files": ["src/a.py"], "difficulty": 1},
+                ],
+            }
+        )
+    )
+
+    def fake_post(url: str, headers: dict[str, str], body: dict[str, Any]) -> dict[str, Any]:
+        content = json.dumps({"ok": True, "reason": "good"})
+        return {"choices": [{"message": {"content": content}}], "usage": {"cost": 0.001}}
+
+    monkeypatch.setattr(reviewer, "http_post", fake_post)
+
+    code = cli.main(["run", str(plan), "--config", str(config), "--repo", str(repo)])
+
+    # The run proceeds (not refused), but steps may conflict due to fake opencode
+    # writing to the same output.txt. The key assertion is that the warning is printed.
+    assert code in (0, 1), capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "run" in out.splitlines()[0]
+    assert "warning: steps 'a' and 'b' can run in parallel and both list src/a.py" in out
+
+
 SINGLE_PROVIDER = """
 default_privacy = "medium"
 [privacy.medium]
