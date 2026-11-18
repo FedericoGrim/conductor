@@ -149,12 +149,11 @@ async def execute_plan(
         for number in numbers[:-1]:
             discard(step, number)
         if result.status == APPROVED and numbers:
-            land(step, numbers[-1], result)
+            merge_approved(step, numbers[-1], result)
         print(f"[{step.id}] {result.status}: {result.detail}", flush=True)
         return result
 
-    def land(step: Step, number: int, result: StepResult) -> None:
-        """Merge an approved attempt into the base branch, unless the base is protected."""
+    def merge_approved(step: Step, number: int, result: StepResult) -> None:
         branch = f"conductor/{run_name}/{step.id}-{number}"
         if is_protected(base):
             result.status = NEEDS_MERGE
