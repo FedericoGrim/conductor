@@ -5,6 +5,7 @@ from typing import Any
 import pytest
 
 from conductor import catalog, credentials
+from conductor.autonomy import forbidden_commands
 from conductor.config import HARNESS_NAMES, Profile, Provider
 from conductor.errors import MODEL_UNSUITABLE, PROVIDER_UNUSABLE, TRANSIENT
 from conductor.harness import (
@@ -20,7 +21,9 @@ from conductor.harness import (
     claude_is_retry,
     claude_session_id,
     claude_subscription_cost,
+    claude_tokens,
     harness_for,
+    opencode_tokens,
     pi_command,
     pi_cost,
     pi_environment,
@@ -29,8 +32,10 @@ from conductor.harness import (
     pi_is_retry,
     pi_prepare,
     pi_session_id,
+    pi_tokens,
     prepare_opencode,
 )
+from conductor.tokens import Tokens
 from conductor.worker import Events, git, parse_events
 from tests.factories import make_profile
 
@@ -92,6 +97,14 @@ def test_the_claude_code_command_confines_and_isolates_the_worker() -> None:
     assert "--disable-slash-commands" in cmd
     assert "--allowedTools=Bash" in cmd
     assert cmd.index("--effort") < cmd.index("do it")
+
+
+def test_the_claude_code_command_denies_every_forbidden_command() -> None:
+    cmd = claude_build_command("subscription/sonnet", "do it", [])
+    denied = next(arg for arg in cmd if arg.startswith("--disallowedTools="))
+    rules = denied.removeprefix("--disallowedTools=").split(",")
+    assert rules == [f"Bash({command})" for command in forbidden_commands()]
+    assert cmd.index(denied) < cmd.index("do it")
 
 
 def test_claude_code_event_helpers() -> None:
@@ -529,6 +542,7 @@ def test_pi_prepare_writes_the_profile_into_the_worktrees_agent_dir(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(catalog, "model_costs", lambda base_url, get=None: {})
+    monkeypatch.setattr(catalog, "reasoning_models", lambda base_url, get=None: frozenset())
     worktree = init_worktree(tmp_path)
     pi_prepare(worktree, pi_profile())
     config: dict[str, Any] = json.loads((worktree / ".pi-agent" / "models.json").read_text())
@@ -547,6 +561,7 @@ def test_pi_prepare_writes_the_prices_the_catalog_returned(
         return {"m1": price}
 
     monkeypatch.setattr(catalog, "model_costs", model_costs)
+    monkeypatch.setattr(catalog, "reasoning_models", lambda base_url, get=None: frozenset())
     worktree = init_worktree(tmp_path)
     pi_prepare(worktree, pi_profile())
     config: dict[str, Any] = json.loads((worktree / ".pi-agent" / "models.json").read_text())
@@ -558,6 +573,7 @@ def test_pi_prepare_keeps_the_models_without_a_price(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(catalog, "model_costs", lambda base_url, get=None: {})
+    monkeypatch.setattr(catalog, "reasoning_models", lambda base_url, get=None: frozenset())
     worktree = init_worktree(tmp_path)
     pi_prepare(worktree, pi_profile())
     config: dict[str, Any] = json.loads((worktree / ".pi-agent" / "models.json").read_text())
@@ -576,6 +592,7 @@ def test_a_later_pi_provider_does_not_overwrite_an_earlier_price(
     monkeypatch.setattr(
         catalog, "model_costs", lambda base_url, get=None: catalogs.get(base_url, {})
     )
+    monkeypatch.setattr(catalog, "reasoning_models", lambda base_url, get=None: frozenset())
     profile = Profile(
         "medium",
         {
@@ -592,3 +609,160 @@ def test_a_later_pi_provider_does_not_overwrite_an_earlier_price(
         {"id": "shared", "cost": first},
         {"id": "other", "cost": second},
     ]
+
+
+# Token reader tests
+
+
+def test_opencode_tokens_sums_step_finish_events() -> None:
+    events: Events = [
+        {
+            "type": "step_finish",
+            "part": {
+                "cost": 0.01,
+                "tokens": {
+                    "input": 4952,
+                    "output": 306,
+                    "reasoning": 100,
+                    "cache": {"read": 8768, "write": 0},
+                },
+            },
+        },
+        {
+            "type": "step_finish",
+            "part": {
+                "cost": 0.02,
+                "tokens": {
+                    "input": 1000,
+                    "output": 200,
+                    "reasoning": 50,
+                    "cache": {"read": 500, "write": 100},
+                },
+            },
+        },
+    ]
+    tokens = opencode_tokens(events)
+    assert tokens.input == 5952
+    assert tokens.output == 506
+    assert tokens.reasoning == 150
+    assert tokens.cache_read == 9268
+    assert tokens.cache_write == 100
+
+
+def test_opencode_tokens_without_tokens_returns_all_none() -> None:
+    events: Events = [
+        {"type": "step_finish", "part": {"cost": 0.01}},
+        {"type": "text", "part": {"text": "hello"}},
+    ]
+    tokens = opencode_tokens(events)
+    assert tokens == Tokens()
+
+
+def test_claude_tokens_reads_last_result_usage() -> None:
+    events: Events = [
+        {"type": "system", "subtype": "init", "session_id": "abc"},
+        {
+            "type": "result",
+            "subtype": "success",
+            "usage": {
+                "input_tokens": 1500,
+                "output_tokens": 250,
+                "cache_read_input_tokens": 300,
+                "cache_creation_input_tokens": 50,
+            },
+        },
+    ]
+    tokens = claude_tokens(events)
+    assert tokens.input == 1500
+    assert tokens.output == 250
+    assert tokens.reasoning is None
+    assert tokens.cache_read == 300
+    assert tokens.cache_write == 50
+
+
+def test_claude_tokens_no_result_returns_empty() -> None:
+    events: Events = [
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": "hi"}]}}
+    ]
+    tokens = claude_tokens(events)
+    assert tokens == Tokens()
+
+
+def test_claude_tokens_missing_fields_are_none() -> None:
+    events: Events = [
+        {
+            "type": "result",
+            "subtype": "success",
+            "usage": {"input_tokens": 100},  # missing output, cache fields
+        },
+    ]
+    tokens = claude_tokens(events)
+    assert tokens.input == 100
+    assert tokens.output is None
+    assert tokens.reasoning is None
+    assert tokens.cache_read is None
+    assert tokens.cache_write is None
+
+
+def test_pi_tokens_sums_turn_end_events() -> None:
+    events: Events = [
+        {
+            "type": "turn_end",
+            "message": {"usage": {"input": 1000, "output": 100, "cacheRead": 200, "cacheWrite": 0}},
+        },
+        {
+            "type": "turn_end",
+            "message": {"usage": {"input": 500, "output": 50, "cacheRead": 100, "cacheWrite": 20}},
+        },
+    ]
+    tokens = pi_tokens(events)
+    assert tokens.input == 1500
+    assert tokens.output == 150
+    assert tokens.reasoning is None
+    assert tokens.cache_read == 300
+    assert tokens.cache_write == 20
+
+
+def test_pi_tokens_reasoning_is_none() -> None:
+    events: Events = [
+        {
+            "type": "turn_end",
+            "message": {"usage": {"input": 1000, "output": 100, "cacheRead": 200, "cacheWrite": 0}},
+        },
+    ]
+    tokens = pi_tokens(events)
+    assert tokens.reasoning is None
+
+
+def test_each_harness_has_its_token_reader() -> None:
+    assert OPENCODE.tokens is opencode_tokens
+    assert CLAUDE_CODE.tokens is claude_tokens
+    assert PI.tokens is pi_tokens
+
+
+def test_pi_prepare_marks_reasoning_models_from_the_catalog(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    price = {"input": 0.5, "output": 2.0, "cacheRead": 0.05, "cacheWrite": 0.0}
+    monkeypatch.setattr(catalog, "model_costs", lambda base_url, get=None: {"m1": price})
+    monkeypatch.setattr(catalog, "reasoning_models", lambda base_url, get=None: frozenset({"m1"}))
+    worktree = init_worktree(tmp_path)
+    pi_prepare(worktree, pi_profile())
+    config: dict[str, Any] = json.loads((worktree / ".pi-agent" / "models.json").read_text())
+    assert config["providers"]["piprovider"]["models"] == [
+        {"id": "m1", "cost": price, "reasoning": True}
+    ]
+
+
+def test_pi_prepare_without_reasoning_models_has_no_reasoning_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    price = {"input": 0.5, "output": 2.0, "cacheRead": 0.05, "cacheWrite": 0.0}
+    monkeypatch.setattr(catalog, "model_costs", lambda base_url, get=None: {"m1": price})
+    monkeypatch.setattr(catalog, "reasoning_models", lambda base_url, get=None: frozenset())
+    worktree = init_worktree(tmp_path)
+    pi_prepare(worktree, pi_profile())
+    config: dict[str, Any] = json.loads((worktree / ".pi-agent" / "models.json").read_text())
+    models = config["providers"]["piprovider"]["models"]
+    assert models == [{"id": "m1", "cost": price}]
+    assert "reasoning" not in models[0]

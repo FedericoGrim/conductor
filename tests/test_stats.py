@@ -7,6 +7,7 @@ from typing import Any
 
 from conductor.brain import TokenUsage
 from conductor.stats import StepStats, collect, format_report, hand_commits
+from conductor.tokens import Tokens
 from conductor.worker import git
 
 SINCE = "2000-01-01T00:00:00+00:00"
@@ -31,6 +32,8 @@ def make_run(
     cost: float | None = 0.0,
     subscription: float | None = 0.0497,
     brain_session: dict[str, str] | None = None,
+    tokens: dict[str, Any] | None = None,
+    tokens_by_model: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if steps is None:
         steps = {
@@ -42,7 +45,7 @@ def make_run(
                 "subscription": 0.0497,
             }
         }
-    return {
+    run: dict[str, Any] = {
         "started_at": started_at,
         "finished_at": finished_at,
         "privacy": privacy,
@@ -52,6 +55,11 @@ def make_run(
         "subscription": subscription,
         "brain_session": brain_session,
     }
+    if tokens is not None:
+        run["steps"]["hello-script"]["tokens"] = tokens
+    if tokens_by_model is not None:
+        run["tokens_by_model"] = tokens_by_model
+    return run
 
 
 def zero_hand(repo: Path, since: str, files: tuple[str, ...]) -> int | None:
@@ -239,11 +247,89 @@ def test_format_report_exact_lines(tmp_path: Path) -> None:
         "run 2026-11-13T15-32-28  privacy dogfood  finished 2026-11-13T15:32:37+00:00",
         "  step hello-script  approved  attempts 1  first try yes  "
         "models claude-code/sonnet  cost 0.0000 USD  subscription 0.0497 USD  "
-        "hand commits 0",
+        "hand commits 0  tokens n/a",
         "  total  cost 0.0000 USD  subscription 0.0497 USD",
         "  brain ses_abc  claude-agent/opus  replies 12  output 3400  reasoning 900  "
         "input 50  cache write 12000  cache read 45000",
     ]
+
+
+TOKENS = {"input": 4952, "output": 306, "reasoning": 100, "cache_read": 8768, "cache_write": 0}
+
+
+def test_collect_reads_the_tokens_of_a_step_and_of_the_run(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    write_run(
+        repo,
+        "2026-11-13T15-32-28",
+        make_run(
+            tokens={"claude-code/sonnet": TOKENS}, tokens_by_model={"claude-code/sonnet": TOKENS}
+        ),
+    )
+
+    run = collect(repo, hand=zero_hand, tokens=no_tokens)[0]
+
+    assert run.steps[0].tokens == Tokens(
+        input=4952, output=306, reasoning=100, cache_read=8768, cache_write=0
+    )
+    assert run.tokens_by_model == {
+        "claude-code/sonnet": Tokens(
+            input=4952, output=306, reasoning=100, cache_read=8768, cache_write=0
+        )
+    }
+
+
+def test_collect_leaves_the_tokens_none_for_an_older_run(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    write_run(repo, "2026-11-13T15-32-28", make_run())
+
+    run = collect(repo, hand=zero_hand, tokens=no_tokens)[0]
+
+    assert run.steps[0].tokens is None
+    assert run.tokens_by_model is None
+
+
+def test_the_report_shows_the_tokens_and_the_cache_share(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    write_run(
+        repo,
+        "2026-11-13T15-32-28",
+        make_run(
+            tokens={"claude-code/sonnet": TOKENS}, tokens_by_model={"claude-code/sonnet": TOKENS}
+        ),
+    )
+
+    lines = format_report(collect(repo, hand=zero_hand, tokens=no_tokens))
+
+    assert "  tokens in 4952 out 306 reasoning 100 cache read 8768 (64%)" in lines[1], lines[1]
+    assert lines[2] == "  total  cost 0.0000 USD  subscription 0.0497 USD"
+    assert (
+        lines[3] == "  tokens claude-code/sonnet  in 4952 out 306 reasoning 100 "
+        "cache read 8768 cache write 0 cache share 64%"
+    ), lines[3]
+
+
+def test_the_report_prints_n_a_for_a_token_field_nobody_reported(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    partial = {
+        "input": 100,
+        "output": None,
+        "reasoning": None,
+        "cache_read": None,
+        "cache_write": None,
+    }
+    write_run(
+        repo,
+        "2026-11-13T15-32-28",
+        make_run(
+            tokens={"claude-code/sonnet": partial}, tokens_by_model={"claude-code/sonnet": partial}
+        ),
+    )
+
+    lines = format_report(collect(repo, hand=zero_hand, tokens=no_tokens))
+
+    assert "tokens in 100 out n/a reasoning n/a cache read n/a (n/a)" in lines[1]
+    assert "cache write n/a cache share n/a" in lines[3]
 
 
 def test_format_report_with_no_runs(tmp_path: Path) -> None:
@@ -304,3 +390,13 @@ def test_hand_commits_counts_human_commits_on_step_files(tmp_path: Path) -> None
 
     assert hand_commits(repo, SINCE, ("src/app.py",)) == 1
     assert hand_commits(repo, SINCE, ()) is None
+
+
+def test_a_step_left_unmerged_on_a_protected_branch_still_counts_as_first_try(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    steps = {"hello-script": {"status": "needs_merge", "attempts": 1, "models": ["a/b"]}}
+    write_run(repo, "2026-11-13T15-32-28", make_run(steps=steps))
+    runs = collect(repo, hand=zero_hand, tokens=no_tokens)
+    assert runs[0].steps[0].first_try is True

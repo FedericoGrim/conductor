@@ -6,18 +6,23 @@ import json
 import os
 import subprocess
 import sys
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any, TextIO
 
 from conductor import billing, reviewer, settings, setup_tui, stats
+from conductor.autonomy import DEFAULT_AUTONOMY, FREE, LEVELS, effective, is_protected
 from conductor.commits import choose_commit_message
 from conductor.config import Config, ConfigError, Profile
 from conductor.escalation import RunState, run_step
 from conductor.harness import harness_for
 from conductor.log import RunLog
 from conductor.merge import merge_branch
+from conductor.overlap import describe, parallel_overlaps
 from conductor.plan import Plan, PlanError, Step
-from conductor.scheduler import APPROVED, CONFLICT, StepResult, run_plan
+from conductor.progress import Progress, StatusLine
+from conductor.scheduler import APPROVED, CONFLICT, NEEDS_MERGE, StepResult, run_plan
 from conductor.verify import CheckResult, run_checks
 from conductor.worker import (
     AttemptOutput,
@@ -45,14 +50,33 @@ def find_config(explicit: Path | None) -> Path:
     )
 
 
+class UnsupportedAutonomyError(ValueError):
+    pass
+
+
+def check_autonomy_available(plan: Plan, ceiling: str) -> None:
+    for step in plan.steps:
+        level = effective(ceiling, step.autonomy)
+        if level != FREE:
+            raise UnsupportedAutonomyError(
+                f"autonomy '{level}' is not available yet (step '{step.id}'); "
+                "only 'free' runs until the ask and guided levels land (#35)"
+            )
+
+
 def validate(args: argparse.Namespace) -> int:
     plan = Plan.load(args.plan)
+    has_config = args.config is not None or any(path.exists() for path in DEFAULT_CONFIG_PATHS)
+    config = Config.load(find_config(args.config)) if has_config else None
+    profile_ceiling = config.profile(None).autonomy if config else DEFAULT_AUTONOMY
+    plan.check_ceiling(args.autonomy or profile_ceiling)
     print(f"ok: {len(plan.steps)} steps")
-    if args.config is None and not any(path.exists() for path in DEFAULT_CONFIG_PATHS):
+    for overlap in parallel_overlaps(plan):
+        print(f"warning: {describe(overlap)}")
+    if config is None:
         return 0
-    config = Config.load(find_config(args.config))
     for profile in config.profiles.values():
-        for warning in profile.single_provider_warnings():
+        for warning in (*profile.single_provider_warnings(), *profile.unconfined_warnings()):
             print(f"warning: {warning}")
     return 0
 
@@ -71,6 +95,11 @@ def domain_rules(repo: Path, plan: Plan) -> tuple[str, ...]:
     return (*plan.rules, text) if text else plan.rules
 
 
+def tier_of(profile: Profile, model: str, step: Step) -> int:
+    level = next((index for index, models in enumerate(profile.tiers) if model in models), None)
+    return step.difficulty if level is None else level + 1
+
+
 async def execute_plan(
     repo: Path,
     plan: Plan,
@@ -78,11 +107,22 @@ async def execute_plan(
     log: RunLog,
     extra_args: list[str],
     rules: tuple[str, ...] = (),
+    progress: Progress | None = None,
+    status: StatusLine | None = None,
 ) -> dict[str, StepResult]:
     base = git(repo, "rev-parse", "--abbrev-ref", "HEAD").strip()
     run_name = log.directory.name
     worktrees = repo / ".conductor" / "worktrees" / run_name
     state = RunState()
+
+    def say(line: str) -> None:
+        if status is not None:
+            status.clear()
+        print(line, flush=True)
+
+    def show_progress() -> None:
+        if progress is not None and status is not None:
+            status.update(progress.summary())
 
     async def attempt(step: Step, number: int, model: str, prompt: str) -> AttemptOutput:
         branch = f"conductor/{run_name}/{step.id}-{number}"
@@ -90,7 +130,10 @@ async def execute_plan(
         create_worktree(repo, path, branch, base)
         harness = harness_for(profile, model)
         harness.prepare(path, profile)
-        print(f"[{step.id}] attempt {number} on {model}", flush=True)
+        say(f"[{step.id}] attempt {number} on {model}")
+        if progress is not None:
+            progress.attempt_started(step.id, number, tier_of(profile, model, step), model)
+            show_progress()
         return await run_attempt(
             path,
             base,
@@ -115,31 +158,53 @@ async def execute_plan(
         path = worktrees / f"{step.id}-{number}"
         return await run_checks(plan.verify_for(step), path, repo, plan.verify_timeout)
 
+    def record(step: Step, entry: dict[str, Any]) -> object:
+        written = log.attempt(step, entry)
+        if progress is not None:
+            progress.attempt_finished(step.id)
+            show_progress()
+        return written
+
     async def execute(step: Step) -> StepResult:
         result = await run_step(
             step,
             profile,
             attempt,
             judge,
-            log.attempt,
+            record,
             goal=plan.goal,
             state=state,
             check=check,
             verify=plan.verify_for(step),
         )
-        print(f"[{step.id}] {result.status}: {result.detail}", flush=True)
         numbers = [a["attempt"] for a in result.attempts]
         for number in numbers[:-1]:
             discard(step, number)
         if result.status == APPROVED and numbers:
-            branch = f"conductor/{run_name}/{step.id}-{numbers[-1]}"
-            problem = merge_branch(repo, branch, into=base)
-            if problem:
-                result.status = CONFLICT
-                result.detail = f"{problem} (branch {branch} kept)"
-            else:
-                discard(step, numbers[-1])
+            merge_approved(step, numbers[-1], result)
+        say(f"[{step.id}] {result.status}: {result.detail}")
+        if progress is not None:
+            progress.step_finished(step.id, result.status)
+            if status is not None:
+                status.step_done(progress.summary())
         return result
+
+    def merge_approved(step: Step, number: int, result: StepResult) -> None:
+        branch = f"conductor/{run_name}/{step.id}-{number}"
+        if is_protected(base):
+            result.status = NEEDS_MERGE
+            result.detail = (
+                f"'{base}' is protected: Conductor never merges into it; review and "
+                f"merge by hand with `git merge --no-ff {branch}`"
+            )
+            remove_worktree(repo, worktrees / f"{step.id}-{number}")
+            return
+        problem = merge_branch(repo, branch, into=base)
+        if problem:
+            result.status = CONFLICT
+            result.detail = f"{problem} (branch {branch} kept)"
+        else:
+            discard(step, number)
 
     def discard(step: Step, number: int) -> None:
         remove_worktree(repo, worktrees / f"{step.id}-{number}")
@@ -148,20 +213,53 @@ async def execute_plan(
     return await run_plan(plan, profile.max_parallel, execute)
 
 
+def progress_writer(stream: TextIO) -> Callable[[str], None]:
+    def write(text: str) -> None:
+        stream.write(text)
+        stream.flush()
+
+    return write
+
+
 def run(args: argparse.Namespace) -> int:
     repo = args.repo.resolve()
     config = Config.load(find_config(args.config))
     profile = config.profile(args.privacy)
     plan = Plan.load(args.plan)
+    ceiling = args.autonomy or profile.autonomy
+    plan.check_ceiling(ceiling)
+    check_autonomy_available(plan, ceiling)
+    for warning in profile.unconfined_warnings():
+        print(f"warning: {warning}", file=sys.stderr)
     rules = domain_rules(repo, plan)
     exclude_from_git(repo, ".conductor/")
     if git(repo, "status", "--porcelain").strip():
         print("error: repository has uncommitted changes; commit or stash them first")
         return 2
     brain_session = args.session or os.environ.get("OPENCODE_SESSION_ID") or None
-    log = RunLog.create(repo, plan, profile.name, brain_session=brain_session)
-    print(f"run {log.directory.name}: {len(plan.steps)} steps, privacy {profile.name}")
-    results = asyncio.run(execute_plan(repo, plan, profile, log, args.opencode_arg, rules))
+    log = RunLog.create(repo, plan, profile.name, brain_session=brain_session, autonomy=ceiling)
+    print(
+        f"run {log.directory.name}: {len(plan.steps)} steps, "
+        f"privacy {profile.name}, autonomy {ceiling}"
+    )
+    for overlap in parallel_overlaps(plan):
+        print(f"warning: {describe(overlap)}")
+    progress = Progress(
+        step_ids=[step.id for step in plan.steps], max_parallel=profile.max_parallel
+    )
+    status = StatusLine(write=progress_writer(sys.stderr), is_terminal=sys.stderr.isatty())
+    results = asyncio.run(
+        execute_plan(
+            repo,
+            plan,
+            profile,
+            log,
+            args.opencode_arg,
+            rules,
+            progress=progress,
+            status=status,
+        )
+    )
     log.finish(results)
     try:
         billing.record_run(
@@ -297,6 +395,11 @@ def build_parser() -> argparse.ArgumentParser:
     check = commands.add_parser("validate", help="check a plan.json")
     check.add_argument("plan", type=Path)
     check.add_argument("--config", type=Path, help="path to conductor.toml")
+    check.add_argument(
+        "--autonomy",
+        choices=LEVELS,
+        help="the ceiling to check the steps against (default: the default profile's)",
+    )
     check.set_defaults(handler=validate)
 
     execute = commands.add_parser("run", help="execute a plan.json")
@@ -304,6 +407,11 @@ def build_parser() -> argparse.ArgumentParser:
     execute.add_argument("--privacy", choices=None, help="profile name from conductor.toml")
     execute.add_argument("--config", type=Path, help="path to conductor.toml")
     execute.add_argument("--repo", type=Path, default=Path("."), help="repository to work in")
+    execute.add_argument(
+        "--autonomy",
+        choices=LEVELS,
+        help="the run's autonomy ceiling; a step may only lower it (default: the profile's)",
+    )
     execute.add_argument(
         "--opencode-arg",
         action="append",
@@ -372,6 +480,7 @@ def main(argv: list[str] | None = None) -> int:
         ConfigError,
         NotARepositoryError,
         settings.SettingsError,
+        UnsupportedAutonomyError,
     ) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2

@@ -1,6 +1,7 @@
 import json
 import os
 import stat
+import sys
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -38,6 +39,7 @@ def init_repo(tmp_path: Path) -> Path:
     git(repo, "init", "-q", "-b", "main")
     (repo / "README.md").write_text("hi\n")
     commit_work(repo, "init")
+    git(repo, "checkout", "-q", "-b", "feature/demo")
     return repo
 
 
@@ -52,6 +54,14 @@ def install_fake_opencode(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
 
 EXAMPLE_PLAN = Path(__file__).parent.parent / "examples" / "plan.json"
 
+NO_TOKENS: dict[str, None] = {
+    "input": None,
+    "output": None,
+    "reasoning": None,
+    "cache_read": None,
+    "cache_write": None,
+}
+
 
 def test_validate_accepts_the_example_plan(
     capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
@@ -59,6 +69,115 @@ def test_validate_accepts_the_example_plan(
     monkeypatch.setattr(cli, "DEFAULT_CONFIG_PATHS", ())
     assert cli.main(["validate", str(EXAMPLE_PLAN)]) == 0
     assert capsys.readouterr().out == "ok: 3 steps\n"
+
+
+def test_validate_warns_about_parallel_steps_with_overlapping_files(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(cli, "DEFAULT_CONFIG_PATHS", ())
+    plan = tmp_path / "plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "goal": "demo",
+                "steps": [
+                    {"id": "a", "spec": "write a", "files": ["src/a.py"], "difficulty": 1},
+                    {"id": "b", "spec": "write b", "files": ["src/a.py"], "difficulty": 1},
+                ],
+            }
+        )
+    )
+    assert cli.main(["validate", str(plan)]) == 0
+    out = capsys.readouterr().out
+    assert "ok: 2 steps" in out
+    assert "warning: steps 'a' and 'b' can run in parallel and both list src/a.py" in out
+
+
+def test_validate_no_warning_when_steps_depend_on_each_other(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(cli, "DEFAULT_CONFIG_PATHS", ())
+    plan = tmp_path / "plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "goal": "demo",
+                "steps": [
+                    {"id": "a", "spec": "write a", "files": ["src/a.py"], "difficulty": 1},
+                    {
+                        "id": "b",
+                        "spec": "write b",
+                        "files": ["src/a.py"],
+                        "difficulty": 1,
+                        "depends_on": ["a"],
+                    },
+                ],
+            }
+        )
+    )
+    assert cli.main(["validate", str(plan)]) == 0
+    out = capsys.readouterr().out
+    assert "ok: 2 steps" in out
+    assert "warning:" not in out
+
+
+def test_validate_no_warning_when_no_overlap(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(cli, "DEFAULT_CONFIG_PATHS", ())
+    plan = tmp_path / "plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "goal": "demo",
+                "steps": [
+                    {"id": "a", "spec": "write a", "files": ["src/a.py"], "difficulty": 1},
+                    {"id": "b", "spec": "write b", "files": ["src/b.py"], "difficulty": 1},
+                ],
+            }
+        )
+    )
+    assert cli.main(["validate", str(plan)]) == 0
+    out = capsys.readouterr().out
+    assert "ok: 2 steps" in out
+    assert "warning:" not in out
+
+
+def test_run_warns_about_parallel_steps_with_overlapping_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = init_repo(tmp_path)
+    install_fake_opencode(tmp_path, monkeypatch)
+    monkeypatch.setenv("TEST_CLI_KEY", "k")
+    config = tmp_path / "conductor.toml"
+    config.write_text(CONFIG)
+    plan = tmp_path / "plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "goal": "demo",
+                "steps": [
+                    {"id": "a", "spec": "write a", "files": ["src/a.py"], "difficulty": 1},
+                    {"id": "b", "spec": "write b", "files": ["src/a.py"], "difficulty": 1},
+                ],
+            }
+        )
+    )
+
+    def fake_post(url: str, headers: dict[str, str], body: dict[str, Any]) -> dict[str, Any]:
+        content = json.dumps({"ok": True, "reason": "good"})
+        return {"choices": [{"message": {"content": content}}], "usage": {"cost": 0.001}}
+
+    monkeypatch.setattr(reviewer, "http_post", fake_post)
+
+    code = cli.main(["run", str(plan), "--config", str(config), "--repo", str(repo)])
+
+    # The run proceeds (not refused), but steps may conflict due to fake opencode
+    # writing to the same output.txt. The key assertion is that the warning is printed.
+    assert code in (0, 1), capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "run" in out.splitlines()[0]
+    assert "warning: steps 'a' and 'b' can run in parallel and both list src/a.py" in out
 
 
 SINGLE_PROVIDER = """
@@ -148,6 +267,17 @@ def test_run_executes_reviews_and_merges(
         "question": None,
         "cost": pytest.approx(0.022),
         "subscription": None,
+        "autonomy": "free",
+        "tokens": {
+            "openrouter/cheap": NO_TOKENS,
+            "openrouter/judge": NO_TOKENS,
+            "openrouter/strong": NO_TOKENS,
+        },
+    }
+    assert run["tokens_by_model"] == {
+        "openrouter/cheap": NO_TOKENS,
+        "openrouter/judge": NO_TOKENS,
+        "openrouter/strong": NO_TOKENS,
     }
     assert run["brain_session"] is None
     assert run["subscription"] is None
@@ -392,7 +522,7 @@ def test_stats_prints_the_run_and_step_lines(
     )
     assert lines[1] == (
         "  step a  approved  attempts 1  first try yes  models openrouter/cheap  "
-        "cost 0.0100 USD  subscription 0.0200 USD  hand commits 0"
+        "cost 0.0100 USD  subscription 0.0200 USD  hand commits 0  tokens n/a"
     )
     assert lines[2] == "  total  cost 0.0100 USD  subscription 0.0200 USD"
     assert lines[3] == "  brain n/a"
@@ -597,3 +727,195 @@ def test_run_takes_the_brain_session_from_the_environment_without_the_option(
     run_dir = next((repo / ".conductor" / "runs").iterdir())
     run = json.loads((run_dir / "run.json").read_text())
     assert run["brain_session"] == {"harness": "opencode", "id": "ses_env"}
+
+
+def write_plan(tmp_path: Path, step_fields: dict[str, Any]) -> Path:
+    plan = tmp_path / "plan.json"
+    steps = [{"id": "a", "spec": "write output", "difficulty": 1, **step_fields}]
+    plan.write_text(json.dumps({"goal": "demo", "steps": steps}))
+    return plan
+
+
+def test_validate_rejects_a_step_above_the_autonomy_ceiling(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(cli, "DEFAULT_CONFIG_PATHS", ())
+    plan = write_plan(tmp_path, {"autonomy": "free"})
+    assert cli.main(["validate", str(plan), "--autonomy", "guided"]) == 2
+    assert "above the ceiling 'guided'" in capsys.readouterr().err
+
+
+def test_validate_takes_the_ceiling_from_the_default_profile(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config = tmp_path / "conductor.toml"
+    config.write_text(
+        CONFIG.replace(
+            'reviewer = "openrouter/judge"', 'reviewer = "openrouter/judge"\nautonomy = "ask"'
+        )
+    )
+    plan = write_plan(tmp_path, {"autonomy": "guided"})
+    assert cli.main(["validate", str(plan), "--config", str(config)]) == 2
+    assert "above the ceiling 'ask'" in capsys.readouterr().err
+
+
+PI_CONFIG = """
+default_privacy = "medium"
+[privacy.medium]
+tiers = [["pi-router/a", "openrouter/a"]]
+reviewer = "openrouter/r"
+
+[privacy.medium.providers.openrouter]
+base_url = "https://openrouter.ai/api/v1"
+api_key_env = "OPENROUTER_API_KEY"
+
+[privacy.medium.providers.pi-router]
+harness = "pi"
+base_url = "https://openrouter.ai/api/v1"
+api_key_env = "OPENROUTER_API_KEY"
+"""
+
+
+def test_validate_warns_that_pi_workers_ignore_the_fixed_denials(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config = tmp_path / "conductor.toml"
+    config.write_text(PI_CONFIG)
+    assert cli.main(["validate", str(EXAMPLE_PLAN), "--config", str(config)]) == 0
+    assert (
+        "warning: privacy.medium: provider 'pi-router' runs on Pi, which has no permission "
+        "system: its workers are not held to the fixed denials (push, publish, release, "
+        "protected branches, edits outside the worktree)\n"
+    ) in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("autonomy", ["ask", "guided"])
+def test_run_refuses_the_autonomy_levels_that_are_not_implemented_yet(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    autonomy: str,
+) -> None:
+    code, repo, _ = run_verified_plan(
+        tmp_path, monkeypatch, {}, extra_args=("--autonomy", autonomy)
+    )
+    assert code == 2
+    assert f"autonomy '{autonomy}' is not available yet" in capsys.readouterr().err
+    assert not (repo / ".conductor" / "runs").exists()
+
+
+def test_run_refuses_a_step_that_lowers_its_autonomy_until_the_levels_exist(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    steps = [{"id": "a", "spec": "write output", "difficulty": 1, "autonomy": "ask"}]
+    code, _, _ = run_verified_plan(tmp_path, monkeypatch, {"steps": steps})
+    assert code == 2
+    assert "autonomy 'ask' is not available yet" in capsys.readouterr().err
+
+
+def test_run_refuses_a_step_above_the_ceiling_before_any_attempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    steps = [{"id": "a", "spec": "write output", "difficulty": 1, "autonomy": "free"}]
+    code, repo, _ = run_verified_plan(
+        tmp_path, monkeypatch, {"steps": steps}, extra_args=("--autonomy", "guided")
+    )
+    assert code == 2
+    assert "above the ceiling 'guided'" in capsys.readouterr().err
+    assert not (repo / "output.txt").exists()
+
+
+def test_run_records_the_autonomy_of_the_run_and_of_each_step(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    code, repo, _ = run_verified_plan(tmp_path, monkeypatch, {}, extra_args=("--autonomy", "free"))
+    assert code == 0
+    run_dir = next((repo / ".conductor" / "runs").iterdir())
+    run = json.loads((run_dir / "run.json").read_text())
+    assert run["autonomy"] == "free"
+    assert run["steps"]["a"]["autonomy"] == "free"
+
+
+@pytest.mark.parametrize("protected", ["main", "develop"])
+def test_run_never_merges_into_a_protected_branch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    protected: str,
+) -> None:
+    def start_on_protected_branch(repo: Path) -> None:
+        git(repo, "checkout", "-q", "-B", protected)
+
+    code, repo, _ = run_verified_plan(tmp_path, monkeypatch, {}, prepare=start_on_protected_branch)
+
+    assert code == 1
+    run_dir = next((repo / ".conductor" / "runs").iterdir())
+    step = json.loads((run_dir / "run.json").read_text())["steps"]["a"]
+    branch = f"conductor/{run_dir.name}/a-1"
+    assert step["status"] == "needs_merge"
+    assert f"'{protected}' is protected" in step["detail"]
+    assert f"git merge --no-ff {branch}" in step["detail"]
+    assert "chore(conductor): merge" not in git(repo, "log", "--oneline")
+    assert git(repo, "branch", "--list", branch).strip()
+    assert git(repo, "worktree", "list").count("\n") == 1
+
+
+def run_two_steps_with_progress(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    is_terminal: bool,
+) -> tuple[str, str]:
+    repo = init_repo(tmp_path)
+    install_fake_opencode(tmp_path, monkeypatch)
+    monkeypatch.setenv("TEST_CLI_KEY", "k")
+    config = tmp_path / "conductor.toml"
+    config.write_text(CONFIG)
+    plan = tmp_path / "plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "goal": "demo",
+                "steps": [
+                    {"id": "a", "spec": "write output", "difficulty": 1},
+                    {"id": "b", "spec": "write more", "difficulty": 1, "depends_on": ["a"]},
+                ],
+            }
+        )
+    )
+
+    def approve(url: str, headers: dict[str, str], body: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "choices": [{"message": {"content": '{"ok": true, "reason": "good"}'}}],
+            "usage": {"cost": 0.001},
+        }
+
+    monkeypatch.setattr(reviewer, "http_post", approve)
+    monkeypatch.setattr(sys.stderr, "isatty", lambda: is_terminal)
+    code = cli.main(["run", str(plan), "--config", str(config), "--repo", str(repo)])
+    assert code == 0
+    captured = capsys.readouterr()
+    return captured.out, captured.err
+
+
+def test_a_terminal_gets_a_status_line_rewritten_after_every_event(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out, err = run_two_steps_with_progress(tmp_path, monkeypatch, capsys, is_terminal=True)
+    assert "[a] approved: good" in out and "[b] approved: good" in out
+    updates = [chunk for chunk in err.split("\r\x1b[2K") if chunk.startswith("progress:")]
+    assert len(updates) >= 6
+    assert err.endswith("\n")
+    assert err.count("\n") == 2
+
+
+def test_redirected_output_gets_one_plain_line_per_finished_step(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out, err = run_two_steps_with_progress(tmp_path, monkeypatch, capsys, is_terminal=False)
+    assert "[a] attempt 1 on openrouter/cheap" in out
+    assert "\x1b" not in err and "\r" not in err
+    lines = err.splitlines()
+    assert len(lines) == 2
+    assert lines[0].startswith("progress: 1/2 done")
+    assert lines[1].startswith("progress: 2/2 done")

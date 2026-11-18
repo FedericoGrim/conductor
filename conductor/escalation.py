@@ -166,6 +166,7 @@ def attempt_entry(
         "review_fallbacks": [],
         "second_opinion": None,
         "cost": cost,
+        "tokens": {"worker": output.tokens.to_dict(), "reviewer": None},
     }
 
 
@@ -180,6 +181,7 @@ def review_entry(model: str, verdict: Verdict, checks: Iterable[CheckResult]) ->
         "usage": verdict.usage,
         "error": asdict(verdict.error) if verdict.error else None,
         "cost": verdict.cost,
+        "tokens": verdict.tokens.to_dict(),
     }
 
 
@@ -337,4 +339,5 @@ class StepRun:
         ]
         entry["review"] = review_entry(reviewer, verdict, checks)
         entry["cost"]["reviewer"] = verdict.cost
+        entry["tokens"]["reviewer"] = verdict.tokens.to_dict()
         return verdict

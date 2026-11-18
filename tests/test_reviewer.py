@@ -14,7 +14,8 @@ from conductor.errors import (
     UNCLASSIFIED,
     ModelError,
 )
-from conductor.reviewer import Verdict, review, review_request
+from conductor.reviewer import Verdict, review, review_request, usage_tokens
+from conductor.tokens import Tokens
 from conductor.verify import CheckResult
 from tests.factories import make_profile
 
@@ -328,7 +329,27 @@ def test_the_domain_rules_reach_the_reviewer_as_their_own_section(
     body = captured_request(monkeypatch, rules=("Totals never go negative", "No ORM in domain/"))
     prompt = body["messages"][-1]["content"]
     assert "## Domain rules\n- Totals never go negative\n- No ORM in domain/" in prompt
+    assert prompt.index("## Domain rules") < prompt.index("## Specification")
     assert prompt.index("## Domain rules") < prompt.index("## Diff")
+
+
+def test_domain_rules_come_before_specification_when_rules_exist() -> None:
+    prompt = review_request("spec", "+diff", ("Rule 1", "Rule 2"), [])
+    assert prompt.startswith("## Domain rules\n- Rule 1\n- Rule 2\n\n## Specification\nspec")
+
+
+def test_requests_with_same_rules_share_prefix() -> None:
+    rules = ("Rule A", "Rule B")
+    prompt1 = review_request("spec 1", "+diff 1", rules, [CheckResult("cmd", 0, "out", 1.0)])
+    prompt2 = review_request("spec 2", "+diff 2", rules, [])
+    expected_prefix = "## Domain rules\n- Rule A\n- Rule B\n\n## Specification\n"
+    assert prompt1.startswith(expected_prefix)
+    assert prompt2.startswith(expected_prefix)
+
+
+def test_without_rules_the_request_starts_with_specification() -> None:
+    prompt = review_request("spec", "+diff", (), [])
+    assert prompt.startswith("## Specification\nspec")
 
 
 def test_the_verification_results_reach_the_reviewer(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -402,3 +423,68 @@ def test_the_system_prompt_lists_the_categories(monkeypatch: pytest.MonkeyPatch)
     assert '"category"' in system
     for category in ("types", "imports", "failing-tests", "spec", "logic", "commit"):
         assert category in system
+
+
+def test_usage_tokens_with_full_openrouter_usage() -> None:
+
+    usage = {
+        "prompt_tokens": 1200,
+        "completion_tokens": 300,
+        "completion_tokens_details": {"reasoning_tokens": 50},
+        "prompt_tokens_details": {"cached_tokens": 200},
+    }
+    tokens = usage_tokens(usage)
+    assert tokens == Tokens(input=1000, output=300, reasoning=50, cache_read=200, cache_write=None)
+
+
+def test_usage_tokens_with_only_prompt_and_completion() -> None:
+
+    usage = {"prompt_tokens": 500, "completion_tokens": 150}
+    tokens = usage_tokens(usage)
+    assert tokens == Tokens(
+        input=500, output=150, reasoning=None, cache_read=None, cache_write=None
+    )
+
+
+def test_usage_tokens_with_empty_dict() -> None:
+
+    usage: dict[str, Any] = {}
+    tokens = usage_tokens(usage)
+    assert tokens == Tokens()
+
+
+def test_usage_tokens_with_non_int_values() -> None:
+
+    usage = {
+        "prompt_tokens": "many",
+        "completion_tokens": True,
+        "completion_tokens_details": {"reasoning_tokens": "some"},
+        "prompt_tokens_details": {"cached_tokens": 1.5},
+    }
+    tokens = usage_tokens(usage)
+    assert tokens == Tokens()
+
+
+def test_usage_tokens_with_cache_write() -> None:
+
+    usage = {
+        "prompt_tokens": 1000,
+        "completion_tokens": 200,
+        "prompt_tokens_details": {"cached_tokens": 100, "cache_write_tokens": 50},
+    }
+    tokens = usage_tokens(usage)
+    assert tokens == Tokens(input=900, output=200, reasoning=None, cache_read=100, cache_write=50)
+
+
+def test_verdict_tokens_property() -> None:
+
+    usage = {
+        "prompt_tokens": 800,
+        "completion_tokens": 200,
+        "completion_tokens_details": {"reasoning_tokens": 30},
+        "prompt_tokens_details": {"cached_tokens": 100},
+    }
+    verdict = Verdict(True, "ok", "{}", usage=usage)
+    assert verdict.tokens == Tokens(
+        input=700, output=200, reasoning=30, cache_read=100, cache_write=None
+    )

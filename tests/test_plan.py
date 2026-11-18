@@ -158,3 +158,27 @@ def test_rejects_a_malformed_step_verify() -> None:
     bad["verify"] = "pytest"
     with pytest.raises(PlanError, match="step 'a': verify must be a list of non-empty strings"):
         Plan.from_dict({"goal": "g", "steps": [bad]})
+
+
+def test_a_step_may_declare_its_autonomy() -> None:
+    plan = Plan.from_dict({"goal": "g", "steps": [{**step("a"), "autonomy": "guided"}, step("b")]})
+    assert plan.steps[0].autonomy == "guided"
+    assert plan.steps[1].autonomy is None
+
+
+def test_rejects_an_unknown_autonomy() -> None:
+    with pytest.raises(PlanError, match="step 'a': autonomy must be one of ask, guided, free"):
+        Plan.from_dict({"goal": "g", "steps": [{**step("a"), "autonomy": "yolo"}]})
+
+
+def test_a_step_above_the_ceiling_is_rejected() -> None:
+    plan = Plan.from_dict({"goal": "g", "steps": [{**step("a"), "autonomy": "free"}]})
+    with pytest.raises(
+        PlanError, match="step 'a' asks for autonomy 'free' above the ceiling 'guided'"
+    ):
+        plan.check_ceiling("guided")
+
+
+def test_steps_at_or_below_the_ceiling_pass() -> None:
+    steps = [{**step("a"), "autonomy": "ask"}, {**step("b"), "autonomy": "guided"}, step("c")]
+    Plan.from_dict({"goal": "g", "steps": steps}).check_ceiling("guided")

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from conductor.autonomy import DEFAULT_AUTONOMY
 from conductor.config import (
     DEFAULT_HARNESS,
     DEFAULT_TRANSIENT_ATTEMPTS,
@@ -96,6 +98,7 @@ class ProfileDraft:
     transient_attempts: int = DEFAULT_TRANSIENT_ATTEMPTS
     fallbacks: list[list[str]] = field(default_factory=lambda: no_fallbacks(DIFFICULTY_LEVELS))
     reviewer_fallbacks: list[str] = field(default_factory=list)
+    autonomy: str = DEFAULT_AUTONOMY
 
     @classmethod
     def from_profile(cls, profile: Profile) -> ProfileDraft:
@@ -115,6 +118,7 @@ class ProfileDraft:
             transient_attempts=profile.transient_attempts,
             fallbacks=fallbacks,
             reviewer_fallbacks=list(profile.reviewers[1:]),
+            autonomy=profile.autonomy,
         )
 
     def to_profile(self) -> Profile:
@@ -129,6 +133,7 @@ class ProfileDraft:
             reviewers=(self.reviewer, *self.reviewer_fallbacks),
             max_parallel=self.max_parallel,
             transient_attempts=self.transient_attempts,
+            autonomy=self.autonomy,
         )
 
     def filled(self) -> list[str]:
@@ -317,6 +322,53 @@ class SetupState:
         profile.reviewer = model.strip()
         if profile.reviewer == "brain":
             profile.reviewer_fallbacks = []
+        return profile
+
+    def routable_models(self) -> list[str]:
+        profile = self.draft()
+        models = [
+            model
+            for tier, fallbacks in zip(profile.tiers, profile.fallbacks, strict=True)
+            if tier != EMPTY_SLOT
+            for model in (tier, *fallbacks)
+        ]
+        if profile.reviewer not in (EMPTY_SLOT, "brain"):
+            models += [profile.reviewer, *profile.reviewer_fallbacks]
+        return list(dict.fromkeys(models))
+
+    def model_options_text(self, model: str) -> str:
+        return json.dumps(self.model_options_of(model), sort_keys=True)
+
+    def set_model_options(self, model: str, text: str) -> ProfileDraft:
+        try:
+            options = json.loads(text)
+        except json.JSONDecodeError as error:
+            raise SetupError(f"request options must be valid JSON: {error.msg}") from error
+        if not isinstance(options, dict):
+            raise SetupError("request options must be a JSON object")
+        return self.store_model_options(model, options)
+
+    def model_options_of(self, model: str) -> dict[str, Any]:
+        profile = self.draft()
+        provider = profile.providers.get(provider_of(model))
+        if provider is None:
+            return {}
+        return dict(provider.model_options.get(model[len(provider.name) + 1 :], {}))
+
+    def store_model_options(self, model: str, options: dict[str, Any]) -> ProfileDraft:
+        profile = self.draft()
+        if model not in self.routable_models():
+            raise SetupError(
+                f"{model} is not a level model or a reviewer of profile {profile.name}"
+            )
+        provider = profile.providers.get(provider_of(model))
+        if provider is None:
+            raise SetupError(f"add provider '{provider_of(model)}' first")
+        key = model[len(provider.name) + 1 :]
+        if options:
+            provider.model_options[key] = options
+        else:
+            provider.model_options.pop(key, None)
         return profile
 
     def set_default_privacy(self, name: str) -> None:

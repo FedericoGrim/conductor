@@ -20,6 +20,7 @@ Explore the repository first. Then write `plan.json` in the repository root:
 - `verify` (plan level, or per step to replace it; `[]` drops it): shell commands Conductor runs in the step's worktree before any review. Put the repository's type check and linter there, not only the tests: a failure rejects the attempt with the command's output and escalates, a passed check settles its problems for the reviewer, and the reviewer only judges what machines cannot. The reviewer only sees verified diffs. The worktree has no virtualenv: use `$CONDUCTOR_REPO`, the main repository, e.g. `$CONDUCTOR_REPO/.venv/bin/pytest -q tests/test_core.py`. Prefer the tests of the step to the whole suite when steps run in parallel; `verify_timeout` (seconds, default 600) bounds each command.
 - `commit` (optional, per step): a Conventional Commit subject when you already know it, e.g. `feat(cli): add stats`. Otherwise the worker proposes one on a `COMMIT:` line at the end of its reply, so a step rarely needs it.
 - `rules` (plan level) and `rules_file` (a file of the repository): the domain rules the reviewer must enforce — ubiquitous language, invariants, boundaries between modules. Put invariants a diff alone cannot show here.
+- Language: write `goal`, every `spec`, `rules` and any `answers` in English, whatever language the conversation is in. Tokenizers spend more tokens on other languages, and the cost repeats for every worker, review and escalation. Quote verbatim, in their own language, only the strings the product must show to its users.
 - The reviewer rejects new behaviour that comes without tests in the diff, so ask for tests in the `spec` of every step that changes behaviour.
 - Steps that run in parallel (no dependency between them) must not touch the same files.
 - A tier may live on a different provider from the one before it: model ids are `<provider>/<model>` and the provider comes from the user's `conductor.toml`. Do not invent ids; ask, or read the profile with `conductor setup` first.
@@ -34,7 +35,7 @@ Ask the user which privacy level to use if they have not said (`low`, `medium`, 
 conductor run plan.json --privacy <level>
 ```
 
-The repository must be clean (commit or stash first). Do not edit files while it runs.
+The repository must be clean (commit or stash first) and should be on a feature branch: on `main` or `develop` approved steps are not merged. Do not edit files while it runs. `--autonomy` sets the run's ceiling (only `free` runs for now); a step may lower it with `autonomy`, never raise it.
 
 ## 3. Read the result
 
@@ -45,6 +46,7 @@ The command prints the run directory. Open `<run>/run.json` and handle each step
 - `unavailable`: every model of the level hit a model or provider error (rate limit, outage, bad key, no credit, context exceeded), not a judgement on the work. Read the last attempt's `error`; rerun the step later, or with another `--privacy` profile, or implement it yourself. Do not raise its `difficulty` for this. If the error is a key or credit problem, tell the user.
 - `needs_answer`: the worker stopped on a decision the spec leaves open; the question, its options and what the worker already established are in `question`. Answer it yourself only when the spec, the code or decisions already taken settle it; otherwise ask the user. Then rerun a plan containing that step (with an `answers` list: `[{"question": "...", "answer": "..."}]`) and its unfinished dependents. The step starts over; nothing from the questioning attempt was merged.
 - `conflict`: the branch named in `detail` is kept; resolve the merge yourself.
+- `needs_merge`: the run started on `main` or `develop`, where Conductor never merges; the approved branch named in `detail` is kept. Review it and merge it yourself only if the user wants it there, otherwise run from a feature branch next time.
 - `needs_brain_review`: the profile has `reviewer = "brain"`, or the reviewer failed (the last attempt's `review.error` says why); read the diff and merge the branch yourself if correct, otherwise rerun with a sharper spec.
 - `skipped`: a dependency did not get approved; rerun once it is fixed.
 

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from conductor import catalog, credentials
+from conductor.autonomy import forbidden_commands
 from conductor.config import Profile, provider_of
 from conductor.errors import (
     MODEL_UNSUITABLE,
@@ -24,6 +25,7 @@ from conductor.privacy import (
     pi_key_variables,
     write_pi_config,
 )
+from conductor.tokens import Tokens
 from conductor.worker import Events, Harness, exclude_from_git, no_environment
 
 OPENCODE_CONFIG_NAME = "opencode.json"
@@ -39,6 +41,12 @@ ERROR_KINDS = {
     "provider.quota": PROVIDER_UNUSABLE,
     "provider.no-route": MODEL_UNSUITABLE,
 }
+
+
+def _int_or_none(value: object) -> int | None:
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    return None
 
 
 def write_opencode_config(worktree: Path, config: dict[str, Any]) -> None:
@@ -90,6 +98,32 @@ def events_cost(events: Events) -> float:
     return total
 
 
+def opencode_tokens(events: Events) -> Tokens:
+    """Sum tokens from OpenCode step_finish events."""
+    result = Tokens()
+    for event in events:
+        if event.get("type") != "step_finish":
+            continue
+        part = event.get("part")
+        tokens = part.get("tokens") if isinstance(part, dict) else None
+        if not isinstance(tokens, dict):
+            continue
+        result = result.plus(
+            Tokens(
+                input=_int_or_none(tokens.get("input")),
+                output=_int_or_none(tokens.get("output")),
+                reasoning=_int_or_none(tokens.get("reasoning")),
+                cache_read=_int_or_none(tokens.get("cache", {}).get("read"))
+                if isinstance(tokens.get("cache"), dict)
+                else None,
+                cache_write=_int_or_none(tokens.get("cache", {}).get("write"))
+                if isinstance(tokens.get("cache"), dict)
+                else None,
+            )
+        )
+    return result
+
+
 def final_text(events: Events) -> str:
     for event in reversed(events):
         part = event.get("part")
@@ -132,6 +166,11 @@ def prepare_claude_code(worktree: Path, profile: Profile) -> None:
     return None
 
 
+def claude_denied_tools() -> str:
+    # The "=" form: the flag is variadic and would otherwise swallow the prompt.
+    return "--disallowedTools=" + ",".join(f"Bash({command})" for command in forbidden_commands())
+
+
 def claude_build_command(model: str, prompt: str, extra_args: list[str]) -> list[str]:
     return [
         "claude",
@@ -150,6 +189,7 @@ def claude_build_command(model: str, prompt: str, extra_args: list[str]) -> list
         "--permission-mode",
         "acceptEdits",
         "--allowedTools=Bash",
+        claude_denied_tools(),
         "--model",
         model.split("/", 1)[-1],
         *extra_args,
@@ -177,6 +217,24 @@ def claude_subscription_cost(events: Events) -> float:
             if isinstance(reported, int | float):
                 return float(reported)
     return 0.0
+
+
+def claude_tokens(events: Events) -> Tokens:
+    """Extract tokens from the last Claude Code result event."""
+    for event in reversed(events):
+        if event.get("type") != CLAUDE_RESULT:
+            continue
+        usage = event.get("usage")
+        if not isinstance(usage, dict):
+            return Tokens()
+        return Tokens(
+            input=_int_or_none(usage.get("input_tokens")),
+            output=_int_or_none(usage.get("output_tokens")),
+            reasoning=None,
+            cache_read=_int_or_none(usage.get("cache_read_input_tokens")),
+            cache_write=_int_or_none(usage.get("cache_creation_input_tokens")),
+        )
+    return Tokens()
 
 
 def claude_final_text(events: Events) -> str:
@@ -288,8 +346,17 @@ def pi_prices(profile: Profile) -> dict[str, dict[str, float]]:
     return prices
 
 
+def pi_reasoning_models(profile: Profile) -> frozenset[str]:
+    """The catalog's reasoning model ids of the profile's Pi providers."""
+    reasoning: set[str] = set()
+    for provider in profile.providers.values():
+        if provider.harness == "pi" and provider.has_endpoint:
+            reasoning |= catalog.reasoning_models(provider.base_url)
+    return frozenset(reasoning)
+
+
 def pi_prepare(worktree: Path, profile: Profile) -> None:
-    write_pi_config(worktree, pi_config(profile, pi_prices(profile)))
+    write_pi_config(worktree, pi_config(profile, pi_prices(profile), pi_reasoning_models(profile)))
 
 
 def pi_session_id(events: Events) -> str | None:
@@ -319,6 +386,28 @@ def pi_cost(events: Events) -> float:
         if isinstance(reported, int | float):
             total += float(reported)
     return total
+
+
+def pi_tokens(events: Events) -> Tokens:
+    """Sum tokens from Pi turn_end events."""
+    result = Tokens()
+    for event in events:
+        if event.get("type") != PI_TURN_END:
+            continue
+        message = event.get("message")
+        usage = message.get("usage") if isinstance(message, dict) else None
+        if not isinstance(usage, dict):
+            continue
+        result = result.plus(
+            Tokens(
+                input=_int_or_none(usage.get("input")),
+                output=_int_or_none(usage.get("output")),
+                reasoning=None,
+                cache_read=_int_or_none(usage.get("cacheRead")),
+                cache_write=_int_or_none(usage.get("cacheWrite")),
+            )
+        )
+    return result
 
 
 def pi_assistant_messages(events: Events) -> list[dict[str, Any]]:
@@ -409,6 +498,7 @@ OPENCODE = Harness(
     cost=events_cost,
     error=attempt_error,
     final_text=final_text,
+    tokens=opencode_tokens,
 )
 
 CLAUDE_CODE = Harness(
@@ -422,6 +512,7 @@ CLAUDE_CODE = Harness(
     error=claude_error,
     final_text=claude_final_text,
     subscription_cost=claude_subscription_cost,
+    tokens=claude_tokens,
 )
 
 PI = Harness(
@@ -434,6 +525,7 @@ PI = Harness(
     cost=pi_cost,
     error=pi_error,
     final_text=pi_final_text,
+    tokens=pi_tokens,
 )
 
 HARNESSES = {harness.name: harness for harness in (OPENCODE, CLAUDE_CODE, PI)}

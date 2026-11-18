@@ -23,6 +23,7 @@ class CatalogModel:
     cache_write_price: float
     context: int
     supports_tools: bool
+    supports_reasoning: bool = False
 
     @property
     def is_free(self) -> bool:
@@ -55,6 +56,7 @@ def parse_model(entry: dict[str, Any]) -> CatalogModel | None:
     is_batch_only = str(entry.get("id", "")).endswith(":batch")
     if not is_language_model or is_batch_only or prompt < 0 or completion < 0:
         return None
+    supported_parameters = entry.get("supported_parameters") or []
     return CatalogModel(
         id=str(entry["id"]),
         prompt_price=prompt,
@@ -62,7 +64,9 @@ def parse_model(entry: dict[str, Any]) -> CatalogModel | None:
         cache_read_price=cache_read,
         cache_write_price=cache_write,
         context=int(entry.get("context_length") or entry.get("context_window") or 0),
-        supports_tools="tools" in (entry.get("supported_parameters") or []),
+        supports_tools="tools" in supported_parameters,
+        supports_reasoning="reasoning" in supported_parameters
+        or "reasoning_effort" in supported_parameters,
     )
 
 
@@ -101,7 +105,23 @@ def select_models(
     )
 
 
-_MODEL_COSTS_CACHE: dict[str, dict[str, dict[str, float]]] = {}
+_MODELS_CACHE: dict[str, list[CatalogModel]] = {}
+
+
+def _cached_models(base_url: str, get: Get | None = None) -> list[CatalogModel]:
+    """Return the parsed models for base_url, fetching the endpoint once per base_url.
+
+    On any CatalogError the empty list is cached and returned; this never raises.
+    """
+    if base_url in _MODELS_CACHE:
+        return _MODELS_CACHE[base_url]
+    get = get or http_get
+    try:
+        models = parse_models(get(f"{base_url.rstrip('/')}/models"))
+    except CatalogError:
+        models = []
+    _MODELS_CACHE[base_url] = models
+    return models
 
 
 def model_costs(base_url: str, get: Get | None = None) -> dict[str, dict[str, float]]:
@@ -111,29 +131,28 @@ def model_costs(base_url: str, get: Get | None = None) -> dict[str, dict[str, fl
     On any CatalogError return {} and never raise.
     Results are cached per base_url.
     """
-    if base_url in _MODEL_COSTS_CACHE:
-        return _MODEL_COSTS_CACHE[base_url]
-
-    get = get or http_get
-    try:
-        payload = get(f"{base_url.rstrip('/')}/models")
-        models = parse_models(payload)
-    except CatalogError:
-        _MODEL_COSTS_CACHE[base_url] = {}
-        return {}
-
     result: dict[str, dict[str, float]] = {}
-    for model in models:
+    for model in _cached_models(base_url, get):
         result[model.id] = {
             "input": model.prompt_price,
             "output": model.completion_price,
             "cacheRead": model.cache_read_price,
             "cacheWrite": model.cache_write_price,
         }
-    _MODEL_COSTS_CACHE[base_url] = result
     return result
 
 
+def reasoning_models(base_url: str, get: Get | None = None) -> frozenset[str]:
+    """Return the ids of the models at base_url whose catalog entry supports reasoning.
+
+    On any CatalogError return an empty frozenset and never raise.
+    Results are cached per base_url.
+    """
+    return frozenset(
+        model.id for model in _cached_models(base_url, get) if model.supports_reasoning
+    )
+
+
 def forget_prices() -> None:
-    """Clear the model costs cache. For tests and long-lived processes."""
-    _MODEL_COSTS_CACHE.clear()
+    """Clear the model cache. For tests and long-lived processes."""
+    _MODELS_CACHE.clear()
