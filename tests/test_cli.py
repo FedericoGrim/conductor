@@ -53,6 +53,14 @@ def install_fake_opencode(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
 
 EXAMPLE_PLAN = Path(__file__).parent.parent / "examples" / "plan.json"
 
+NO_TOKENS: dict[str, None] = {
+    "input": None,
+    "output": None,
+    "reasoning": None,
+    "cache_read": None,
+    "cache_write": None,
+}
+
 
 def test_validate_accepts_the_example_plan(
     capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
@@ -150,6 +158,16 @@ def test_run_executes_reviews_and_merges(
         "cost": pytest.approx(0.022),
         "subscription": None,
         "autonomy": "free",
+        "tokens": {
+            "openrouter/cheap": NO_TOKENS,
+            "openrouter/judge": NO_TOKENS,
+            "openrouter/strong": NO_TOKENS,
+        },
+    }
+    assert run["tokens_by_model"] == {
+        "openrouter/cheap": NO_TOKENS,
+        "openrouter/judge": NO_TOKENS,
+        "openrouter/strong": NO_TOKENS,
     }
     assert run["brain_session"] is None
     assert run["subscription"] is None
