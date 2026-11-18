@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.6.1](https://github.com/FedericoGrim/conductor/compare/conductor-v0.6.0...conductor-v0.6.1) (2026-11-16)
+
+
+### Features
+
+* **catalog:** read the cache prices and look a base URL's prices up once ([a5424b7](https://github.com/FedericoGrim/conductor/commit/a5424b7f839da54ba8caa6d203b69c6043ac554e))
+* declare the model prices so a Pi step records a real cost ([3bf7815](https://github.com/FedericoGrim/conductor/commit/3bf7815e7cd8809446d68772b5299b8a5a74890a))
+* **privacy:** declare each model's price in the Pi configuration ([98e42e1](https://github.com/FedericoGrim/conductor/commit/98e42e18b2915493e2e8c8b8c563ef6a75d7fad3))
+
+
+### Bug Fixes
+
+* a model unavailable in the region is a model error, and working free levels ([91068ac](https://github.com/FedericoGrim/conductor/commit/91068ac1c2184673cc37b67a9d3022350c46bb0d))
+* **defaults:** replace the free models that are unavailable or unstable ([0e3874a](https://github.com/FedericoGrim/conductor/commit/0e3874ad255ac71fbfdd8fadfa5b9ad8641f3934))
+* **errors:** treat a model unavailable in the region as unsuitable ([07f2213](https://github.com/FedericoGrim/conductor/commit/07f2213805cc6baf61cdf9797cc9a08eec6c3eb1))
+
+
+### Documentation
+
+* describe the region rule and record decision 025 ([5b99a72](https://github.com/FedericoGrim/conductor/commit/5b99a729daff183d22b01f51deae6c50a53ed171))
+* drop the duplicated Refs 38 in decision 024 ([0cf90f8](https://github.com/FedericoGrim/conductor/commit/0cf90f8820846b8c6c4316912ba7665237dadc71))
+* record the Pi prices and update decision 024 ([cd62d70](https://github.com/FedericoGrim/conductor/commit/cd62d70252734cd6f0c981e5722fb1ba6e67519f))
+
+
+### Miscellaneous Chores
+
+* release ([7d77e8a](https://github.com/FedericoGrim/conductor/commit/7d77e8ab62af4ae5eca26021d23bcf2f2bdf4b2c))
+
 ## [0.6.0](https://github.com/FedericoGrim/conductor/compare/conductor-v0.5.1...conductor-v0.6.0) (2026-11-14)
 
 
