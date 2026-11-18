@@ -38,6 +38,7 @@ def init_repo(tmp_path: Path) -> Path:
     git(repo, "init", "-q", "-b", "main")
     (repo / "README.md").write_text("hi\n")
     commit_work(repo, "init")
+    git(repo, "checkout", "-q", "-b", "feature/demo")
     return repo
 
 
@@ -705,3 +706,27 @@ def test_run_records_the_autonomy_of_the_run_and_of_each_step(
     run = json.loads((run_dir / "run.json").read_text())
     assert run["autonomy"] == "free"
     assert run["steps"]["a"]["autonomy"] == "free"
+
+
+@pytest.mark.parametrize("protected", ["main", "develop"])
+def test_run_never_merges_into_a_protected_branch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    protected: str,
+) -> None:
+    def start_on_protected_branch(repo: Path) -> None:
+        git(repo, "checkout", "-q", "-B", protected)
+
+    code, repo, _ = run_verified_plan(tmp_path, monkeypatch, {}, prepare=start_on_protected_branch)
+
+    assert code == 1
+    run_dir = next((repo / ".conductor" / "runs").iterdir())
+    step = json.loads((run_dir / "run.json").read_text())["steps"]["a"]
+    branch = f"conductor/{run_dir.name}/a-1"
+    assert step["status"] == "needs_merge"
+    assert f"'{protected}' is protected" in step["detail"]
+    assert f"git merge --no-ff {branch}" in step["detail"]
+    assert "chore(conductor): merge" not in git(repo, "log", "--oneline")
+    assert git(repo, "branch", "--list", branch).strip()
+    assert git(repo, "worktree", "list").count("\n") == 1
