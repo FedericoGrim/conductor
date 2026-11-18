@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from conductor.autonomy import forbidden_commands
 from conductor.config import Profile, Provider
 from conductor.worker import exclude_from_git
 
@@ -19,6 +20,16 @@ PI_CONFIG_NAME = "models.json"
 # OpenCode also loads the user's personal skills (~/.claude/skills, ~/.agents/skills): a worker
 # must see only Conductor's prompt and the target repository.
 NO_SKILLS = [{"action": "skill", "resource": "*", "effect": "deny"}]
+# Edit resources inside the worktree are relative paths, outside ones canonical absolute paths.
+EXTERNAL_EDITS = ("edit:/*", "edit:~/*")
+
+
+def fixed_denials() -> list[dict[str, str]]:
+    # tool.use policies apply after agent rules and saved approvals: --auto cannot lift them.
+    resources = (*(f"shell:{command}" for command in forbidden_commands()), *EXTERNAL_EDITS)
+    return [
+        {"action": "tool.use", "resource": resource, "effect": "deny"} for resource in resources
+    ]
 
 
 def api_model_id(provider: str, model: str) -> str:
@@ -70,6 +81,7 @@ def opencode_config(profile: Profile) -> dict[str, Any]:
             for name, provider in written.items()
         },
         "permissions": NO_SKILLS,
+        "policies": fixed_denials(),
     }
     # OpenCode sends title and summary requests to a model of its own choosing: pin it to
     # the profile, and put the provider options at provider level so they reach it anyway.
