@@ -26,7 +26,7 @@ Simple layering, no tactical DDD: a small tool with little business logic.
 - `conductor/log.py` — `.conductor/runs/<ts>/run.json` and `step-<id>/attempt-N.json`, with cost totals per step, model and run; the attempt records `second_opinion` and its cost is counted.
 - `conductor/merge.py` — merge approved worktree branches; conflicts and hooks refusing the merge are reported, not resolved. A run started on `main` or `develop` never merges: approved steps become `needs_merge` with their branch kept.
 - `conductor/catalog.py` — provider model lists (`/models`), prices per million tokens (cached per base URL), filtering and search.
-- `conductor/setup_state.py` — editable profiles, providers, five difficulty levels and validation for the setup UI.
+- `conductor/setup_state.py` — editable profiles, providers, five difficulty levels, the request options of a single model (JSON, only for a level model or a reviewer of the profile) and validation for the setup UI.
 - `conductor/setup_tui.py` — `curses` screens, keys and rendering of `conductor setup`, starting from `defaults.py` when no file exists.
 - `conductor/credentials.py` — API keys from the environment first, then `auth.json`.
 - `conductor/settings.py` — export and import of the instance settings, with a `[conductor]` metadata table and no keys.
