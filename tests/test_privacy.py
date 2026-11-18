@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+from conductor.autonomy import forbidden_commands
 from conductor.config import Profile, Provider
 from conductor.privacy import api_model_id, opencode_config, pi_config, write_pi_config
 from conductor.worker import create_worktree, git
@@ -114,6 +115,26 @@ def test_provider_options_also_cover_models_that_opencode_picks_itself() -> None
     }
 
 
+def deny(resource: str) -> dict[str, str]:
+    return {"action": "tool.use", "resource": resource, "effect": "deny"}
+
+
+def test_every_forbidden_command_is_a_policy_that_auto_cannot_approve() -> None:
+    policies = opencode_config(PROFILE)["policies"]
+    for command in forbidden_commands():
+        assert deny(f"shell:{command}") in policies
+
+
+def test_edits_outside_the_worktree_are_denied_by_policy() -> None:
+    policies = opencode_config(PROFILE)["policies"]
+    assert deny("edit:/*") in policies
+    assert deny("edit:~/*") in policies
+
+
+def test_policies_only_deny() -> None:
+    assert {rule["effect"] for rule in opencode_config(PROFILE)["policies"]} == {"deny"}
+
+
 def test_the_small_model_is_the_first_model_of_the_easiest_level() -> None:
     assert opencode_config(PROFILE)["small_model"] == "openrouter/deepseek/v4"
 
@@ -198,6 +219,33 @@ def test_pi_config_adds_the_cost_of_exactly_the_models_it_names() -> None:
 def test_pi_config_has_no_cost_without_a_costs_mapping() -> None:
     models = pi_config(PI_PROFILE)["providers"]["openrouter"]["models"]
     assert all("cost" not in model for model in models)
+
+
+def test_pi_config_marks_only_listed_models_as_reasoning_without_costs() -> None:
+    config = pi_config(PI_PROFILE, reasoning={"deepseek/v4"})
+    models = config["providers"]["openrouter"]["models"]
+    assert models == [
+        {"id": "deepseek/v4", "reasoning": True},
+        {"id": "anthropic/sonnet"},
+    ]
+    assert "reasoning" not in models[1]
+
+
+def test_pi_config_marks_only_listed_models_as_reasoning_with_costs() -> None:
+    costs = {
+        "deepseek/v4": {"input": 0.3, "output": 1.2, "cacheRead": 0.03, "cacheWrite": 0.0},
+        "anthropic/sonnet": {"input": 1.0, "output": 4.0, "cacheRead": 0.1, "cacheWrite": 0.0},
+    }
+    config = pi_config(PI_PROFILE, costs, reasoning={"anthropic/sonnet"})
+    models = config["providers"]["openrouter"]["models"]
+    assert models == [
+        {"id": "deepseek/v4", "cost": costs["deepseek/v4"]},
+        {
+            "id": "anthropic/sonnet",
+            "cost": costs["anthropic/sonnet"],
+            "reasoning": True,
+        },
+    ]
 
 
 def test_pi_config_skips_providers_of_other_harnesses() -> None:

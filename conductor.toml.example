@@ -13,6 +13,8 @@
 #   retry           optional, { transient_attempts = 3 }: how many times OpenCode may retry a
 #                   rate limit, server or network error before Conductor stops the worker and
 #                   the step ends as "unavailable" (it never escalates on an error)
+#   autonomy        optional, "ask", "guided" or "free" (default): the autonomy ceiling of a
+#                   run without --autonomy; a step may lower it with "autonomy", never raise it
 #
 # A model id is "<provider>/<model>", and the provider is one of the [..providers.<provider>]
 # tables of the same profile. A profile may use several providers, so escalation can cross them.

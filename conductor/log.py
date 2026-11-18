@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from conductor.autonomy import DEFAULT_AUTONOMY, effective
 from conductor.plan import Plan, Step
 from conductor.scheduler import StepResult
 
@@ -49,7 +50,12 @@ class RunLog:
 
     @classmethod
     def create(
-        cls, repo: Path, plan: Plan, privacy: str, brain_session: str | None = None
+        cls,
+        repo: Path,
+        plan: Plan,
+        privacy: str,
+        brain_session: str | None = None,
+        autonomy: str = DEFAULT_AUTONOMY,
     ) -> RunLog:
         runs = repo / ".conductor" / "runs"
         runs.mkdir(parents=True, exist_ok=True)
@@ -66,6 +72,7 @@ class RunLog:
                 "started_at": now(),
                 "finished_at": None,
                 "privacy": privacy,
+                "autonomy": autonomy,
                 "brain_session": {"harness": "opencode", "id": brain_session}
                 if brain_session
                 else None,
@@ -90,6 +97,7 @@ class RunLog:
     def finish(self, results: dict[str, StepResult]) -> None:
         run_totals: dict[str, float] = {}
         subscriptions: list[float] = []
+        requested = {step["id"]: step.get("autonomy") for step in self.run["plan"]["steps"]}
         for step_id, result in results.items():
             count = len(result.attempts)
             step_totals = cost_by_model(result.attempts)
@@ -107,6 +115,7 @@ class RunLog:
                 "question": result.attempts[-1].get("question") if count else None,
                 "cost": sum(step_totals.values()),
                 "subscription": step_subscription,
+                "autonomy": effective(self.run["autonomy"], requested.get(step_id)),
             }
         self.run["cost"] = sum(run_totals.values())
         self.run["cost_by_model"] = run_totals

@@ -5,6 +5,7 @@ from typing import Any
 import pytest
 
 from conductor import catalog, credentials
+from conductor.autonomy import forbidden_commands
 from conductor.config import HARNESS_NAMES, Profile, Provider
 from conductor.errors import MODEL_UNSUITABLE, PROVIDER_UNUSABLE, TRANSIENT
 from conductor.harness import (
@@ -92,6 +93,14 @@ def test_the_claude_code_command_confines_and_isolates_the_worker() -> None:
     assert "--disable-slash-commands" in cmd
     assert "--allowedTools=Bash" in cmd
     assert cmd.index("--effort") < cmd.index("do it")
+
+
+def test_the_claude_code_command_denies_every_forbidden_command() -> None:
+    cmd = claude_build_command("subscription/sonnet", "do it", [])
+    denied = next(arg for arg in cmd if arg.startswith("--disallowedTools="))
+    rules = denied.removeprefix("--disallowedTools=").split(",")
+    assert rules == [f"Bash({command})" for command in forbidden_commands()]
+    assert cmd.index(denied) < cmd.index("do it")
 
 
 def test_claude_code_event_helpers() -> None:
@@ -529,6 +538,7 @@ def test_pi_prepare_writes_the_profile_into_the_worktrees_agent_dir(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(catalog, "model_costs", lambda base_url, get=None: {})
+    monkeypatch.setattr(catalog, "reasoning_models", lambda base_url, get=None: frozenset())
     worktree = init_worktree(tmp_path)
     pi_prepare(worktree, pi_profile())
     config: dict[str, Any] = json.loads((worktree / ".pi-agent" / "models.json").read_text())
@@ -547,6 +557,7 @@ def test_pi_prepare_writes_the_prices_the_catalog_returned(
         return {"m1": price}
 
     monkeypatch.setattr(catalog, "model_costs", model_costs)
+    monkeypatch.setattr(catalog, "reasoning_models", lambda base_url, get=None: frozenset())
     worktree = init_worktree(tmp_path)
     pi_prepare(worktree, pi_profile())
     config: dict[str, Any] = json.loads((worktree / ".pi-agent" / "models.json").read_text())
@@ -558,6 +569,7 @@ def test_pi_prepare_keeps_the_models_without_a_price(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(catalog, "model_costs", lambda base_url, get=None: {})
+    monkeypatch.setattr(catalog, "reasoning_models", lambda base_url, get=None: frozenset())
     worktree = init_worktree(tmp_path)
     pi_prepare(worktree, pi_profile())
     config: dict[str, Any] = json.loads((worktree / ".pi-agent" / "models.json").read_text())
@@ -576,6 +588,7 @@ def test_a_later_pi_provider_does_not_overwrite_an_earlier_price(
     monkeypatch.setattr(
         catalog, "model_costs", lambda base_url, get=None: catalogs.get(base_url, {})
     )
+    monkeypatch.setattr(catalog, "reasoning_models", lambda base_url, get=None: frozenset())
     profile = Profile(
         "medium",
         {
@@ -592,3 +605,31 @@ def test_a_later_pi_provider_does_not_overwrite_an_earlier_price(
         {"id": "shared", "cost": first},
         {"id": "other", "cost": second},
     ]
+
+
+def test_pi_prepare_marks_reasoning_models_from_the_catalog(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    price = {"input": 0.5, "output": 2.0, "cacheRead": 0.05, "cacheWrite": 0.0}
+    monkeypatch.setattr(catalog, "model_costs", lambda base_url, get=None: {"m1": price})
+    monkeypatch.setattr(catalog, "reasoning_models", lambda base_url, get=None: frozenset({"m1"}))
+    worktree = init_worktree(tmp_path)
+    pi_prepare(worktree, pi_profile())
+    config: dict[str, Any] = json.loads((worktree / ".pi-agent" / "models.json").read_text())
+    assert config["providers"]["piprovider"]["models"] == [
+        {"id": "m1", "cost": price, "reasoning": True}
+    ]
+
+
+def test_pi_prepare_without_reasoning_models_has_no_reasoning_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    price = {"input": 0.5, "output": 2.0, "cacheRead": 0.05, "cacheWrite": 0.0}
+    monkeypatch.setattr(catalog, "model_costs", lambda base_url, get=None: {"m1": price})
+    monkeypatch.setattr(catalog, "reasoning_models", lambda base_url, get=None: frozenset())
+    worktree = init_worktree(tmp_path)
+    pi_prepare(worktree, pi_profile())
+    config: dict[str, Any] = json.loads((worktree / ".pi-agent" / "models.json").read_text())
+    models = config["providers"]["piprovider"]["models"]
+    assert models == [{"id": "m1", "cost": price}]
+    assert "reasoning" not in models[0]

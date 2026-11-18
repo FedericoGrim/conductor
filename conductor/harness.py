@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from conductor import catalog, credentials
+from conductor.autonomy import forbidden_commands
 from conductor.config import Profile, provider_of
 from conductor.errors import (
     MODEL_UNSUITABLE,
@@ -132,6 +133,11 @@ def prepare_claude_code(worktree: Path, profile: Profile) -> None:
     return None
 
 
+def claude_denied_tools() -> str:
+    # The "=" form: the flag is variadic and would otherwise swallow the prompt.
+    return "--disallowedTools=" + ",".join(f"Bash({command})" for command in forbidden_commands())
+
+
 def claude_build_command(model: str, prompt: str, extra_args: list[str]) -> list[str]:
     return [
         "claude",
@@ -150,6 +156,7 @@ def claude_build_command(model: str, prompt: str, extra_args: list[str]) -> list
         "--permission-mode",
         "acceptEdits",
         "--allowedTools=Bash",
+        claude_denied_tools(),
         "--model",
         model.split("/", 1)[-1],
         *extra_args,
@@ -288,8 +295,17 @@ def pi_prices(profile: Profile) -> dict[str, dict[str, float]]:
     return prices
 
 
+def pi_reasoning_models(profile: Profile) -> frozenset[str]:
+    """The catalog's reasoning model ids of the profile's Pi providers."""
+    reasoning: set[str] = set()
+    for provider in profile.providers.values():
+        if provider.harness == "pi" and provider.has_endpoint:
+            reasoning |= catalog.reasoning_models(provider.base_url)
+    return frozenset(reasoning)
+
+
 def pi_prepare(worktree: Path, profile: Profile) -> None:
-    write_pi_config(worktree, pi_config(profile, pi_prices(profile)))
+    write_pi_config(worktree, pi_config(profile, pi_prices(profile), pi_reasoning_models(profile)))
 
 
 def pi_session_id(events: Events) -> str | None:

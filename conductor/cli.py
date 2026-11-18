@@ -10,14 +10,16 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from conductor import billing, reviewer, settings, setup_tui, stats
+from conductor.autonomy import DEFAULT_AUTONOMY, FREE, LEVELS, effective, is_protected
 from conductor.commits import choose_commit_message
 from conductor.config import Config, ConfigError, Profile
 from conductor.escalation import RunState, run_step
 from conductor.harness import harness_for
 from conductor.log import RunLog
 from conductor.merge import merge_branch
+from conductor.overlap import describe, parallel_overlaps
 from conductor.plan import Plan, PlanError, Step
-from conductor.scheduler import APPROVED, CONFLICT, StepResult, run_plan
+from conductor.scheduler import APPROVED, CONFLICT, NEEDS_MERGE, StepResult, run_plan
 from conductor.verify import CheckResult, run_checks
 from conductor.worker import (
     AttemptOutput,
@@ -45,14 +47,33 @@ def find_config(explicit: Path | None) -> Path:
     )
 
 
+class UnsupportedAutonomyError(ValueError):
+    pass
+
+
+def check_autonomy_available(plan: Plan, ceiling: str) -> None:
+    for step in plan.steps:
+        level = effective(ceiling, step.autonomy)
+        if level != FREE:
+            raise UnsupportedAutonomyError(
+                f"autonomy '{level}' is not available yet (step '{step.id}'); "
+                "only 'free' runs until the ask and guided levels land (#35)"
+            )
+
+
 def validate(args: argparse.Namespace) -> int:
     plan = Plan.load(args.plan)
+    has_config = args.config is not None or any(path.exists() for path in DEFAULT_CONFIG_PATHS)
+    config = Config.load(find_config(args.config)) if has_config else None
+    profile_ceiling = config.profile(None).autonomy if config else DEFAULT_AUTONOMY
+    plan.check_ceiling(args.autonomy or profile_ceiling)
     print(f"ok: {len(plan.steps)} steps")
-    if args.config is None and not any(path.exists() for path in DEFAULT_CONFIG_PATHS):
+    for overlap in parallel_overlaps(plan):
+        print(f"warning: {describe(overlap)}")
+    if config is None:
         return 0
-    config = Config.load(find_config(args.config))
     for profile in config.profiles.values():
-        for warning in profile.single_provider_warnings():
+        for warning in (*profile.single_provider_warnings(), *profile.unconfined_warnings()):
             print(f"warning: {warning}")
     return 0
 
@@ -127,19 +148,30 @@ async def execute_plan(
             check=check,
             verify=plan.verify_for(step),
         )
-        print(f"[{step.id}] {result.status}: {result.detail}", flush=True)
         numbers = [a["attempt"] for a in result.attempts]
         for number in numbers[:-1]:
             discard(step, number)
         if result.status == APPROVED and numbers:
-            branch = f"conductor/{run_name}/{step.id}-{numbers[-1]}"
-            problem = merge_branch(repo, branch, into=base)
-            if problem:
-                result.status = CONFLICT
-                result.detail = f"{problem} (branch {branch} kept)"
-            else:
-                discard(step, numbers[-1])
+            merge_approved(step, numbers[-1], result)
+        print(f"[{step.id}] {result.status}: {result.detail}", flush=True)
         return result
+
+    def merge_approved(step: Step, number: int, result: StepResult) -> None:
+        branch = f"conductor/{run_name}/{step.id}-{number}"
+        if is_protected(base):
+            result.status = NEEDS_MERGE
+            result.detail = (
+                f"'{base}' is protected: Conductor never merges into it; review and "
+                f"merge by hand with `git merge --no-ff {branch}`"
+            )
+            remove_worktree(repo, worktrees / f"{step.id}-{number}")
+            return
+        problem = merge_branch(repo, branch, into=base)
+        if problem:
+            result.status = CONFLICT
+            result.detail = f"{problem} (branch {branch} kept)"
+        else:
+            discard(step, number)
 
     def discard(step: Step, number: int) -> None:
         remove_worktree(repo, worktrees / f"{step.id}-{number}")
@@ -153,14 +185,21 @@ def run(args: argparse.Namespace) -> int:
     config = Config.load(find_config(args.config))
     profile = config.profile(args.privacy)
     plan = Plan.load(args.plan)
+    ceiling = args.autonomy or profile.autonomy
+    plan.check_ceiling(ceiling)
+    check_autonomy_available(plan, ceiling)
+    for warning in profile.unconfined_warnings():
+        print(f"warning: {warning}", file=sys.stderr)
     rules = domain_rules(repo, plan)
     exclude_from_git(repo, ".conductor/")
     if git(repo, "status", "--porcelain").strip():
         print("error: repository has uncommitted changes; commit or stash them first")
         return 2
     brain_session = args.session or os.environ.get("OPENCODE_SESSION_ID") or None
-    log = RunLog.create(repo, plan, profile.name, brain_session=brain_session)
+    log = RunLog.create(repo, plan, profile.name, brain_session=brain_session, autonomy=ceiling)
     print(f"run {log.directory.name}: {len(plan.steps)} steps, privacy {profile.name}")
+    for overlap in parallel_overlaps(plan):
+        print(f"warning: {describe(overlap)}")
     results = asyncio.run(execute_plan(repo, plan, profile, log, args.opencode_arg, rules))
     log.finish(results)
     try:
@@ -297,6 +336,11 @@ def build_parser() -> argparse.ArgumentParser:
     check = commands.add_parser("validate", help="check a plan.json")
     check.add_argument("plan", type=Path)
     check.add_argument("--config", type=Path, help="path to conductor.toml")
+    check.add_argument(
+        "--autonomy",
+        choices=LEVELS,
+        help="the ceiling to check the steps against (default: the default profile's)",
+    )
     check.set_defaults(handler=validate)
 
     execute = commands.add_parser("run", help="execute a plan.json")
@@ -304,6 +348,11 @@ def build_parser() -> argparse.ArgumentParser:
     execute.add_argument("--privacy", choices=None, help="profile name from conductor.toml")
     execute.add_argument("--config", type=Path, help="path to conductor.toml")
     execute.add_argument("--repo", type=Path, default=Path("."), help="repository to work in")
+    execute.add_argument(
+        "--autonomy",
+        choices=LEVELS,
+        help="the run's autonomy ceiling; a step may only lower it (default: the profile's)",
+    )
     execute.add_argument(
         "--opencode-arg",
         action="append",
@@ -372,6 +421,7 @@ def main(argv: list[str] | None = None) -> int:
         ConfigError,
         NotARepositoryError,
         settings.SettingsError,
+        UnsupportedAutonomyError,
     ) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
