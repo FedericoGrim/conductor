@@ -365,13 +365,11 @@ def test_a_brain_reviewer_is_not_routable_even_with_stale_fallbacks() -> None:
 def test_model_options_are_set_and_read_back() -> None:
     model = state()
     assert model.model_options_text("openrouter/m1") == "{}"
-    assert model.routed_models() == []
     model.set_model_options("openrouter/m1", '{"provider": {"order": ["relace"]}}')
     assert model.model_options_text("openrouter/m1") == '{"provider": {"order": ["relace"]}}'
     assert model.draft().providers["openrouter"].model_options == {
         "m1": {"provider": {"order": ["relace"]}}
     }
-    assert model.routed_models() == ["openrouter/m1"]
 
 
 def test_empty_model_options_remove_the_entry() -> None:
@@ -379,7 +377,6 @@ def test_empty_model_options_remove_the_entry() -> None:
     model.set_model_options("openrouter/m1", '{"provider": {"order": ["relace"]}}')
     model.set_model_options("openrouter/m1", "{}")
     assert model.draft().providers["openrouter"].model_options == {}
-    assert model.routed_models() == []
 
 
 def test_model_options_are_refused_when_invalid() -> None:
@@ -391,43 +388,6 @@ def test_model_options_are_refused_when_invalid() -> None:
         model.set_model_options("openrouter/nope", "{}")
     with pytest.raises(SetupError, match="not a level model or a reviewer of profile low"):
         model.set_model_options("scaleway/glm-5.3", "{}")
-
-
-def test_routed_models_follow_provider_order_then_insertion_order() -> None:
-    model = SetupState.from_config(fallback_config())
-    model.set_model_options("scaleway/b2", '{"temperature": 0}')
-    model.set_model_options("openrouter/m1", '{"temperature": 1}')
-    model.set_model_options("openrouter/m2", '{"temperature": 2}')
-    assert model.routed_models() == ["openrouter/m1", "openrouter/m2", "scaleway/b2"]
-
-
-def test_openrouter_routing_writes_only_the_given_keys() -> None:
-    model = state()
-    model.set_openrouter_routing("openrouter/m1", order=["relace"], sort="price")
-    assert model.model_options_text("openrouter/m1") == (
-        '{"provider": {"order": ["relace"], "sort": "price"}}'
-    )
-    model.set_openrouter_routing("openrouter/m1", allow_fallbacks=False, only=["relace"])
-    assert model.model_options_text("openrouter/m1") == (
-        '{"provider": {"allow_fallbacks": false, "only": ["relace"], "order": ["relace"], '
-        '"sort": "price"}}'
-    )
-
-
-def test_openrouter_routing_keeps_other_hand_written_keys() -> None:
-    model = state()
-    model.set_model_options("openrouter/m1", '{"temperature": 0, "provider": {"ignore": ["x"]}}')
-    model.set_openrouter_routing("openrouter/m1", order=["relace"])
-    assert model.model_options_text("openrouter/m1") == (
-        '{"provider": {"ignore": ["x"], "order": ["relace"]}, "temperature": 0}'
-    )
-
-
-def test_openrouter_routing_refuses_an_unknown_sort() -> None:
-    model = state()
-    with pytest.raises(SetupError, match="sort must be one of price, throughput, latency"):
-        model.set_openrouter_routing("openrouter/m1", sort="cheapest")
-    assert model.model_options_text("openrouter/m1") == "{}"
 
 
 def test_hand_written_model_options_survive_an_edit_and_the_round_trip(tmp_path: Path) -> None:

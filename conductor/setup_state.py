@@ -20,8 +20,6 @@ PROFILE_NAME = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 
 EMPTY_SLOT = ""
 
-ROUTING_SORTS = ("price", "throughput", "latency")
-
 
 class SetupError(ValueError):
     pass
@@ -326,14 +324,6 @@ class SetupState:
             profile.reviewer_fallbacks = []
         return profile
 
-    def routed_models(self) -> list[str]:
-        profile = self.draft()
-        return [
-            f"{name}/{model}"
-            for name, provider in profile.providers.items()
-            for model in provider.model_options
-        ]
-
     def routable_models(self) -> list[str]:
         profile = self.draft()
         models = [
@@ -356,35 +346,6 @@ class SetupState:
             raise SetupError(f"request options must be valid JSON: {error.msg}") from error
         if not isinstance(options, dict):
             raise SetupError("request options must be a JSON object")
-        return self.store_model_options(model, options)
-
-    def set_openrouter_routing(
-        self,
-        model: str,
-        *,
-        order: list[str] | None = None,
-        only: list[str] | None = None,
-        ignore: list[str] | None = None,
-        allow_fallbacks: bool | None = None,
-        sort: str | None = None,
-    ) -> ProfileDraft:
-        if sort is not None and sort not in ROUTING_SORTS:
-            raise SetupError(f"sort must be one of {', '.join(ROUTING_SORTS)}")
-        options = self.model_options_of(model)
-        routing = options.get("provider", {})
-        if not isinstance(routing, dict):
-            raise SetupError("the provider routing of a model must be a JSON object")
-        updates = {
-            "order": order,
-            "only": only,
-            "ignore": ignore,
-            "allow_fallbacks": allow_fallbacks,
-            "sort": sort,
-        }
-        options["provider"] = {
-            **routing,
-            **{key: value for key, value in updates.items() if value is not None},
-        }
         return self.store_model_options(model, options)
 
     def model_options_of(self, model: str) -> dict[str, Any]:
