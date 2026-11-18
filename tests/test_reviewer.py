@@ -328,7 +328,27 @@ def test_the_domain_rules_reach_the_reviewer_as_their_own_section(
     body = captured_request(monkeypatch, rules=("Totals never go negative", "No ORM in domain/"))
     prompt = body["messages"][-1]["content"]
     assert "## Domain rules\n- Totals never go negative\n- No ORM in domain/" in prompt
+    assert prompt.index("## Domain rules") < prompt.index("## Specification")
     assert prompt.index("## Domain rules") < prompt.index("## Diff")
+
+
+def test_domain_rules_come_before_specification_when_rules_exist() -> None:
+    prompt = review_request("spec", "+diff", ("Rule 1", "Rule 2"), [])
+    assert prompt.startswith("## Domain rules\n- Rule 1\n- Rule 2\n\n## Specification\nspec")
+
+
+def test_requests_with_same_rules_share_prefix() -> None:
+    rules = ("Rule A", "Rule B")
+    prompt1 = review_request("spec 1", "+diff 1", rules, [CheckResult("cmd", 0, "out", 1.0)])
+    prompt2 = review_request("spec 2", "+diff 2", rules, [])
+    expected_prefix = "## Domain rules\n- Rule A\n- Rule B\n\n## Specification\n"
+    assert prompt1.startswith(expected_prefix)
+    assert prompt2.startswith(expected_prefix)
+
+
+def test_without_rules_the_request_starts_with_specification() -> None:
+    prompt = review_request("spec", "+diff", (), [])
+    assert prompt.startswith("## Specification\nspec")
 
 
 def test_the_verification_results_reach_the_reviewer(monkeypatch: pytest.MonkeyPatch) -> None:
