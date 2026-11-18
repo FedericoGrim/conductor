@@ -101,6 +101,12 @@ def test_drafts_keep_the_retry_limit_of_a_profile() -> None:
     assert draft.to_profile() == profile
 
 
+def test_drafts_keep_the_autonomy_of_a_profile() -> None:
+    profile = replace(make_profile(name="low", tiers=TIERS), autonomy="ask")
+    draft = ProfileDraft.from_profile(profile)
+    assert draft.to_profile() == profile
+
+
 def test_select_clamps_to_the_available_profiles() -> None:
     model = state()
     model.select(1)

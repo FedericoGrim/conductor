@@ -4,6 +4,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from conductor.autonomy import DEFAULT_AUTONOMY
 from conductor.config import (
     DEFAULT_HARNESS,
     DEFAULT_TRANSIENT_ATTEMPTS,
@@ -96,6 +97,7 @@ class ProfileDraft:
     transient_attempts: int = DEFAULT_TRANSIENT_ATTEMPTS
     fallbacks: list[list[str]] = field(default_factory=lambda: no_fallbacks(DIFFICULTY_LEVELS))
     reviewer_fallbacks: list[str] = field(default_factory=list)
+    autonomy: str = DEFAULT_AUTONOMY
 
     @classmethod
     def from_profile(cls, profile: Profile) -> ProfileDraft:
@@ -115,6 +117,7 @@ class ProfileDraft:
             transient_attempts=profile.transient_attempts,
             fallbacks=fallbacks,
             reviewer_fallbacks=list(profile.reviewers[1:]),
+            autonomy=profile.autonomy,
         )
 
     def to_profile(self) -> Profile:
@@ -129,6 +132,7 @@ class ProfileDraft:
             reviewers=(self.reviewer, *self.reviewer_fallbacks),
             max_parallel=self.max_parallel,
             transient_attempts=self.transient_attempts,
+            autonomy=self.autonomy,
         )
 
     def filled(self) -> list[str]:
