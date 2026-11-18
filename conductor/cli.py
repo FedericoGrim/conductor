@@ -10,7 +10,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from conductor import billing, reviewer, settings, setup_tui, stats
-from conductor.autonomy import DEFAULT_AUTONOMY, FREE, LEVELS, effective
+from conductor.autonomy import DEFAULT_AUTONOMY, FREE, LEVELS, effective, is_protected
 from conductor.commits import choose_commit_message
 from conductor.config import Config, ConfigError, Profile
 from conductor.escalation import RunState, run_step
@@ -18,7 +18,7 @@ from conductor.harness import harness_for
 from conductor.log import RunLog
 from conductor.merge import merge_branch
 from conductor.plan import Plan, PlanError, Step
-from conductor.scheduler import APPROVED, CONFLICT, StepResult, run_plan
+from conductor.scheduler import APPROVED, CONFLICT, NEEDS_MERGE, StepResult, run_plan
 from conductor.verify import CheckResult, run_checks
 from conductor.worker import (
     AttemptOutput,
@@ -145,19 +145,31 @@ async def execute_plan(
             check=check,
             verify=plan.verify_for(step),
         )
-        print(f"[{step.id}] {result.status}: {result.detail}", flush=True)
         numbers = [a["attempt"] for a in result.attempts]
         for number in numbers[:-1]:
             discard(step, number)
         if result.status == APPROVED and numbers:
-            branch = f"conductor/{run_name}/{step.id}-{numbers[-1]}"
-            problem = merge_branch(repo, branch, into=base)
-            if problem:
-                result.status = CONFLICT
-                result.detail = f"{problem} (branch {branch} kept)"
-            else:
-                discard(step, numbers[-1])
+            land(step, numbers[-1], result)
+        print(f"[{step.id}] {result.status}: {result.detail}", flush=True)
         return result
+
+    def land(step: Step, number: int, result: StepResult) -> None:
+        """Merge an approved attempt into the base branch, unless the base is protected."""
+        branch = f"conductor/{run_name}/{step.id}-{number}"
+        if is_protected(base):
+            result.status = NEEDS_MERGE
+            result.detail = (
+                f"'{base}' is protected: Conductor never merges into it; review and "
+                f"merge by hand with `git merge --no-ff {branch}`"
+            )
+            remove_worktree(repo, worktrees / f"{step.id}-{number}")
+            return
+        problem = merge_branch(repo, branch, into=base)
+        if problem:
+            result.status = CONFLICT
+            result.detail = f"{problem} (branch {branch} kept)"
+        else:
+            discard(step, number)
 
     def discard(step: Step, number: int) -> None:
         remove_worktree(repo, worktrees / f"{step.id}-{number}")
