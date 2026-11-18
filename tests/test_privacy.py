@@ -221,6 +221,33 @@ def test_pi_config_has_no_cost_without_a_costs_mapping() -> None:
     assert all("cost" not in model for model in models)
 
 
+def test_pi_config_marks_only_listed_models_as_reasoning_without_costs() -> None:
+    config = pi_config(PI_PROFILE, reasoning={"deepseek/v4"})
+    models = config["providers"]["openrouter"]["models"]
+    assert models == [
+        {"id": "deepseek/v4", "reasoning": True},
+        {"id": "anthropic/sonnet"},
+    ]
+    assert "reasoning" not in models[1]
+
+
+def test_pi_config_marks_only_listed_models_as_reasoning_with_costs() -> None:
+    costs = {
+        "deepseek/v4": {"input": 0.3, "output": 1.2, "cacheRead": 0.03, "cacheWrite": 0.0},
+        "anthropic/sonnet": {"input": 1.0, "output": 4.0, "cacheRead": 0.1, "cacheWrite": 0.0},
+    }
+    config = pi_config(PI_PROFILE, costs, reasoning={"anthropic/sonnet"})
+    models = config["providers"]["openrouter"]["models"]
+    assert models == [
+        {"id": "deepseek/v4", "cost": costs["deepseek/v4"]},
+        {
+            "id": "anthropic/sonnet",
+            "cost": costs["anthropic/sonnet"],
+            "reasoning": True,
+        },
+    ]
+
+
 def test_pi_config_skips_providers_of_other_harnesses() -> None:
     profile = Profile(
         "medium",

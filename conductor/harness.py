@@ -346,8 +346,17 @@ def pi_prices(profile: Profile) -> dict[str, dict[str, float]]:
     return prices
 
 
+def pi_reasoning_models(profile: Profile) -> frozenset[str]:
+    """The catalog's reasoning model ids of the profile's Pi providers."""
+    reasoning: set[str] = set()
+    for provider in profile.providers.values():
+        if provider.harness == "pi" and provider.has_endpoint:
+            reasoning |= catalog.reasoning_models(provider.base_url)
+    return frozenset(reasoning)
+
+
 def pi_prepare(worktree: Path, profile: Profile) -> None:
-    write_pi_config(worktree, pi_config(profile, pi_prices(profile)))
+    write_pi_config(worktree, pi_config(profile, pi_prices(profile), pi_reasoning_models(profile)))
 
 
 def pi_session_id(events: Events) -> str | None:

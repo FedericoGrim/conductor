@@ -30,6 +30,8 @@ CATALOG = "catalog"
 MODEL = "model"
 KEYPROVIDER = "keyprovider"
 KEY = "key"
+ROUTING = "routing"
+ROUTINGEDIT = "routingedit"
 
 BRAIN = "brain"
 LEVEL_MODEL = "level"
@@ -42,7 +44,7 @@ HINTS = {
     NAME: "enter confirm  esc back",
     EDITOR: (
         "a model  t type  d clear  f/F fallback  x drop fallback  esc back\n"
-        "P providers  k key  r reviewer  v/V reviewer fallback  m/M parallel"
+        "P providers  R routing  k key  r reviewer  v/V reviewer fallback  m/M parallel"
     ),
     PROVIDERS: "a add  d delete  b base_url  e key variable  esc back",
     PROVIDERADD: "enter add  esc back",
@@ -52,6 +54,12 @@ HINTS = {
     MODEL: "enter confirm  esc back",
     KEYPROVIDER: "enter choose  esc back",
     KEY: "enter store key  esc cancel",
+    ROUTING: (
+        "enter edit  d default  esc back\n"
+        "only/order do not bypass data_collection = deny:\n"
+        "a pinned provider that breaks it makes the request fail"
+    ),
+    ROUTINGEDIT: "enter confirm  esc cancel",
 }
 
 TITLES = {
@@ -67,6 +75,8 @@ TITLES = {
     MODEL: "Conductor setup — model id, typed by hand",
     KEYPROVIDER: "Conductor setup — provider of the key",
     KEY: "Conductor setup — API key",
+    ROUTING: "Conductor setup — per-model routing (request options)",
+    ROUTINGEDIT: "Conductor setup — request options of one model, JSON",
 }
 
 Store = Callable[[str, str], None]
@@ -90,6 +100,7 @@ class Editor:
     notes: list[str] = field(default_factory=list)
     target: str = ""
     choosing: str = LEVEL_MODEL
+    routing_cursor: int = 0
     saved: bool = False
 
     def handle_key(self, key: str) -> bool:
@@ -185,6 +196,9 @@ class Editor:
         elif key == "P":
             self.screen = PROVIDERS
             self.provider_cursor = 0
+        elif key == "R":
+            self.screen = ROUTING
+            self.routing_cursor = 0
         elif key == "k":
             self.ask_for_key()
         elif key == "r":
@@ -385,6 +399,34 @@ class Editor:
             self.typed(key)
         return False
 
+    def routing_key(self, key: str) -> bool:
+        models = self.state.routable_models()
+        if key == "esc":
+            self.screen = EDITOR
+        elif key in ("down", "j"):
+            self.routing_cursor = min(self.routing_cursor + 1, max(len(models) - 1, 0))
+        elif key in ("up", "k"):
+            self.routing_cursor = max(self.routing_cursor - 1, 0)
+        elif key == "enter" and models:
+            self.target = models[self.routing_cursor]
+            self.text = self.state.model_options_text(self.target)
+            self.screen = ROUTINGEDIT
+        elif key == "d" and models:
+            model = models[self.routing_cursor]
+            self.apply(lambda: self.state.set_model_options(model, "{}"))
+        return False
+
+    def routingedit_key(self, key: str) -> bool:
+        if key == "esc":
+            self.screen = ROUTING
+        elif key == "enter":
+            self.apply(lambda: self.state.set_model_options(self.target, self.text))
+            if not self.message:
+                self.screen = ROUTING
+        else:
+            self.typed(key)
+        return False
+
     def save(self) -> bool:
         problems = self.state.problems()
         if problems:
@@ -493,6 +535,17 @@ def render(view: Editor) -> list[str]:
             rows.append(f"{marker} {name}")
     elif view.screen == KEY:
         rows.append(f"{view.target}: {'*' * len(view.text)}")
+    elif view.screen == ROUTING and view.state.selected_profile() is not None:
+        models = view.state.routable_models()
+        if not models:
+            rows.append("(no model in the levels or the reviewer yet)")
+        for index, routed in enumerate(models):
+            marker = ">" if index == view.routing_cursor else " "
+            options = view.state.model_options_text(routed)
+            shown = "(default)" if options == "{}" else options
+            rows.append(f"{marker} {routed}  {shown}")
+    elif view.screen == ROUTINGEDIT:
+        rows.append(f"{view.target} request options: {view.text}")
     if view.message:
         rows.extend(["", view.message])
     rows.extend(HINTS[view.screen].splitlines())

@@ -162,9 +162,10 @@ def review_request(
     checks: list[CheckResult],
     commit_message: str = "",
 ) -> str:
-    sections = [f"## Specification\n{spec}"]
+    sections: list[str] = []
     if rules:
         sections.append("## Domain rules\n" + "\n".join(f"- {rule}" for rule in rules))
+    sections.append(f"## Specification\n{spec}")
     if checks:
         outcomes = "\n".join(
             f"- `{check.command}`: exit {check.exit_code}\n"
