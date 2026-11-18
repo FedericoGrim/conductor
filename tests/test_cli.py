@@ -38,6 +38,7 @@ def init_repo(tmp_path: Path) -> Path:
     git(repo, "init", "-q", "-b", "main")
     (repo / "README.md").write_text("hi\n")
     commit_work(repo, "init")
+    git(repo, "checkout", "-q", "-b", "feature/demo")
     return repo
 
 
@@ -148,6 +149,7 @@ def test_run_executes_reviews_and_merges(
         "question": None,
         "cost": pytest.approx(0.022),
         "subscription": None,
+        "autonomy": "free",
     }
     assert run["brain_session"] is None
     assert run["subscription"] is None
@@ -597,3 +599,134 @@ def test_run_takes_the_brain_session_from_the_environment_without_the_option(
     run_dir = next((repo / ".conductor" / "runs").iterdir())
     run = json.loads((run_dir / "run.json").read_text())
     assert run["brain_session"] == {"harness": "opencode", "id": "ses_env"}
+
+
+def write_plan(tmp_path: Path, step_fields: dict[str, Any]) -> Path:
+    plan = tmp_path / "plan.json"
+    steps = [{"id": "a", "spec": "write output", "difficulty": 1, **step_fields}]
+    plan.write_text(json.dumps({"goal": "demo", "steps": steps}))
+    return plan
+
+
+def test_validate_rejects_a_step_above_the_autonomy_ceiling(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(cli, "DEFAULT_CONFIG_PATHS", ())
+    plan = write_plan(tmp_path, {"autonomy": "free"})
+    assert cli.main(["validate", str(plan), "--autonomy", "guided"]) == 2
+    assert "above the ceiling 'guided'" in capsys.readouterr().err
+
+
+def test_validate_takes_the_ceiling_from_the_default_profile(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config = tmp_path / "conductor.toml"
+    config.write_text(
+        CONFIG.replace(
+            'reviewer = "openrouter/judge"', 'reviewer = "openrouter/judge"\nautonomy = "ask"'
+        )
+    )
+    plan = write_plan(tmp_path, {"autonomy": "guided"})
+    assert cli.main(["validate", str(plan), "--config", str(config)]) == 2
+    assert "above the ceiling 'ask'" in capsys.readouterr().err
+
+
+PI_CONFIG = """
+default_privacy = "medium"
+[privacy.medium]
+tiers = [["pi-router/a", "openrouter/a"]]
+reviewer = "openrouter/r"
+
+[privacy.medium.providers.openrouter]
+base_url = "https://openrouter.ai/api/v1"
+api_key_env = "OPENROUTER_API_KEY"
+
+[privacy.medium.providers.pi-router]
+harness = "pi"
+base_url = "https://openrouter.ai/api/v1"
+api_key_env = "OPENROUTER_API_KEY"
+"""
+
+
+def test_validate_warns_that_pi_workers_ignore_the_fixed_denials(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config = tmp_path / "conductor.toml"
+    config.write_text(PI_CONFIG)
+    assert cli.main(["validate", str(EXAMPLE_PLAN), "--config", str(config)]) == 0
+    assert (
+        "warning: privacy.medium: provider 'pi-router' runs on Pi, which has no permission "
+        "system: its workers are not held to the fixed denials (push, publish, release, "
+        "protected branches, edits outside the worktree)\n"
+    ) in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("autonomy", ["ask", "guided"])
+def test_run_refuses_the_autonomy_levels_that_are_not_implemented_yet(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    autonomy: str,
+) -> None:
+    code, repo, _ = run_verified_plan(
+        tmp_path, monkeypatch, {}, extra_args=("--autonomy", autonomy)
+    )
+    assert code == 2
+    assert f"autonomy '{autonomy}' is not available yet" in capsys.readouterr().err
+    assert not (repo / ".conductor" / "runs").exists()
+
+
+def test_run_refuses_a_step_that_lowers_its_autonomy_until_the_levels_exist(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    steps = [{"id": "a", "spec": "write output", "difficulty": 1, "autonomy": "ask"}]
+    code, _, _ = run_verified_plan(tmp_path, monkeypatch, {"steps": steps})
+    assert code == 2
+    assert "autonomy 'ask' is not available yet" in capsys.readouterr().err
+
+
+def test_run_refuses_a_step_above_the_ceiling_before_any_attempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    steps = [{"id": "a", "spec": "write output", "difficulty": 1, "autonomy": "free"}]
+    code, repo, _ = run_verified_plan(
+        tmp_path, monkeypatch, {"steps": steps}, extra_args=("--autonomy", "guided")
+    )
+    assert code == 2
+    assert "above the ceiling 'guided'" in capsys.readouterr().err
+    assert not (repo / "output.txt").exists()
+
+
+def test_run_records_the_autonomy_of_the_run_and_of_each_step(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    code, repo, _ = run_verified_plan(tmp_path, monkeypatch, {}, extra_args=("--autonomy", "free"))
+    assert code == 0
+    run_dir = next((repo / ".conductor" / "runs").iterdir())
+    run = json.loads((run_dir / "run.json").read_text())
+    assert run["autonomy"] == "free"
+    assert run["steps"]["a"]["autonomy"] == "free"
+
+
+@pytest.mark.parametrize("protected", ["main", "develop"])
+def test_run_never_merges_into_a_protected_branch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    protected: str,
+) -> None:
+    def start_on_protected_branch(repo: Path) -> None:
+        git(repo, "checkout", "-q", "-B", protected)
+
+    code, repo, _ = run_verified_plan(tmp_path, monkeypatch, {}, prepare=start_on_protected_branch)
+
+    assert code == 1
+    run_dir = next((repo / ".conductor" / "runs").iterdir())
+    step = json.loads((run_dir / "run.json").read_text())["steps"]["a"]
+    branch = f"conductor/{run_dir.name}/a-1"
+    assert step["status"] == "needs_merge"
+    assert f"'{protected}' is protected" in step["detail"]
+    assert f"git merge --no-ff {branch}" in step["detail"]
+    assert "chore(conductor): merge" not in git(repo, "log", "--oneline")
+    assert git(repo, "branch", "--list", branch).strip()
+    assert git(repo, "worktree", "list").count("\n") == 1

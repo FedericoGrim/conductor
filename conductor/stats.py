@@ -152,6 +152,9 @@ def _plan_files(value: Any) -> dict[str, tuple[str, ...]]:
     return files_by_step
 
 
+REVIEWER_APPROVED = ("approved", "needs_merge")
+
+
 def _step_stats(
     repo: Path,
     step_id: str,
@@ -169,7 +172,7 @@ def _step_stats(
         models=_strings(entry.get("models")),
         cost=_optional_number(entry.get("cost")),
         subscription=_optional_number(entry.get("subscription")),
-        first_try=status == "approved" and attempts == 1,
+        first_try=status in REVIEWER_APPROVED and attempts == 1,
         hand_commits=hand(repo, finished_at, files) if finished_at is not None else None,
     )
 

@@ -7,6 +7,7 @@ from graphlib import CycleError, TopologicalSorter
 from pathlib import Path
 from typing import Any
 
+from conductor.autonomy import LEVELS, exceeds
 from conductor.commits import is_conventional
 
 DIFFICULTY_LEVELS = 5
@@ -57,6 +58,14 @@ def relative_path(data: object) -> str | None:
     return str(data)
 
 
+def autonomy_level(step_id: str, data: object) -> str | None:
+    if data is None:
+        return None
+    if data not in LEVELS:
+        raise PlanError(f"step '{step_id}': autonomy must be one of {', '.join(LEVELS)}")
+    return str(data)
+
+
 def positive_seconds(data: object) -> float:
     if isinstance(data, bool) or not isinstance(data, int | float) or data <= 0:
         raise PlanError("verify_timeout must be a positive number of seconds")
@@ -74,6 +83,7 @@ class Step:
     answers: tuple[Answer, ...] = ()
     verify: tuple[str, ...] | None = None
     commit: str | None = None
+    autonomy: str | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Step:
@@ -95,6 +105,7 @@ class Step:
             answers=parse_answers(step_id, data.get("answers", [])),
             verify=None if verify is None else string_list(verify, f"step '{step_id}': verify"),
             commit=commit,
+            autonomy=autonomy_level(step_id, data.get("autonomy")),
         )
         if not step.spec.strip():
             raise PlanError(f"step '{step.id}' has an empty spec")
@@ -145,6 +156,14 @@ class Plan:
 
     def verify_for(self, step: Step) -> tuple[str, ...]:
         return self.verify if step.verify is None else step.verify
+
+    def check_ceiling(self, ceiling: str) -> None:
+        for step in self.steps:
+            if step.autonomy is not None and exceeds(step.autonomy, ceiling):
+                raise PlanError(
+                    f"step '{step.id}' asks for autonomy '{step.autonomy}' "
+                    f"above the ceiling '{ceiling}'"
+                )
 
     def ready(self, done: Iterable[str]) -> list[Step]:
         finished = set(done)

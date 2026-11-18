@@ -102,7 +102,7 @@ Significant decisions for this project. Newest at the bottom. Entries are never 
 
 ## 012 — Autonomy levels: ask, guided, free
 - **Date:** 2026-11-11
-- **Status:** Proposed
+- **Status:** Superseded by 026
 - **Context:** Workers are told not to ask questions (#30). `--auto` is always passed, so every permission request is approved. Approved steps are always merged unless `reviewer = "brain"`. There is no way to say how much a worker may decide alone, although simple steps deserve more freedom than migrations.
 - **Decision:** `conductor run --autonomy ask|guided|free` sets a ceiling for the run, with a default in the profile. A step may lower it with `"autonomy"`, never raise it, so the planner cannot grant itself freedom.
   - `ask`: any doubt or permission request pauses the step as `needs_decision`; merges are manual; escalation stops one level above the starting one.
@@ -221,3 +221,11 @@ Significant decisions for this project. Newest at the bottom. Entries are never 
 - **Decision:** A message that says the model is not available (region or account) classifies as `MODEL_UNSUITABLE` whatever the event type, so the level moves to its next model, while a real authentication failure keeps `PROVIDER_UNUSABLE` and still excludes the provider.
 - **Alternatives:** Matching the status code only (the event carries the text, not the code); treating every `provider.auth` as a model error (a bad key would then be retried on every model of every level before giving up).
 - **Consequences:** One more pattern to keep aligned with the providers' wording, and a provider is no longer dropped because of a single model. Refs #72.
+
+## 026 — Autonomy ceiling enforced through OpenCode policies; Conductor never merges into main or develop
+- **Date:** 2026-11-18
+- **Status:** Accepted
+- **Context:** Decision 012 proposed the autonomy levels but left open how the denials valid at every level survive `--auto` and an agent's own rules (which come last among permission rules), what Pi does, and who keeps `main` and `develop` safe (#35).
+- **Decision:** Keeps 012's levels and behaviours (`ask`, `guided`, `free`, a run ceiling a step may only lower), with `free` as the profile default. The fixed denials (push, publish, release, `gh pr merge`, moving `main` or `develop`) are written as OpenCode `tool.use` policies in the worktree's `opencode.json`, which apply after agent rules and saved approvals, so neither `--auto` nor an agent can lift them; edits by absolute or home path are denied too, since paths inside the worktree are relative. Claude Code gets the same commands as `--disallowedTools` deny rules, and `acceptEdits` already confines its edits. Pi has no permission system: it runs unrestricted and `validate` and `run` warn about every `pi` provider. A run started on `main` or `develop` never merges: approved steps become `needs_merge` with their branch kept. Verified on OpenCode 2.2.7 and Claude Code 2.1.326: `git push` and `git -C . push` were blocked, as was an external write, while the main repository's virtualenv still ran.
+- **Alternatives:** `permissions` rules (an agent's rules come after them and could override the level); refusing Pi providers (loses a harness until the sandbox exists); refusing runs started on `develop` (too strict: the work is still useful as a branch).
+- **Consequences:** Denials match command text: another spelling (`sh -c`, a script) can get through, and a user's own global `allow` policy could lift one, so the sandbox (#39) remains the real boundary. Runs from `develop` need a manual merge. `ask` and `guided` are refused by `run` until their behaviour lands; `stop_after` is left to its own issue.

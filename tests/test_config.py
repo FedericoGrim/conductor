@@ -434,3 +434,33 @@ def test_a_pi_provider_may_keep_other_request_options() -> None:
     provider = Profile.from_dict("medium", data).providers["vercel"]
     assert provider.harness == "pi"
     assert provider.request_options["temperature"] == 0
+
+
+GUIDED = MULTI_PROVIDER.replace(
+    'reviewer = "openrouter/a"\n', 'reviewer = "openrouter/a"\nautonomy = "guided"\n'
+)
+
+
+def test_autonomy_defaults_to_free() -> None:
+    profile = Profile.from_dict("medium", tomllib.loads(MULTI_PROVIDER)["privacy"]["medium"])
+    assert profile.autonomy == "free"
+
+
+def test_reads_the_profile_autonomy() -> None:
+    profile = Profile.from_dict("medium", tomllib.loads(GUIDED)["privacy"]["medium"])
+    assert profile.autonomy == "guided"
+
+
+def test_rejects_an_unknown_profile_autonomy() -> None:
+    text = GUIDED.replace('autonomy = "guided"', 'autonomy = "yolo"')
+    with pytest.raises(ConfigError, match="autonomy must be one of ask, guided, free"):
+        Profile.from_dict("medium", tomllib.loads(text)["privacy"]["medium"])
+
+
+def test_dump_round_trips_the_autonomy(tmp_path: Path) -> None:
+    profile = Profile.from_dict("medium", tomllib.loads(GUIDED)["privacy"]["medium"])
+    config = Config("medium", {"medium": profile})
+    written = tmp_path / "conductor.toml"
+    written.write_text(config.dump())
+    assert Config.load(written) == config
+    assert 'autonomy = "guided"' in written.read_text()

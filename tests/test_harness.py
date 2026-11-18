@@ -5,6 +5,7 @@ from typing import Any
 import pytest
 
 from conductor import catalog, credentials
+from conductor.autonomy import forbidden_commands
 from conductor.config import HARNESS_NAMES, Profile, Provider
 from conductor.errors import MODEL_UNSUITABLE, PROVIDER_UNUSABLE, TRANSIENT
 from conductor.harness import (
@@ -92,6 +93,14 @@ def test_the_claude_code_command_confines_and_isolates_the_worker() -> None:
     assert "--disable-slash-commands" in cmd
     assert "--allowedTools=Bash" in cmd
     assert cmd.index("--effort") < cmd.index("do it")
+
+
+def test_the_claude_code_command_denies_every_forbidden_command() -> None:
+    cmd = claude_build_command("subscription/sonnet", "do it", [])
+    denied = next(arg for arg in cmd if arg.startswith("--disallowedTools="))
+    rules = denied.removeprefix("--disallowedTools=").split(",")
+    assert rules == [f"Bash({command})" for command in forbidden_commands()]
+    assert cmd.index(denied) < cmd.index("do it")
 
 
 def test_claude_code_event_helpers() -> None:

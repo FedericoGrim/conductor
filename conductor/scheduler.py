@@ -15,6 +15,7 @@ CONFLICT = "conflict"
 NEEDS_BRAIN_REVIEW = "needs_brain_review"
 UNAVAILABLE = "unavailable"
 NEEDS_ANSWER = "needs_answer"
+NEEDS_MERGE = "needs_merge"
 
 
 @dataclass

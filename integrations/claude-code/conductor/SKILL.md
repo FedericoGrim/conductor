@@ -34,7 +34,7 @@ Ask the user which privacy level to use if they have not said (`low`, `medium`, 
 conductor run plan.json --privacy <level>
 ```
 
-The repository must be clean (commit or stash first). Do not edit files while it runs.
+The repository must be clean (commit or stash first) and should be on a feature branch: on `main` or `develop` approved steps are not merged. Do not edit files while it runs. `--autonomy` sets the run's ceiling (only `free` runs for now); a step may lower it with `autonomy`, never raise it.
 
 ## 3. Read the result
 
@@ -45,6 +45,7 @@ The command prints the run directory. Open `<run>/run.json` and handle each step
 - `unavailable`: every model of the level hit a model or provider error (rate limit, outage, bad key, no credit, context exceeded), not a judgement on the work. Read the last attempt's `error`; rerun the step later, or with another `--privacy` profile, or implement it yourself. Do not raise its `difficulty` for this. If the error is a key or credit problem, tell the user.
 - `needs_answer`: the worker stopped on a decision the spec leaves open; the question, its options and what the worker already established are in `question`. Answer it yourself only when the spec, the code or decisions already taken settle it; otherwise ask the user. Then rerun a plan containing that step (with an `answers` list: `[{"question": "...", "answer": "..."}]`) and its unfinished dependents. The step starts over; nothing from the questioning attempt was merged.
 - `conflict`: the branch named in `detail` is kept; resolve the merge yourself.
+- `needs_merge`: the run started on `main` or `develop`, where Conductor never merges; the approved branch named in `detail` is kept. Review it and merge it yourself only if the user wants it there, otherwise run from a feature branch next time.
 - `needs_brain_review`: the profile has `reviewer = "brain"`, or the reviewer failed (the last attempt's `review.error` says why); read the diff and merge the branch yourself if correct, otherwise rerun with a sharper spec.
 - `skipped`: a dependency did not get approved; rerun once it is fixed.
 

@@ -8,6 +8,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from conductor.autonomy import DEFAULT_AUTONOMY, LEVELS
+
 BARE_KEY = re.compile(r"[A-Za-z0-9_-]+")
 DEFAULT_TRANSIENT_ATTEMPTS = 3
 BRAIN = "brain"
@@ -135,6 +137,7 @@ class Profile:
     reviewers: tuple[str, ...]
     max_parallel: int = 4
     transient_attempts: int = DEFAULT_TRANSIENT_ATTEMPTS
+    autonomy: str = DEFAULT_AUTONOMY
 
     @classmethod
     def from_dict(cls, name: str, data: dict[str, Any]) -> Profile:
@@ -156,6 +159,7 @@ class Profile:
                 reviewers=model_list(data["reviewer"], f"privacy.{name}: reviewer"),
                 max_parallel=int(data.get("max_parallel", 4)),
                 transient_attempts=cls.parse_transient_attempts(name, data),
+                autonomy=cls.parse_autonomy(name, data),
             )
         except KeyError as error:
             raise ConfigError(f"privacy.{name}: missing key {error}") from error
@@ -171,6 +175,13 @@ class Profile:
         if isinstance(attempts, bool) or not isinstance(attempts, int) or attempts < 0:
             raise ConfigError(f"privacy.{name}: retry.transient_attempts must be a count >= 0")
         return attempts
+
+    @staticmethod
+    def parse_autonomy(name: str, data: dict[str, Any]) -> str:
+        autonomy = data.get("autonomy", DEFAULT_AUTONOMY)
+        if autonomy not in LEVELS:
+            raise ConfigError(f"privacy.{name}: autonomy must be one of {', '.join(LEVELS)}")
+        return str(autonomy)
 
     @staticmethod
     def parse_providers(name: str, data: dict[str, Any]) -> dict[str, Provider]:
@@ -256,6 +267,15 @@ class Profile:
             for provider, labels in exposed.items()
         ]
 
+    def unconfined_warnings(self) -> list[str]:
+        return [
+            f"privacy.{self.name}: provider '{name}' runs on Pi, which has no permission "
+            "system: its workers are not held to the fixed denials (push, publish, release, "
+            "protected branches, edits outside the worktree)"
+            for name, provider in self.providers.items()
+            if provider.harness == "pi"
+        ]
+
     def provider_for(self, model: str) -> Provider:
         provider = self.providers.get(provider_of(model))
         if provider is None:
@@ -276,6 +296,8 @@ class Profile:
         ]
         if self.transient_attempts != DEFAULT_TRANSIENT_ATTEMPTS:
             lines.append(f"retry = {toml_value({'transient_attempts': self.transient_attempts})}")
+        if self.autonomy != DEFAULT_AUTONOMY:
+            lines.append(f"autonomy = {toml_value(self.autonomy)}")
         for name, provider in self.providers.items():
             prefix = f"privacy.{toml_key(self.name)}.providers.{toml_key(name)}"
             lines.extend(["", f"[{prefix}]"])

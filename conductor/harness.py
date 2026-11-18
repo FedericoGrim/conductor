@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from conductor import catalog, credentials
+from conductor.autonomy import forbidden_commands
 from conductor.config import Profile, provider_of
 from conductor.errors import (
     MODEL_UNSUITABLE,
@@ -132,6 +133,11 @@ def prepare_claude_code(worktree: Path, profile: Profile) -> None:
     return None
 
 
+def claude_denied_tools() -> str:
+    # The "=" form: the flag is variadic and would otherwise swallow the prompt.
+    return "--disallowedTools=" + ",".join(f"Bash({command})" for command in forbidden_commands())
+
+
 def claude_build_command(model: str, prompt: str, extra_args: list[str]) -> list[str]:
     return [
         "claude",
@@ -150,6 +156,7 @@ def claude_build_command(model: str, prompt: str, extra_args: list[str]) -> list
         "--permission-mode",
         "acceptEdits",
         "--allowedTools=Bash",
+        claude_denied_tools(),
         "--model",
         model.split("/", 1)[-1],
         *extra_args,

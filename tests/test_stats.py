@@ -304,3 +304,13 @@ def test_hand_commits_counts_human_commits_on_step_files(tmp_path: Path) -> None
 
     assert hand_commits(repo, SINCE, ("src/app.py",)) == 1
     assert hand_commits(repo, SINCE, ()) is None
+
+
+def test_a_step_left_unmerged_on_a_protected_branch_still_counts_as_first_try(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    steps = {"hello-script": {"status": "needs_merge", "attempts": 1, "models": ["a/b"]}}
+    write_run(repo, "2026-11-13T15-32-28", make_run(steps=steps))
+    runs = collect(repo, hand=zero_hand, tokens=no_tokens)
+    assert runs[0].steps[0].first_try is True

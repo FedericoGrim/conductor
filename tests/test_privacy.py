@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+from conductor.autonomy import forbidden_commands
 from conductor.config import Profile, Provider
 from conductor.privacy import api_model_id, opencode_config, pi_config, write_pi_config
 from conductor.worker import create_worktree, git
@@ -112,6 +113,26 @@ def test_provider_options_also_cover_models_that_opencode_picks_itself() -> None
         "baseURL": "https://eu.openrouter.ai/api/v1",
         "provider": {"data_collection": "deny"},
     }
+
+
+def deny(resource: str) -> dict[str, str]:
+    return {"action": "tool.use", "resource": resource, "effect": "deny"}
+
+
+def test_every_forbidden_command_is_a_policy_that_auto_cannot_approve() -> None:
+    policies = opencode_config(PROFILE)["policies"]
+    for command in forbidden_commands():
+        assert deny(f"shell:{command}") in policies
+
+
+def test_edits_outside_the_worktree_are_denied_by_policy() -> None:
+    policies = opencode_config(PROFILE)["policies"]
+    assert deny("edit:/*") in policies
+    assert deny("edit:~/*") in policies
+
+
+def test_policies_only_deny() -> None:
+    assert {rule["effect"] for rule in opencode_config(PROFILE)["policies"]} == {"deny"}
 
 
 def test_the_small_model_is_the_first_model_of_the_easiest_level() -> None:
