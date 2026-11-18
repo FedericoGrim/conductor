@@ -12,9 +12,16 @@ from conductor.errors import (
     UNCLASSIFIED,
     ModelError,
 )
-from conductor.escalation import RunState, build_prompt, run_step
+from conductor.escalation import (
+    RunState,
+    attempt_entry,
+    build_prompt,
+    review_entry,
+    run_step,
+)
 from conductor.plan import Answer, Step
 from conductor.reviewer import Verdict
+from conductor.tokens import Tokens
 from conductor.verify import CheckResult
 from conductor.worker import AttemptOutput
 from tests.factories import make_profile
@@ -748,8 +755,6 @@ def test_an_errored_second_opinion_does_not_overrule_the_first_rejection() -> No
 
 
 def test_attempt_entry_records_worker_and_reviewer_tokens() -> None:
-    from conductor.escalation import attempt_entry
-    from conductor.tokens import Tokens
 
     worker_tokens = Tokens(input=100, output=50, reasoning=10, cache_read=5, cache_write=2)
     output = AttemptOutput(
@@ -765,9 +770,6 @@ def test_attempt_entry_records_worker_and_reviewer_tokens() -> None:
 
 
 def test_review_entry_records_reviewer_tokens() -> None:
-    from conductor.escalation import review_entry
-    from conductor.reviewer import Verdict
-    from conductor.tokens import Tokens
 
     reviewer_tokens = Tokens(input=190, output=80, reasoning=20, cache_read=10, cache_write=5)
     verdict = Verdict(True, "ok", "{}", usage={"prompt_tokens": 200, "completion_tokens": 80})
@@ -783,12 +785,6 @@ def test_review_entry_records_reviewer_tokens() -> None:
 
 def test_consult_reviewers_records_tokens_in_attempt_and_reviews() -> None:
     import asyncio
-
-    from conductor.escalation import RunState, run_step
-    from conductor.plan import Step
-    from conductor.reviewer import Verdict
-    from conductor.tokens import Tokens
-    from conductor.verify import CheckResult
 
     profile = REVIEWERS_PROFILE
     step = STEP

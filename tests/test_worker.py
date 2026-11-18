@@ -19,6 +19,7 @@ from conductor.harness import (
     session_id,
     write_opencode_config,
 )
+from conductor.tokens import Tokens
 from conductor.worker import (
     commit_work,
     create_worktree,
@@ -452,7 +453,6 @@ def test_run_attempt_commits_with_the_callables_message(tmp_path: Path) -> None:
 
 
 def test_run_attempt_records_worker_tokens(tmp_path: Path) -> None:
-    from conductor.tokens import Tokens
 
     repo = init_repo(tmp_path)
     worktree = tmp_path / "wt"

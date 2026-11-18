@@ -14,7 +14,8 @@ from conductor.errors import (
     UNCLASSIFIED,
     ModelError,
 )
-from conductor.reviewer import Verdict, review, review_request
+from conductor.reviewer import Verdict, review, review_request, usage_tokens
+from conductor.tokens import Tokens
 from conductor.verify import CheckResult
 from tests.factories import make_profile
 
@@ -405,8 +406,6 @@ def test_the_system_prompt_lists_the_categories(monkeypatch: pytest.MonkeyPatch)
 
 
 def test_usage_tokens_with_full_openrouter_usage() -> None:
-    from conductor.reviewer import usage_tokens
-    from conductor.tokens import Tokens
 
     usage = {
         "prompt_tokens": 1200,
@@ -419,8 +418,6 @@ def test_usage_tokens_with_full_openrouter_usage() -> None:
 
 
 def test_usage_tokens_with_only_prompt_and_completion() -> None:
-    from conductor.reviewer import usage_tokens
-    from conductor.tokens import Tokens
 
     usage = {"prompt_tokens": 500, "completion_tokens": 150}
     tokens = usage_tokens(usage)
@@ -430,8 +427,6 @@ def test_usage_tokens_with_only_prompt_and_completion() -> None:
 
 
 def test_usage_tokens_with_empty_dict() -> None:
-    from conductor.reviewer import usage_tokens
-    from conductor.tokens import Tokens
 
     usage: dict[str, Any] = {}
     tokens = usage_tokens(usage)
@@ -439,8 +434,6 @@ def test_usage_tokens_with_empty_dict() -> None:
 
 
 def test_usage_tokens_with_non_int_values() -> None:
-    from conductor.reviewer import usage_tokens
-    from conductor.tokens import Tokens
 
     usage = {
         "prompt_tokens": "many",
@@ -453,8 +446,6 @@ def test_usage_tokens_with_non_int_values() -> None:
 
 
 def test_usage_tokens_with_cache_write() -> None:
-    from conductor.reviewer import usage_tokens
-    from conductor.tokens import Tokens
 
     usage = {
         "prompt_tokens": 1000,
@@ -466,8 +457,6 @@ def test_usage_tokens_with_cache_write() -> None:
 
 
 def test_verdict_tokens_property() -> None:
-    from conductor.reviewer import Verdict
-    from conductor.tokens import Tokens
 
     usage = {
         "prompt_tokens": 800,

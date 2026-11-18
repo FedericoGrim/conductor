@@ -77,15 +77,7 @@ class Verdict:
 
 
 def usage_tokens(usage: dict[str, Any]) -> Tokens:
-    """Extract token counts from an OpenAI-compatible usage dict.
-
-    Args:
-        usage: The usage dict from the API response.
-
-    Returns:
-        Tokens with fields populated from the usage dict. Missing or non-int
-        values (excluding bools) become None.
-    """
+    """The tokens of an OpenAI-compatible usage dict; a field nobody reported stays None."""
     prompt_tokens = usage.get("prompt_tokens")
     completion_tokens = usage.get("completion_tokens")
     completion_details_raw = usage.get("completion_tokens_details")
