@@ -9,6 +9,7 @@ from conductor.catalog import (
     forget_prices,
     model_costs,
     parse_models,
+    reasoning_models,
     select_models,
 )
 
@@ -78,6 +79,30 @@ VERCEL_WITH_CACHE_PAYLOAD = {
                 "cache_read": "0.00000006",
                 "cache_write": "0.00000008",
             },
+        },
+    ]
+}
+
+REASONING_PAYLOAD = {
+    "data": [
+        {
+            "id": "deepseek/reasoner",
+            "pricing": {"prompt": "0.00000014", "completion": "0.00000056"},
+            "supported_parameters": ["tools", "reasoning"],
+        },
+        {
+            "id": "openai/o3-mini",
+            "pricing": {"prompt": "0.0000011", "completion": "0.0000044"},
+            "supported_parameters": ["tools", "reasoning_effort"],
+        },
+        {
+            "id": "anthropic/claude-sonnet",
+            "pricing": {"prompt": "0.000003", "completion": "0.000015"},
+            "supported_parameters": ["tools", "max_tokens"],
+        },
+        {
+            "id": "deepseek/flash",
+            "pricing": {"prompt": "0.0000003", "completion": "0.0000012"},
         },
     ]
 }
@@ -230,3 +255,56 @@ def test_forget_prices_empties_the_cache() -> None:
     forget_prices()
     model_costs("https://openrouter.ai/api/v1/", fake_get)
     assert call_count == 2
+
+
+def test_parse_models_sets_supports_reasoning_from_supported_parameters() -> None:
+    models = parse_models(REASONING_PAYLOAD)
+    by_id = {model.id: model for model in models}
+    assert by_id["deepseek/reasoner"].supports_reasoning is True
+    assert by_id["openai/o3-mini"].supports_reasoning is True
+    assert by_id["anthropic/claude-sonnet"].supports_reasoning is False
+    assert by_id["deepseek/flash"].supports_reasoning is False
+
+
+def test_parse_models_entry_without_supported_parameters_has_reasoning_false() -> None:
+    payload = {
+        "data": [
+            {
+                "id": "deepseek/flash",
+                "pricing": {"prompt": "0.0000003", "completion": "0.0000012"},
+            },
+        ]
+    }
+    assert parse_models(payload)[0].supports_reasoning is False
+
+
+def test_reasoning_models_returns_exactly_the_reasoning_ids() -> None:
+    def fake_get(url: str) -> dict[str, Any]:
+        return REASONING_PAYLOAD
+
+    forget_prices()
+    assert reasoning_models("https://openrouter.ai/api/v1/", fake_get) == frozenset(
+        {"deepseek/reasoner", "openai/o3-mini"}
+    )
+
+
+def test_reasoning_models_returns_empty_frozenset_on_catalog_error() -> None:
+    def fake_get(url: str) -> dict[str, Any]:
+        raise CatalogError("network error")
+
+    forget_prices()
+    assert reasoning_models("https://openrouter.ai/api/v1/", fake_get) == frozenset()
+
+
+def test_model_costs_and_reasoning_models_share_one_fetch_per_base_url() -> None:
+    call_count = 0
+
+    def fake_get(url: str) -> dict[str, Any]:
+        nonlocal call_count
+        call_count += 1
+        return REASONING_PAYLOAD
+
+    forget_prices()
+    model_costs("https://openrouter.ai/api/v1/", fake_get)
+    reasoning_models("https://openrouter.ai/api/v1/", fake_get)
+    assert call_count == 1
