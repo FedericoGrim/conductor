@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.7.0](https://github.com/FedericoGrim/conductor/compare/conductor-v0.6.1...conductor-v0.7.0) (2026-11-18)
+
+
+### Features
+
+* **catalog:** read which models support reasoning ([08dd783](https://github.com/FedericoGrim/conductor/commit/08dd783843206c293f40bb5894a4a70d3944207d))
+* **cli:** print the run progress after every step event ([f940249](https://github.com/FedericoGrim/conductor/commit/f94024912e497250ff0dce5361c48a99cd534bab))
+* **cli:** print the run progress after every step event ([#60](https://github.com/FedericoGrim/conductor/issues/60)) ([0d01f0e](https://github.com/FedericoGrim/conductor/commit/0d01f0e5ec246dd8f5b43a67c35124d95d9517f6))
+* **cli:** warn about parallel steps that list the same files ([#41](https://github.com/FedericoGrim/conductor/issues/41)) ([6eb98a7](https://github.com/FedericoGrim/conductor/commit/6eb98a7dc59938eb53a9a736ba9c6b586f76842e))
+* **cli:** warn about parallel steps that share files ([cd91f76](https://github.com/FedericoGrim/conductor/commit/cd91f76516fec1e45b9b2b1cb04e5534c5c39790))
+* **harness:** read the token usage of every harness's event stream ([5a71da9](https://github.com/FedericoGrim/conductor/commit/5a71da9228cadb16ff7489c16ed6a919abcf5057))
+* **log:** sum the tokens per step and per model in run.json ([37d9688](https://github.com/FedericoGrim/conductor/commit/37d9688eafdf06fdaa84229057f37f3a67c7494b))
+* **plan:** report parallel steps that list the same files ([8926aba](https://github.com/FedericoGrim/conductor/commit/8926ababc38cbfccef74cd605137e69ee601926a))
+* **progress:** track step progress and estimate the time left ([22f7499](https://github.com/FedericoGrim/conductor/commit/22f7499986107e8502282240e4356096f97cb09c))
+* **reviewer:** put the plan's domain rules before the specification ([8d514bc](https://github.com/FedericoGrim/conductor/commit/8d514bcf225d4384a19b0e60f2da3b2132a5a534))
+* **reviewer:** put the plan's domain rules before the specification ([#92](https://github.com/FedericoGrim/conductor/issues/92)) ([c840fd4](https://github.com/FedericoGrim/conductor/commit/c840fd498ac25bda3ac0bc2ec8877cfedf97de13))
+* **setup:** add a routing screen per model to the setup UI ([27fc475](https://github.com/FedericoGrim/conductor/commit/27fc475b16a4e4618884483708d722eba2329c22))
+* **setup:** edit the routing options of a single model ([5709326](https://github.com/FedericoGrim/conductor/commit/5709326794f5caea317632596842e0c09dcd40aa))
+* **setup:** edit the routing options of a single model ([#23](https://github.com/FedericoGrim/conductor/issues/23)) ([3ff58f8](https://github.com/FedericoGrim/conductor/commit/3ff58f8c3a928f5e92692254809a2dbf6547aa93))
+* **stats:** show the tokens and the cache share per step and model ([86e5b5b](https://github.com/FedericoGrim/conductor/commit/86e5b5b263228b1e6c5fe909d3f2d043322e047f))
+* **tokens:** record the tokens of every harness and show them in stats ([#91](https://github.com/FedericoGrim/conductor/issues/91)) ([363d704](https://github.com/FedericoGrim/conductor/commit/363d704685cb8ae9170fc7e454b3e172f4080abb))
+* **tokens:** record worker and reviewer tokens per attempt ([0aabf17](https://github.com/FedericoGrim/conductor/commit/0aabf177e748055c3431e21e091f8beab033fe94))
+
+
+### Bug Fixes
+
+* **privacy:** declare reasoning for the Pi models the catalog marks ([65dba61](https://github.com/FedericoGrim/conductor/commit/65dba61a65bb2c3f6149a29eeadcfb9f21ce0ed6))
+* **privacy:** declare reasoning for the Pi models the catalog marks ([#95](https://github.com/FedericoGrim/conductor/issues/95)) ([b1b3437](https://github.com/FedericoGrim/conductor/commit/b1b343742f9c4e1188eda6d7f5eda4bd09cb5206))
+
+
+### Documentation
+
+* describe the per-model routing screen of the setup UI ([2877d8c](https://github.com/FedericoGrim/conductor/commit/2877d8c58c16dbecb5a56254c24ac6c849fe8dc6))
+* **integrations:** ask the brain to write plans in English ([ea8e2d1](https://github.com/FedericoGrim/conductor/commit/ea8e2d1c6038fd7d5834cd37eaaec95454e2b352))
+* **integrations:** ask the brain to write plans in English ([#93](https://github.com/FedericoGrim/conductor/issues/93)) ([38f36b0](https://github.com/FedericoGrim/conductor/commit/38f36b0da505e97495a7865a4afc7b4cb296aa4f))
+* list the progress module in the architecture ([f044f52](https://github.com/FedericoGrim/conductor/commit/f044f52b9c13f6353df8f2b2fab17c9ec3040c5e))
+
 ## [0.6.1](https://github.com/FedericoGrim/conductor/compare/conductor-v0.6.0...conductor-v0.6.1) (2026-11-16)
 
 
