@@ -23,6 +23,7 @@ from conductor.harness import (
     claude_subscription_cost,
     claude_tokens,
     harness_for,
+    opencode_refusals,
     opencode_tokens,
     pi_command,
     pi_cost,
@@ -732,6 +733,79 @@ def test_pi_tokens_reasoning_is_none() -> None:
     ]
     tokens = pi_tokens(events)
     assert tokens.reasoning is None
+
+
+def opencode_tool(tool: str, status: str, error: str | None = None, **state: Any) -> dict[str, Any]:
+    part_state: dict[str, Any] = {"status": status, **state}
+    if error is not None:
+        part_state["error"] = error
+    return {"type": "tool_use", "part": {"tool": tool, "state": part_state}}
+
+
+POLICY_DENIAL = "Blocked by configuration policy"
+AUTO_REJECT = (
+    "This non-interactive run cannot ask the user for permission, so the request was "
+    "rejected. Continue without this action."
+)
+
+
+def test_a_policy_denial_is_a_refusal_with_its_command() -> None:
+    events: Events = [
+        opencode_tool(
+            "bash",
+            "error",
+            POLICY_DENIAL,
+            input={"command": "git push origin main"},
+        )
+    ]
+    assert opencode_refusals(events) == ("bash: git push origin main",)
+
+
+def test_an_auto_reject_is_a_refusal_with_its_command() -> None:
+    events: Events = [
+        opencode_tool("bash", "error", AUTO_REJECT, input={"command": "rm -rf build"}),
+    ]
+    assert opencode_refusals(events) == ("bash: rm -rf build",)
+
+
+def test_a_refusal_without_a_string_command_is_named_by_its_tool() -> None:
+    events: Events = [
+        opencode_tool("write", "error", POLICY_DENIAL, input={"path": "/etc/hosts"}),
+        opencode_tool("bash", "error", AUTO_REJECT, input={"command": 7}),
+    ]
+    assert opencode_refusals(events) == ("write", "bash")
+
+
+def test_an_ordinary_tool_error_is_not_a_refusal() -> None:
+    events: Events = [
+        opencode_tool("bash", "error", "exit code 1", input={"command": "pytest -q"}),
+        opencode_tool("read", "error", "File not found"),
+    ]
+    assert opencode_refusals(events) == ()
+
+
+def test_a_completed_tool_call_is_not_a_refusal() -> None:
+    events: Events = [
+        opencode_tool("bash", "completed", output="ok", input={"command": "ls"}),
+    ]
+    assert opencode_refusals(events) == ()
+
+
+def test_a_mixed_stream_keeps_only_the_refusals_in_order() -> None:
+    events: Events = [
+        {"type": "step_start", "part": {}},
+        opencode_tool("bash", "completed", output="ok", input={"command": "ls"}),
+        opencode_tool("bash", "error", "exit code 2", input={"command": "pytest"}),
+        opencode_tool("bash", "error", POLICY_DENIAL, input={"command": "git push"}),
+        {"type": "text", "part": {"text": "I cannot push."}},
+        opencode_tool("bash", "error", AUTO_REJECT, input={"command": "curl x"}),
+        {"type": "tool_use", "part": {"tool": "bash"}},
+    ]
+    assert opencode_refusals(events) == ("bash: git push", "bash: curl x")
+
+
+def test_the_opencode_harness_reads_its_refusals() -> None:
+    assert OPENCODE.refusals is opencode_refusals
 
 
 def test_each_harness_has_its_token_reader() -> None:
