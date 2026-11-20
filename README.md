@@ -32,15 +32,17 @@ At every level, workers are held to fixed denials that no permission approval ca
 
 **Per-level behaviour:**
 
-- `free` — grants full autonomy: OpenCode runs with `--auto` (confirm-class actions inside the worktree are auto-approved), Claude Code runs with `--permission-mode acceptEdits`, Pi runs with the Conductor extension loaded via `-e`. The worker decides and lists its choices; merge is automatic after verification and review.
-- `guided` — runs without `--auto` (OpenCode), without `acceptEdits` (Claude Code), and with the Conductor extension (Pi). Permission requests are denied and recorded in the attempt; the worker continues without them. Every choice beyond the spec is listed in the handoff. Merge is automatic after verification and review.
+- `free` — grants full autonomy: OpenCode runs with `--auto` (confirm-class actions inside the worktree are auto-approved). Merge is automatic after verification and review.
+- `guided` — unlike `free`, OpenCode runs without `--auto`: a permission request is denied and recorded in the attempt, and the worker continues without it. Merge is automatic after verification and review.
 - `ask` — any doubt or permission request pauses the step as `needs_decision`; the brain answers (or asks the user) and the step is rerun. Merges are manual (by hand). Escalation is capped at one tier above the starting difficulty level.
+
+The level changes how a refusal is handled, not the harness configuration: Claude Code always runs with `--permission-mode acceptEdits` and Pi always loads the Conductor extension.
 
 **Fixed denial enforcement per harness:**
 
 - OpenCode: `tool.use` policies in the worktree's `opencode.json` (apply after agent rules and saved approvals, so `--auto` cannot lift them).
-- Claude Code: `--disallowedTools` deny rules; `--permission-mode acceptEdits` only in `free` mode.
-- Pi: Conductor-owned extension loaded with `-e` that denies the same command patterns and file writes outside the worktree.
+- Claude Code: `--disallowedTools` deny rules, with `--permission-mode acceptEdits` confining edits inside the worktree.
+- Pi: Conductor-owned extension loaded with `-e` that denies the same command patterns.
 
 The denials match command text, so a command written another way (`sh -c '...'`, a script) can still get through; the sandbox of #39 is the real boundary.
 
