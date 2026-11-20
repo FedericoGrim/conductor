@@ -790,27 +790,30 @@ def test_validate_warns_that_pi_workers_ignore_the_fixed_denials(
 
 
 @pytest.mark.parametrize("autonomy", ["ask", "guided"])
-def test_run_refuses_the_autonomy_levels_that_are_not_implemented_yet(
+def test_run_accepts_every_autonomy_level(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
     autonomy: str,
 ) -> None:
     code, repo, _ = run_verified_plan(
         tmp_path, monkeypatch, {}, extra_args=("--autonomy", autonomy)
     )
-    assert code == 2
-    assert f"autonomy '{autonomy}' is not available yet" in capsys.readouterr().err
-    assert not (repo / ".conductor" / "runs").exists()
+    assert code == 0
+    run_dir = next((repo / ".conductor" / "runs").iterdir())
+    run = json.loads((run_dir / "run.json").read_text())
+    assert run["autonomy"] == autonomy
+    assert run["steps"]["a"]["autonomy"] == autonomy
 
 
-def test_run_refuses_a_step_that_lowers_its_autonomy_until_the_levels_exist(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+def test_run_accepts_a_step_that_lowers_its_autonomy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     steps = [{"id": "a", "spec": "write output", "difficulty": 1, "autonomy": "ask"}]
-    code, _, _ = run_verified_plan(tmp_path, monkeypatch, {"steps": steps})
-    assert code == 2
-    assert "autonomy 'ask' is not available yet" in capsys.readouterr().err
+    code, repo, _ = run_verified_plan(tmp_path, monkeypatch, {"steps": steps})
+    assert code == 0
+    run_dir = next((repo / ".conductor" / "runs").iterdir())
+    run = json.loads((run_dir / "run.json").read_text())
+    assert run["steps"]["a"]["autonomy"] == "ask"
 
 
 def test_run_refuses_a_step_above_the_ceiling_before_any_attempt(

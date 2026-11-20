@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, TextIO
 
 from conductor import billing, reviewer, settings, setup_tui, stats
-from conductor.autonomy import DEFAULT_AUTONOMY, FREE, LEVELS, effective, is_protected
+from conductor.autonomy import DEFAULT_AUTONOMY, LEVELS, effective, is_protected
 from conductor.commits import choose_commit_message
 from conductor.config import Config, ConfigError, Profile
 from conductor.escalation import RunState, run_step
@@ -48,20 +48,6 @@ def find_config(explicit: Path | None) -> Path:
     raise ConfigError(
         "no conductor.toml found (looked in: " + ", ".join(map(str, candidates)) + ")"
     )
-
-
-class UnsupportedAutonomyError(ValueError):
-    pass
-
-
-def check_autonomy_available(plan: Plan, ceiling: str) -> None:
-    for step in plan.steps:
-        level = effective(ceiling, step.autonomy)
-        if level != FREE:
-            raise UnsupportedAutonomyError(
-                f"autonomy '{level}' is not available yet (step '{step.id}'); "
-                "only 'free' runs until the ask and guided levels land (#35)"
-            )
 
 
 def validate(args: argparse.Namespace) -> int:
@@ -178,6 +164,7 @@ async def execute_plan(
             state=state,
             check=check,
             verify=plan.verify_for(step),
+            autonomy=effective(ceiling, step.autonomy),
         )
         numbers = [a["attempt"] for a in result.attempts]
         for number in numbers[:-1]:
@@ -230,7 +217,6 @@ def run(args: argparse.Namespace) -> int:
     plan = Plan.load(args.plan)
     ceiling = args.autonomy or profile.autonomy
     plan.check_ceiling(ceiling)
-    check_autonomy_available(plan, ceiling)
     for warning in profile.unconfined_warnings():
         print(f"warning: {warning}", file=sys.stderr)
     rules = domain_rules(repo, plan)
@@ -483,7 +469,6 @@ def main(argv: list[str] | None = None) -> int:
         ConfigError,
         NotARepositoryError,
         settings.SettingsError,
-        UnsupportedAutonomyError,
     ) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
