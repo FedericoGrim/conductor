@@ -17,6 +17,7 @@ from conductor.errors import (
     mentions_context_limit,
     mentions_unavailable_model,
 )
+from conductor.pi_extension import PERMISSION_EXTENSION_NAME, write_permission_extension
 from conductor.privacy import (
     PI_AGENT_DIR,
     api_model_id,
@@ -332,11 +333,14 @@ def claude_refusals(events: Events) -> tuple[str, ...]:
 PI_SESSION = "session"
 PI_TURN_END = "turn_end"
 PI_AGENT_END = "agent_end"
+PI_TOOL_END = "tool_execution_end"
 PI_RETRY_START = "auto_retry_start"
 PI_RETRY_END = "auto_retry_end"
 PI_ASSISTANT = "assistant"
 PI_TEXT_BLOCK = "text"
 PI_STOP_ERROR = "error"
+# The permission extension blocks a call with this prefix; Pi reports it as a failed tool.
+PI_DENY_PREFIX = "CONDUCTOR_DENY:"
 # Pi reports API errors as strings, and the OpenAI-compatible client prefixes the HTTP
 # status to the text ("401 Incorrect API key provided", "Connection error.").
 PI_STATUS_CODE = re.compile(r"\b[45]\d{2}\b")
@@ -352,6 +356,9 @@ def pi_command(model: str, prompt: str, extra_args: list[str]) -> list[str]:
         # a worker of an unrelated repository; the target's AGENTS.md/CLAUDE.md stay on.
         "--no-skills",
         "--no-extensions",
+        # --no-extensions turns off discovery only: this explicit path is still loaded.
+        "-e",
+        f"{PI_AGENT_DIR}/{PERMISSION_EXTENSION_NAME}",
         "--no-prompt-templates",
         "--no-themes",
         "--tools",
@@ -400,6 +407,8 @@ def pi_reasoning_models(profile: Profile) -> frozenset[str]:
 
 def pi_prepare(worktree: Path, profile: Profile) -> None:
     write_pi_config(worktree, pi_config(profile, pi_prices(profile), pi_reasoning_models(profile)))
+    # Pi has no permission system: this extension is the worker's fixed denials.
+    write_permission_extension(worktree / PI_AGENT_DIR)
 
 
 def pi_session_id(events: Events) -> str | None:
@@ -493,6 +502,21 @@ def pi_final_text(events: Events) -> str:
     return ""
 
 
+def pi_refusals(events: Events) -> tuple[str, ...]:
+    """One entry per tool call the permission extension blocked, with its deny reason."""
+    refused: list[str] = []
+    for event in events:
+        if event.get("type") != PI_TOOL_END or not event.get("isError"):
+            continue
+        result = event.get("result")
+        content = result.get("content") if isinstance(result, dict) else None
+        block = content[0] if isinstance(content, list) and content else None
+        text = block.get("text") if isinstance(block, dict) else None
+        if isinstance(text, str) and text.startswith(PI_DENY_PREFIX):
+            refused.append(text)
+    return tuple(refused)
+
+
 def pi_status(message: str) -> int | None:
     match = PI_STATUS_CODE.search(message)
     return int(match[0]) if match else None
@@ -571,6 +595,7 @@ PI = Harness(
     error=pi_error,
     final_text=pi_final_text,
     tokens=pi_tokens,
+    refusals=pi_refusals,
 )
 
 HARNESSES = {harness.name: harness for harness in (OPENCODE, CLAUDE_CODE, PI)}
