@@ -33,10 +33,17 @@ from conductor.harness import (
     pi_final_text,
     pi_is_retry,
     pi_prepare,
+    pi_refusals,
     pi_session_id,
     pi_tokens,
     prepare_opencode,
 )
+from conductor.pi_extension import (
+    PERMISSION_EXTENSION,
+    PERMISSION_EXTENSION_NAME,
+    write_permission_extension,
+)
+from conductor.privacy import PI_AGENT_DIR
 from conductor.tokens import Tokens
 from conductor.worker import Events, git, parse_events
 from tests.factories import make_profile
@@ -452,6 +459,62 @@ def test_the_pi_command_isolates_the_worker_and_names_the_api_model() -> None:
     assert cmd.index("--effort") < cmd.index("do it")
     # The key travels in the worktree's models.json and the environment, never as an argument.
     assert all("API_KEY" not in part.upper() and part != "--api-key" for part in cmd)
+
+
+def test_the_pi_command_loads_the_permission_extension() -> None:
+    cmd = pi_command("openrouter/deepseek/v4", "do it", [])
+    assert cmd.index("-e") < cmd.index("do it")
+    assert cmd[cmd.index("-e") + 1] == f"{PI_AGENT_DIR}/{PERMISSION_EXTENSION_NAME}"
+    # Only the explicit extension loads: the user's own ones stay off.
+    assert "--no-extensions" in cmd
+
+
+def test_the_permission_extension_denies_every_forbidden_command() -> None:
+    assert "CONDUCTOR_DENY" in PERMISSION_EXTENSION
+    for pattern in forbidden_commands():
+        assert pattern in PERMISSION_EXTENSION
+
+
+def test_write_permission_extension_writes_the_generated_source(tmp_path: Path) -> None:
+    path = write_permission_extension(tmp_path / "agent")
+    assert path == tmp_path / "agent" / PERMISSION_EXTENSION_NAME
+    assert path.read_text() == PERMISSION_EXTENSION
+
+
+def test_pi_prepare_writes_the_permission_extension(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(catalog, "model_costs", lambda base_url, get=None: {})
+    monkeypatch.setattr(catalog, "reasoning_models", lambda base_url, get=None: frozenset())
+    worktree = init_worktree(tmp_path)
+    pi_prepare(worktree, pi_profile())
+    extension = worktree / PI_AGENT_DIR / PERMISSION_EXTENSION_NAME
+    assert extension.read_text() == PERMISSION_EXTENSION
+
+
+def pi_tool_end(reason: str, is_error: bool = True) -> dict[str, Any]:
+    return {
+        "type": "tool_execution_end",
+        "toolCallId": "call_1",
+        "toolName": "bash",
+        "result": {"content": [{"type": "text", "text": reason}], "details": {}},
+        "isError": is_error,
+    }
+
+
+def test_a_blocked_pi_tool_call_is_a_refusal() -> None:
+    events: Events = [pi_tool_end("CONDUCTOR_DENY: git push *")]
+    assert pi_refusals(events) == ("CONDUCTOR_DENY: git push *",)
+
+
+def test_an_ordinary_pi_tool_end_is_not_a_refusal() -> None:
+    assert pi_refusals(PI_STREAM) == ()
+    assert pi_refusals([pi_tool_end("exit code 1")]) == ()
+    assert pi_refusals([pi_tool_end("CONDUCTOR_DENY: git push *", is_error=False)]) == ()
+
+
+def test_the_pi_harness_reads_its_refusals() -> None:
+    assert PI.refusals is pi_refusals
 
 
 def test_pi_environment_points_at_the_agent_dir_in_the_worktree(tmp_path: Path) -> None:
