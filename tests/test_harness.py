@@ -19,6 +19,7 @@ from conductor.harness import (
     claude_error,
     claude_final_text,
     claude_is_retry,
+    claude_refusals,
     claude_session_id,
     claude_subscription_cost,
     claude_tokens,
@@ -806,6 +807,42 @@ def test_a_mixed_stream_keeps_only_the_refusals_in_order() -> None:
 
 def test_the_opencode_harness_reads_its_refusals() -> None:
     assert OPENCODE.refusals is opencode_refusals
+
+
+def claude_result_with_denials(denials: list[dict[str, Any]]) -> dict[str, Any]:
+    return {**CLAUDE_RESULT, "permission_denials": denials}
+
+
+def test_a_claude_code_denial_with_a_command_is_a_refusal_with_its_command() -> None:
+    result = claude_result_with_denials(
+        [
+            {
+                "tool_name": "Bash",
+                "tool_use_id": "toolu_1",
+                "tool_input": {"command": "git push origin main"},
+            }
+        ]
+    )
+    assert claude_refusals([CLAUDE_INIT, result]) == ("Bash: git push origin main",)
+
+
+def test_a_claude_code_denial_without_a_command_is_named_by_its_tool() -> None:
+    result = claude_result_with_denials(
+        [{"tool_name": "Edit", "tool_use_id": "toolu_2", "tool_input": {"file_path": "/etc/hosts"}}]
+    )
+    assert claude_refusals([CLAUDE_INIT, result]) == ("Edit",)
+
+
+def test_a_claude_code_result_without_denials_has_no_refusals() -> None:
+    assert claude_refusals([CLAUDE_INIT, CLAUDE_RESULT]) == ()
+
+
+def test_a_claude_code_run_without_a_result_has_no_refusals() -> None:
+    assert claude_refusals([CLAUDE_INIT, CLAUDE_ASSISTANT]) == ()
+
+
+def test_the_claude_code_harness_reads_its_refusals() -> None:
+    assert CLAUDE_CODE.refusals is claude_refusals
 
 
 def test_each_harness_has_its_token_reader() -> None:

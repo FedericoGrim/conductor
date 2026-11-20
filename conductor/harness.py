@@ -312,6 +312,23 @@ def claude_error(events: Events, exit_code: int, stderr: str) -> ModelError | No
     return None
 
 
+def claude_refusals(events: Events) -> tuple[str, ...]:
+    """One entry per tool call the permission layer refused, as "tool: command"."""
+    result = next((e for e in reversed(events) if e.get("type") == CLAUDE_RESULT), None)
+    denials = result.get("permission_denials") if result is not None else None
+    if not isinstance(denials, list):
+        return ()
+    refused: list[str] = []
+    for denial in denials:
+        if not isinstance(denial, dict):
+            continue
+        tool = str(denial.get("tool_name", ""))
+        tool_input = denial.get("tool_input")
+        command = tool_input.get("command") if isinstance(tool_input, dict) else None
+        refused.append(f"{tool}: {command}" if isinstance(command, str) else tool)
+    return tuple(refused)
+
+
 PI_SESSION = "session"
 PI_TURN_END = "turn_end"
 PI_AGENT_END = "agent_end"
@@ -540,6 +557,7 @@ CLAUDE_CODE = Harness(
     final_text=claude_final_text,
     subscription_cost=claude_subscription_cost,
     tokens=claude_tokens,
+    refusals=claude_refusals,
 )
 
 PI = Harness(
