@@ -267,15 +267,6 @@ class Profile:
             for provider, labels in exposed.items()
         ]
 
-    def unconfined_warnings(self) -> list[str]:
-        return [
-            f"privacy.{self.name}: provider '{name}' runs on Pi, which has no permission "
-            "system: its workers are not held to the fixed denials (push, publish, release, "
-            "protected branches, edits outside the worktree)"
-            for name, provider in self.providers.items()
-            if provider.harness == "pi"
-        ]
-
     def provider_for(self, model: str) -> Provider:
         provider = self.providers.get(provider_of(model))
         if provider is None:

@@ -62,7 +62,7 @@ def validate(args: argparse.Namespace) -> int:
     if config is None:
         return 0
     for profile in config.profiles.values():
-        for warning in (*profile.single_provider_warnings(), *profile.unconfined_warnings()):
+        for warning in profile.single_provider_warnings():
             print(f"warning: {warning}")
     return 0
 
@@ -219,8 +219,6 @@ def run(args: argparse.Namespace) -> int:
     plan = Plan.load(args.plan)
     ceiling = args.autonomy or profile.autonomy
     plan.check_ceiling(ceiling)
-    for warning in profile.unconfined_warnings():
-        print(f"warning: {warning}", file=sys.stderr)
     rules = domain_rules(repo, plan)
     exclude_from_git(repo, ".conductor/")
     if git(repo, "status", "--porcelain").strip():

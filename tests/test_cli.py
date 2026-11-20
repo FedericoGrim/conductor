@@ -759,36 +759,6 @@ def test_validate_takes_the_ceiling_from_the_default_profile(
     assert "above the ceiling 'ask'" in capsys.readouterr().err
 
 
-PI_CONFIG = """
-default_privacy = "medium"
-[privacy.medium]
-tiers = [["pi-router/a", "openrouter/a"]]
-reviewer = "openrouter/r"
-
-[privacy.medium.providers.openrouter]
-base_url = "https://openrouter.ai/api/v1"
-api_key_env = "OPENROUTER_API_KEY"
-
-[privacy.medium.providers.pi-router]
-harness = "pi"
-base_url = "https://openrouter.ai/api/v1"
-api_key_env = "OPENROUTER_API_KEY"
-"""
-
-
-def test_validate_warns_that_pi_workers_ignore_the_fixed_denials(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    config = tmp_path / "conductor.toml"
-    config.write_text(PI_CONFIG)
-    assert cli.main(["validate", str(EXAMPLE_PLAN), "--config", str(config)]) == 0
-    assert (
-        "warning: privacy.medium: provider 'pi-router' runs on Pi, which has no permission "
-        "system: its workers are not held to the fixed denials (push, publish, release, "
-        "protected branches, edits outside the worktree)\n"
-    ) in capsys.readouterr().out
-
-
 @pytest.mark.parametrize("autonomy,expected_code", [("ask", 1), ("guided", 0)])
 def test_run_accepts_every_autonomy_level(
     tmp_path: Path,
