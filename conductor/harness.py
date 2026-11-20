@@ -32,6 +32,13 @@ OPENCODE_CONFIG_NAME = "opencode.json"
 ERROR_EVENT = "error"
 RETRY_EVENT = "retry"
 TEXT_EVENT = "text"
+TOOL_EVENT = "tool_use"
+# OpenCode's permission layer writes these errors on a refused tool call (observed on 2.2.7).
+OPENCODE_POLICY_DENIAL = "Blocked by configuration policy"
+OPENCODE_AUTO_REJECT = (
+    "This non-interactive run cannot ask the user for permission, so the request was "
+    "rejected. Continue without this action."
+)
 
 ERROR_KINDS = {
     "provider.rate-limit": TRANSIENT,
@@ -130,6 +137,25 @@ def final_text(events: Events) -> str:
         if event.get("type") == TEXT_EVENT and isinstance(part, dict):
             return str(part.get("text", ""))
     return ""
+
+
+def opencode_refusals(events: Events) -> tuple[str, ...]:
+    """One entry per tool call the permission layer refused, as "tool: command"."""
+    refused: list[str] = []
+    for event in events:
+        part = event.get("part")
+        if event.get("type") != TOOL_EVENT or not isinstance(part, dict):
+            continue
+        state = part.get("state")
+        if not isinstance(state, dict) or state.get("status") != "error":
+            continue
+        if state.get("error") not in (OPENCODE_POLICY_DENIAL, OPENCODE_AUTO_REJECT):
+            continue
+        tool = str(part.get("tool", ""))
+        tool_input = state.get("input")
+        command = tool_input.get("command") if isinstance(tool_input, dict) else None
+        refused.append(f"{tool}: {command}" if isinstance(command, str) else tool)
+    return tuple(refused)
 
 
 def classify_opencode_error(error: dict[str, Any]) -> ModelError:
@@ -499,6 +525,7 @@ OPENCODE = Harness(
     error=attempt_error,
     final_text=final_text,
     tokens=opencode_tokens,
+    refusals=opencode_refusals,
 )
 
 CLAUDE_CODE = Harness(
