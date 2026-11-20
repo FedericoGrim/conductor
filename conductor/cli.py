@@ -106,6 +106,7 @@ async def execute_plan(
     profile: Profile,
     log: RunLog,
     extra_args: list[str],
+    ceiling: str,
     rules: tuple[str, ...] = (),
     progress: Progress | None = None,
     status: StatusLine | None = None,
@@ -142,6 +143,7 @@ async def execute_plan(
             extra_args,
             transient_attempts=profile.transient_attempts,
             harness=harness,
+            autonomy=effective(ceiling, step.autonomy),
             commit_message=lambda final_text: choose_commit_message(
                 step.id, number, model, final_text, step.commit
             ),
@@ -255,6 +257,7 @@ def run(args: argparse.Namespace) -> int:
             profile,
             log,
             args.opencode_arg,
+            ceiling,
             rules,
             progress=progress,
             status=status,

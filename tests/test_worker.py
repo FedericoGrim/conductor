@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from conductor.autonomy import FREE
 from conductor.commits import choose_commit_message
 from conductor.errors import TRANSIENT
 from conductor.harness import (
@@ -54,7 +55,9 @@ def init_repo(tmp_path: Path) -> Path:
 
 
 def test_build_command_targets_model_and_json_output() -> None:
-    cmd = build_command("openrouter/x/y", "write code", extra_args=["--variant", "high"])
+    cmd = build_command(
+        "openrouter/x/y", "write code", extra_args=["--variant", "high"], autonomy=FREE
+    )
     assert cmd[:2] == ["opencode", "run"]
     assert cmd[-1] == "write code"
     for flag in ("--format", "json", "-m", "openrouter/x/y", "--auto", "--archived"):
@@ -210,6 +213,7 @@ def test_run_attempt_uses_injected_runner(tmp_path: Path) -> None:
             commit_message=lambda final_text: "chore(conductor): apply step s1 attempt 1",
             transient_attempts=3,
             harness=OPENCODE,
+            autonomy=FREE,
             runner=fake_runner,
         )
     )
@@ -253,6 +257,7 @@ def test_run_attempt_passes_what_the_harness_environment_returns(tmp_path: Path)
             commit_message=lambda final_text: "chore(conductor): apply step s1 attempt 1",
             transient_attempts=3,
             harness=harness,
+            autonomy=FREE,
             runner=recording_runner,
         )
     )
@@ -288,6 +293,7 @@ def test_run_attempt_passes_an_empty_environment_from_the_default_harness(
             commit_message=lambda final_text: "chore(conductor): apply step s1 attempt 1",
             transient_attempts=3,
             harness=OPENCODE,
+            autonomy=FREE,
             runner=recording_runner,
         )
     )
@@ -325,6 +331,7 @@ def test_run_attempt_stops_after_the_retry_limit_and_reports_a_transient_error(
             commit_message=lambda final_text: "chore(conductor): apply step s1 attempt 1",
             transient_attempts=2,
             harness=OPENCODE,
+            autonomy=FREE,
             runner=retrying_runner,
         )
     )
@@ -404,6 +411,7 @@ def test_run_attempt_reports_a_commit_rejected_by_a_hook(tmp_path: Path) -> None
             commit_message=lambda final_text: "chore(conductor): apply step s1 attempt 1",
             transient_attempts=3,
             harness=OPENCODE,
+            autonomy=FREE,
             runner=writing_runner,
         )
     )
@@ -441,6 +449,7 @@ def test_run_attempt_commits_with_the_callables_message(tmp_path: Path) -> None:
             commit_message=message,
             transient_attempts=3,
             harness=OPENCODE,
+            autonomy=FREE,
             runner=writing_runner,
         )
     )
@@ -481,6 +490,7 @@ def test_run_attempt_records_worker_tokens(tmp_path: Path) -> None:
             commit_message=lambda final_text: "chore(conductor): apply step s1 attempt 1",
             transient_attempts=3,
             harness=harness,
+            autonomy=FREE,
             runner=writing_runner,
         )
     )
@@ -515,6 +525,7 @@ def test_run_attempt_reports_permissions_refused_from_harness(tmp_path: Path) ->
             commit_message=lambda final_text: "chore(conductor): apply step s1 attempt 1",
             transient_attempts=3,
             harness=harness,
+            autonomy=FREE,
             runner=writing_runner,
         )
     )
@@ -547,6 +558,7 @@ def test_run_attempt_defaults_to_empty_permissions_refused(tmp_path: Path) -> No
             commit_message=lambda final_text: "chore(conductor): apply step s1 attempt 1",
             transient_attempts=3,
             harness=OPENCODE,
+            autonomy=FREE,
             runner=writing_runner,
         )
     )
