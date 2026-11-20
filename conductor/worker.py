@@ -28,6 +28,11 @@ def no_environment(worktree: Path) -> dict[str, str]:
     return {}
 
 
+def no_refusals(events: Events) -> tuple[str, ...]:
+    """Default refusals extractor: no permissions were refused."""
+    return ()
+
+
 @dataclass(frozen=True, kw_only=True)
 class Harness:
     """The command-line agent that runs a worker, and how to read its event stream."""
@@ -43,6 +48,7 @@ class Harness:
     final_text: Callable[[Events], str]
     subscription_cost: Callable[[Events], float] | None = None
     tokens: Callable[[Events], Tokens] = no_tokens
+    refusals: Callable[[Events], tuple[str, ...]] = no_refusals
 
 
 @dataclass
@@ -60,6 +66,7 @@ class AttemptOutput:
     subscription_cost: float = 0.0
     commit_rejection: str | None = None
     tokens: Tokens = field(default_factory=Tokens)
+    permissions_refused: tuple[str, ...] = ()
 
 
 def git(cwd: Path, *args: str) -> str:
@@ -223,4 +230,5 @@ async def run_attempt(
         subscription_cost=harness.subscription_cost(events) if harness.subscription_cost else 0.0,
         commit_rejection=commit_rejection,
         tokens=harness.tokens(events),
+        permissions_refused=harness.refusals(events),
     )

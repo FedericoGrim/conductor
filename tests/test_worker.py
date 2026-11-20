@@ -485,3 +485,69 @@ def test_run_attempt_records_worker_tokens(tmp_path: Path) -> None:
         )
     )
     assert output.tokens == known_tokens
+
+
+def test_run_attempt_reports_permissions_refused_from_harness(tmp_path: Path) -> None:
+    repo = init_repo(tmp_path)
+    worktree = tmp_path / "wt"
+    create_worktree(repo, worktree, branch="conductor/s1-1", base="main")
+
+    async def writing_runner(
+        cmd: list[str],
+        cwd: Path,
+        should_stop: Callable[[str], bool],
+        environment: dict[str, str],
+    ) -> tuple[int, str, str]:
+        (cwd / "made.txt").write_text("x = 1\n")
+        events = [text_event("done"), step_finish(0.02)]
+        return 0, "".join(json.dumps(event) + "\n" for event in events), ""
+
+    refused = ("bash:git push", "bash:rm -rf /")
+    harness = replace(OPENCODE, refusals=lambda events: refused)
+
+    output = asyncio.run(
+        run_attempt(
+            worktree,
+            base="main",
+            model="openrouter/a/b",
+            prompt="do it",
+            extra_args=[],
+            commit_message=lambda final_text: "chore(conductor): apply step s1 attempt 1",
+            transient_attempts=3,
+            harness=harness,
+            runner=writing_runner,
+        )
+    )
+    assert output.permissions_refused == refused
+
+
+def test_run_attempt_defaults_to_empty_permissions_refused(tmp_path: Path) -> None:
+    repo = init_repo(tmp_path)
+    worktree = tmp_path / "wt"
+    create_worktree(repo, worktree, branch="conductor/s1-1", base="main")
+
+    async def writing_runner(
+        cmd: list[str],
+        cwd: Path,
+        should_stop: Callable[[str], bool],
+        environment: dict[str, str],
+    ) -> tuple[int, str, str]:
+        (cwd / "made.txt").write_text("x = 1\n")
+        events = [text_event("done"), step_finish(0.02)]
+        return 0, "".join(json.dumps(event) + "\n" for event in events), ""
+
+    # Use OPENCODE harness without custom refusals - should default to empty tuple
+    output = asyncio.run(
+        run_attempt(
+            worktree,
+            base="main",
+            model="openrouter/a/b",
+            prompt="do it",
+            extra_args=[],
+            commit_message=lambda final_text: "chore(conductor): apply step s1 attempt 1",
+            transient_attempts=3,
+            harness=OPENCODE,
+            runner=writing_runner,
+        )
+    )
+    assert output.permissions_refused == ()
