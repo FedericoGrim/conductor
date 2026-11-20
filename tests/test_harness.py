@@ -5,7 +5,7 @@ from typing import Any
 import pytest
 
 from conductor import catalog, credentials
-from conductor.autonomy import forbidden_commands
+from conductor.autonomy import ASK, FREE, GUIDED, LEVELS, forbidden_commands
 from conductor.config import HARNESS_NAMES, Profile, Provider
 from conductor.errors import MODEL_UNSUITABLE, PROVIDER_UNUSABLE, TRANSIENT
 from conductor.harness import (
@@ -13,6 +13,7 @@ from conductor.harness import (
     HARNESSES,
     OPENCODE,
     PI,
+    build_command,
     classify_opencode_error,
     claude_billed_cost,
     claude_build_command,
@@ -90,8 +91,37 @@ def retry_event(status: object = 429, error: str = "rate_limit") -> dict[str, An
     return {"type": "system", "subtype": "api_retry", "error_status": status, "error": error}
 
 
+@pytest.mark.parametrize("level", LEVELS)
+def test_the_opencode_command_runs_unattended_only_at_the_free_level(level: str) -> None:
+    cmd = build_command("openrouter/x/y", "do it", ["--variant", "high"], level)
+    assert ("--auto" in cmd) is (level == FREE)
+    assert cmd[:2] == ["opencode", "run"]
+    assert cmd[-1] == "do it"
+    assert "--archived" in cmd
+    assert cmd.index("--variant") < cmd.index("do it")
+
+
+def test_the_opencode_command_below_free_lets_unmatched_permissions_be_rejected() -> None:
+    for level in (GUIDED, ASK):
+        assert "--auto" not in build_command("openrouter/x/y", "do it", [], level)
+
+
+@pytest.mark.parametrize("level", LEVELS)
+def test_the_claude_code_command_does_not_depend_on_the_level(level: str) -> None:
+    assert claude_build_command("subscription/sonnet", "do it", [], level) == (
+        claude_build_command("subscription/sonnet", "do it", [], FREE)
+    )
+
+
+@pytest.mark.parametrize("level", LEVELS)
+def test_the_pi_command_does_not_depend_on_the_level(level: str) -> None:
+    assert pi_command("openrouter/deepseek/v4", "do it", [], level) == (
+        pi_command("openrouter/deepseek/v4", "do it", [], FREE)
+    )
+
+
 def test_the_claude_code_command_confines_and_isolates_the_worker() -> None:
-    cmd = claude_build_command("subscription/sonnet", "do it", ["--effort", "high"])
+    cmd = claude_build_command("subscription/sonnet", "do it", ["--effort", "high"], FREE)
     assert cmd[0] == "claude"
     assert cmd[1] == "-p"
     assert cmd[-1] == "do it"
@@ -109,7 +139,7 @@ def test_the_claude_code_command_confines_and_isolates_the_worker() -> None:
 
 
 def test_the_claude_code_command_denies_every_forbidden_command() -> None:
-    cmd = claude_build_command("subscription/sonnet", "do it", [])
+    cmd = claude_build_command("subscription/sonnet", "do it", [], FREE)
     denied = next(arg for arg in cmd if arg.startswith("--disallowedTools="))
     rules = denied.removeprefix("--disallowedTools=").split(",")
     assert rules == [f"Bash({command})" for command in forbidden_commands()]
@@ -441,7 +471,7 @@ def test_pi_stream_drops_noise_lines_and_keeps_unicode_line_separators() -> None
 
 
 def test_the_pi_command_isolates_the_worker_and_names_the_api_model() -> None:
-    cmd = pi_command("openrouter/deepseek/v4", "do it", ["--effort", "high"])
+    cmd = pi_command("openrouter/deepseek/v4", "do it", ["--effort", "high"], FREE)
     assert cmd[0] == "pi"
     assert cmd[-1] == "do it"
     assert cmd[cmd.index("--model") + 1] == "deepseek/v4"
@@ -462,7 +492,7 @@ def test_the_pi_command_isolates_the_worker_and_names_the_api_model() -> None:
 
 
 def test_the_pi_command_loads_the_permission_extension() -> None:
-    cmd = pi_command("openrouter/deepseek/v4", "do it", [])
+    cmd = pi_command("openrouter/deepseek/v4", "do it", [], FREE)
     assert cmd.index("-e") < cmd.index("do it")
     assert cmd[cmd.index("-e") + 1] == f"{PI_AGENT_DIR}/{PERMISSION_EXTENSION_NAME}"
     # Only the explicit extension loads: the user's own ones stay off.

@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from conductor import catalog, credentials
-from conductor.autonomy import forbidden_commands
+from conductor.autonomy import FREE, forbidden_commands
 from conductor.config import Profile, provider_of
 from conductor.errors import (
     MODEL_UNSUITABLE,
@@ -73,7 +73,10 @@ def prepare_opencode(worktree: Path, profile: Profile) -> None:
     write_opencode_config(worktree, opencode_config(profile) | repository_instructions(worktree))
 
 
-def build_command(model: str, prompt: str, extra_args: list[str]) -> list[str]:
+def build_command(model: str, prompt: str, extra_args: list[str], autonomy: str) -> list[str]:
+    # --auto answers every permission request "allow": only the free level may do that.
+    # Below it an unmatched "ask" is auto-rejected and the run continues.
+    unattended = ["--auto"] if autonomy == FREE else []
     return [
         "opencode",
         "run",
@@ -81,7 +84,7 @@ def build_command(model: str, prompt: str, extra_args: list[str]) -> list[str]:
         "json",
         "-m",
         model,
-        "--auto",
+        *unattended,
         "--archived",
         *extra_args,
         prompt,
@@ -198,7 +201,9 @@ def claude_denied_tools() -> str:
     return "--disallowedTools=" + ",".join(f"Bash({command})" for command in forbidden_commands())
 
 
-def claude_build_command(model: str, prompt: str, extra_args: list[str]) -> list[str]:
+def claude_build_command(
+    model: str, prompt: str, extra_args: list[str], autonomy: str
+) -> list[str]:
     return [
         "claude",
         "-p",
@@ -346,7 +351,7 @@ PI_DENY_PREFIX = "CONDUCTOR_DENY:"
 PI_STATUS_CODE = re.compile(r"\b[45]\d{2}\b")
 
 
-def pi_command(model: str, prompt: str, extra_args: list[str]) -> list[str]:
+def pi_command(model: str, prompt: str, extra_args: list[str], autonomy: str) -> list[str]:
     return [
         "pi",
         "--mode",

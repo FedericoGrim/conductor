@@ -40,7 +40,7 @@ class Harness:
     name: str
     prepare: Callable[[Path, Profile], None]
     environment: Callable[[Path], dict[str, str]] = no_environment
-    command: Callable[[str, str, list[str]], list[str]]
+    command: Callable[[str, str, list[str], str], list[str]]
     session_id: Callable[[Events], str | None]
     is_retry: EventCheck
     cost: Callable[[Events], float]
@@ -206,8 +206,9 @@ async def run_attempt(
     runner: Runner = subprocess_runner,
     *,
     commit_message: Callable[[str], str],
+    autonomy: str,
 ) -> AttemptOutput:
-    command = harness.command(model, prompt, extra_args)
+    command = harness.command(model, prompt, extra_args, autonomy)
     should_stop = retry_limit(transient_attempts, harness.is_retry)
     exit_code, stdout, stderr = await runner(
         command, worktree, should_stop, harness.environment(worktree)
