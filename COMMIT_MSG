@@ -1,7 +1,0 @@
-feat(worker): add permissions_refused field to AttemptOutput
-
-- Add `permissions_refused: tuple[str, ...] = ()` field to AttemptOutput dataclass
-- Add `no_refusals(events: Events) -> tuple[str, ...]` default function
-- Add `refusals: Callable[[Events], tuple[str, ...]] = no_refusals` field to Harness dataclass
-- Populate `permissions_refused` from harness.refusals(events) in run_attempt
-- Add tests for custom refusals and default empty tuple behavior
