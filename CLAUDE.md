@@ -35,7 +35,7 @@ Simple layering, no tactical DDD: a small tool with little business logic.
 - `conductor/billing.py` — provider balances (chosen by the profile's `base_url` host), the cross-project spend ledger and its totals.
 - `conductor/brain.py` — the brain's token usage per model, read from `opencode session export` (numbers and model names only, never message text).
 - `conductor/stats.py` — per-run and per-step statistics from run.json (status, attempts, models, cost, tokens and cache share), git (hand commits after a run) and the brain's session. A token field nobody reported prints `n/a`, never 0.
-- `conductor/cli.py` — `conductor run plan.json --privacy low|medium|high [--autonomy ask|guided|free]` (only `free` runs until the other levels land), `conductor validate plan.json [--config] [--autonomy]` (rejects a step above the ceiling; warns about levels relying on one provider, about parallel steps listing the same files and about `pi` providers, which ignore the fixed denials), `conductor billing [project|projects]`, `conductor stats`, `conductor setup`.
+- `conductor/cli.py` — `conductor run plan.json --privacy low|medium|high [--autonomy ask|guided|free]`, `conductor validate plan.json [--config] [--autonomy]` (rejects a step above the ceiling; warns about levels relying on one provider and about parallel steps listing the same files), `conductor billing [project|projects]`, `conductor stats`, `conductor setup`.
 - `conductor/commits.py` — the Conventional Commit message of an attempt: the plan's `commit` field, the worker's `COMMIT:` line, or the fallback.
 - `conductor/overlap.py` — parallel steps listing the same files (directories and globs included), for `validate` and `run`.
 Rule: no module imports OpenCode or provider specifics except `harness.py`, `reviewer.py`, `privacy.py`, `catalog.py`, `billing.py` and `brain.py`.
@@ -75,10 +75,30 @@ Rule: no module imports OpenCode or provider specifics except `harness.py`, `rev
 - **Escalation** — re-running a rejected step on the next tier.
 - **Ledger** — `~/.local/share/conductor/ledger.jsonl`, one line per finished run with its project and cost.
 
+## Autonomy
+
+`conductor run --autonomy ask|guided|free` sets the run's autonomy ceiling; without it the profile's `autonomy` applies (default `free`). A step may lower it with `"autonomy"`, never raise it: `conductor validate` and `conductor run` reject a step above the ceiling (`validate --autonomy` checks against a given ceiling, otherwise against the default profile's).
+
+At every level, workers are held to fixed denials that no permission approval can lift:
+
+- no `git push`, no publishing (`npm`, `pnpm`, `yarn`, `poetry`, `twine`, `uv`, `cargo`), no `gh release` or `gh pr merge`;
+- no checkout, switch, forced branch move or ref update of `main` or `develop`;
+- for OpenCode, no edit by absolute or home path, so no file tool writes outside the worktree.
+
+**Per-level behaviour:**
+
+- `free` — grants full autonomy: OpenCode runs with `--auto` (confirm-class actions inside the worktree are auto-approved). Merge is automatic after verification and review.
+- `guided` — unlike `free`, OpenCode runs without `--auto`: a permission request is denied and recorded in the attempt, and the worker continues without it. Merge is automatic after verification and review.
+- `ask` — any doubt or permission request pauses the step as `needs_decision`; the brain answers (or asks the user) and the step is rerun. Merges are manual (by hand). Escalation is capped at one tier above the starting difficulty level.
+
+The level changes how a refusal is handled, not the harness configuration: Claude Code always runs with `--permission-mode acceptEdits` and Pi always loads the Conductor extension.
+
+OpenCode receives the fixed denials as `tool.use` policies in the worktree's `opencode.json`, which apply after agent rules and saved approvals, so `--auto` cannot approve them; a denied call fails with "Blocked by configuration policy" (or, without `--auto`, is auto-rejected with "This non-interactive run cannot ask the user for permission..."). Claude Code receives them as `--disallowedTools` deny rules, and `acceptEdits` confines its edits inside the worktree. Pi is held to the fixed denials by a Conductor-owned extension loaded with `-e`; the extension denies the same command patterns. The denials match command text, so a command written another way (`sh -c '...'`, a script) can still get through; the sandbox of #39 is the real boundary.
+
 ## Project conventions
 - OpenCode steps run with `opencode run --auto --archived`; Claude Code steps run with `claude -p --setting-sources project --disable-slash-commands --permission-mode acceptEdits --allowedTools=Bash`, isolated from the user's personal Claude settings and skills and confined to the worktree, never with `--dangerously-skip-permissions`. Pi steps run with `pi --mode json --no-session --no-skills --no-extensions --no-prompt-templates --no-themes --tools read,bash,edit,write`, with `PI_CODING_AGENT_DIR` pointing at the attempt's `.pi-agent/` directory, excluded from the diff via `.git/info/exclude` like `opencode.json`, so no personal Pi settings, skills or extensions reach a worker. Either way, workers may do anything inside their worktree, nothing outside.
 - Conductor's commits and merges use Conventional Commit messages; a worker attempt is committed with the plan's or the worker's Conventional Commit message (fallback `chore(conductor): apply step <id> attempt <n>`), merges with `chore(conductor): merge <branch>`, never bypassing the target repository's git hooks (decisions 018 and 020).
-- Workers are held at every autonomy level to the fixed denials of `autonomy.py`: OpenCode through `tool.use` policies in the worktree's `opencode.json` (after agent rules and saved approvals, so `--auto` cannot lift them), plus edits by absolute or home path; Claude Code through `--disallowedTools=Bash(...)`. Pi has no permission system and is not held to them (decision 026). Never weaken them to make a step pass.
+- Workers are held at every autonomy level to the fixed denials of `autonomy.py`: OpenCode through `tool.use` policies in the worktree's `opencode.json` (after agent rules and saved approvals, so `--auto` cannot lift them), plus edits by absolute or home path; Claude Code through `--disallowedTools=Bash(...)`; Pi through a Conductor-owned extension loaded with `-e` that denies the same command patterns and file writes outside the worktree. Never weaken them to make a step pass.
 - Worktrees are created and merged by Conductor (`git worktree add`), never with OpenCode's own `--worktree` flag.
 - Routing options are written to a per-worktree `opencode.json`, excluded from the diff via `.git/info/exclude`.
 - That `opencode.json` also denies every skill (OpenCode loads the user's personal ones from `~/.claude/skills` and `~/.agents/skills`) and, when the target has a `CLAUDE.md` but no `AGENTS.md`, lists `CLAUDE.md` in `instructions` (OpenCode 2 reads `AGENTS.md` only). Decision 019.

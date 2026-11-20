@@ -5,6 +5,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from conductor import rejections
+from conductor.autonomy import ASK, FREE
 from conductor.commits import COMMIT_MARKER
 from conductor.config import Profile, provider_of
 from conductor.errors import PROVIDER_UNUSABLE, UNCLASSIFIED, ModelError
@@ -15,6 +16,7 @@ from conductor.scheduler import (
     FAILED,
     NEEDS_ANSWER,
     NEEDS_BRAIN_REVIEW,
+    NEEDS_DECISION,
     UNAVAILABLE,
     StepResult,
 )
@@ -125,6 +127,7 @@ async def run_step(
     state: RunState | None = None,
     check: Check | None = None,
     verify: tuple[str, ...] = (),
+    autonomy: str = FREE,
 ) -> StepResult:
     run = StepRun(
         step,
@@ -136,6 +139,7 @@ async def run_step(
         state or RunState(),
         check or no_checks,
         verify,
+        autonomy,
     )
     return await run.execute()
 
@@ -160,6 +164,7 @@ def attempt_entry(
         "commit_message": output.commit_message,
         "error": None,
         "question": None,
+        "permissions_refused": list(output.permissions_refused),
         "commit_rejection": output.commit_rejection,
         "verify": [],
         "review": None,
@@ -200,14 +205,19 @@ class StepRun:
     state: RunState
     check: Check
     verify: tuple[str, ...] = ()
+    autonomy: str = FREE
 
     def __post_init__(self) -> None:
         self.result = StepResult(self.step.id, FAILED)
 
     async def execute(self) -> StepResult:
-        tier = min(self.step.difficulty - 1, len(self.profile.tiers) - 1)
+        start_tier = min(self.step.difficulty - 1, len(self.profile.tiers) - 1)
+        last_tier = len(self.profile.tiers) - 1
+        if self.autonomy == ASK:
+            last_tier = min(last_tier, start_tier + 1)
+        tier = start_tier
         feedback: str | None = None
-        while tier < len(self.profile.tiers):
+        while tier <= last_tier:
             rejection = await self.run_level(tier, feedback)
             if rejection is None:
                 return self.result
@@ -253,6 +263,11 @@ class StepRun:
             self.record(self.step, entry)
             self.result.status = NEEDS_ANSWER
             self.result.detail = question
+            return None
+        if output.permissions_refused and self.autonomy == ASK:
+            self.record(self.step, entry)
+            self.result.status = NEEDS_DECISION
+            self.result.detail = "permissions refused: " + ", ".join(output.permissions_refused)
             return None
         if output.commit_rejection is not None:
             self.record(self.step, entry)

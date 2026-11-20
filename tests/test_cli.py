@@ -759,58 +759,39 @@ def test_validate_takes_the_ceiling_from_the_default_profile(
     assert "above the ceiling 'ask'" in capsys.readouterr().err
 
 
-PI_CONFIG = """
-default_privacy = "medium"
-[privacy.medium]
-tiers = [["pi-router/a", "openrouter/a"]]
-reviewer = "openrouter/r"
-
-[privacy.medium.providers.openrouter]
-base_url = "https://openrouter.ai/api/v1"
-api_key_env = "OPENROUTER_API_KEY"
-
-[privacy.medium.providers.pi-router]
-harness = "pi"
-base_url = "https://openrouter.ai/api/v1"
-api_key_env = "OPENROUTER_API_KEY"
-"""
-
-
-def test_validate_warns_that_pi_workers_ignore_the_fixed_denials(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    config = tmp_path / "conductor.toml"
-    config.write_text(PI_CONFIG)
-    assert cli.main(["validate", str(EXAMPLE_PLAN), "--config", str(config)]) == 0
-    assert (
-        "warning: privacy.medium: provider 'pi-router' runs on Pi, which has no permission "
-        "system: its workers are not held to the fixed denials (push, publish, release, "
-        "protected branches, edits outside the worktree)\n"
-    ) in capsys.readouterr().out
-
-
-@pytest.mark.parametrize("autonomy", ["ask", "guided"])
-def test_run_refuses_the_autonomy_levels_that_are_not_implemented_yet(
+@pytest.mark.parametrize("autonomy,expected_code", [("ask", 1), ("guided", 0)])
+def test_run_accepts_every_autonomy_level(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
     autonomy: str,
+    expected_code: int,
 ) -> None:
     code, repo, _ = run_verified_plan(
         tmp_path, monkeypatch, {}, extra_args=("--autonomy", autonomy)
     )
-    assert code == 2
-    assert f"autonomy '{autonomy}' is not available yet" in capsys.readouterr().err
-    assert not (repo / ".conductor" / "runs").exists()
+    assert code == expected_code
+    run_dir = next((repo / ".conductor" / "runs").iterdir())
+    run = json.loads((run_dir / "run.json").read_text())
+    assert run["autonomy"] == autonomy
+    assert run["steps"]["a"]["autonomy"] == autonomy
+    if autonomy == "ask":
+        assert run["steps"]["a"]["status"] == "needs_merge"
+        assert "effective autonomy 'ask'" in run["steps"]["a"]["detail"]
+    else:
+        assert run["steps"]["a"]["status"] == "approved"
 
 
-def test_run_refuses_a_step_that_lowers_its_autonomy_until_the_levels_exist(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+def test_run_accepts_a_step_that_lowers_its_autonomy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     steps = [{"id": "a", "spec": "write output", "difficulty": 1, "autonomy": "ask"}]
-    code, _, _ = run_verified_plan(tmp_path, monkeypatch, {"steps": steps})
-    assert code == 2
-    assert "autonomy 'ask' is not available yet" in capsys.readouterr().err
+    code, repo, _ = run_verified_plan(tmp_path, monkeypatch, {"steps": steps})
+    assert code == 1  # ask autonomy becomes needs_merge
+    run_dir = next((repo / ".conductor" / "runs").iterdir())
+    run = json.loads((run_dir / "run.json").read_text())
+    assert run["steps"]["a"]["autonomy"] == "ask"
+    assert run["steps"]["a"]["status"] == "needs_merge"
+    assert "effective autonomy 'ask'" in run["steps"]["a"]["detail"]
 
 
 def test_run_refuses_a_step_above_the_ceiling_before_any_attempt(
@@ -858,6 +839,50 @@ def test_run_never_merges_into_a_protected_branch(
     assert "chore(conductor): merge" not in git(repo, "log", "--oneline")
     assert git(repo, "branch", "--list", branch).strip()
     assert git(repo, "worktree", "list").count("\n") == 1
+
+
+@pytest.mark.parametrize("ceiling", ["ask", "guided", "free"])
+def test_run_ask_autonomy_never_merges_automatically(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    ceiling: str,
+) -> None:
+    """A step with effective autonomy 'ask' becomes needs_merge with branch kept."""
+    steps = [{"id": "a", "spec": "write output", "difficulty": 1, "autonomy": "ask"}]
+    code, repo, _ = run_verified_plan(
+        tmp_path, monkeypatch, {"steps": steps}, extra_args=("--autonomy", ceiling)
+    )
+
+    assert code == 1
+    run_dir = next((repo / ".conductor" / "runs").iterdir())
+    run_data = json.loads((run_dir / "run.json").read_text())
+    step = run_data["steps"]["a"]
+    branch = f"conductor/{run_dir.name}/a-1"
+    assert step["status"] == "needs_merge"
+    assert "effective autonomy 'ask'" in step["detail"]
+    assert f"git merge --no-ff {branch}" in step["detail"]
+    assert "chore(conductor): merge" not in git(repo, "log", "--oneline")
+    assert git(repo, "branch", "--list", branch).strip()
+    assert git(repo, "worktree", "list").count("\n") == 1
+
+
+def test_run_guided_and_free_autonomy_merges_normally(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Steps at guided and free autonomy merge as usual (when not on protected branch)."""
+    for ceiling in ["guided", "free"]:
+        steps = [{"id": "a", "spec": "write output", "difficulty": 1, "autonomy": ceiling}]
+        # Each iteration needs a fresh subdirectory to avoid FileExistsError
+        subdir = tmp_path / f"run_{ceiling}"
+        subdir.mkdir()
+        code, repo, _ = run_verified_plan(
+            subdir, monkeypatch, {"steps": steps}, extra_args=("--autonomy", ceiling)
+        )
+        assert code == 0
+        assert "chore(conductor): merge" in git(repo, "log", "--oneline")
+        assert git(repo, "status", "--porcelain") == ""
+        assert git(repo, "worktree", "list").count("\n") == 1
 
 
 def run_two_steps_with_progress(

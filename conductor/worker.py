@@ -28,6 +28,11 @@ def no_environment(worktree: Path) -> dict[str, str]:
     return {}
 
 
+def no_refusals(events: Events) -> tuple[str, ...]:
+    """Default refusals extractor: no permissions were refused."""
+    return ()
+
+
 @dataclass(frozen=True, kw_only=True)
 class Harness:
     """The command-line agent that runs a worker, and how to read its event stream."""
@@ -35,7 +40,7 @@ class Harness:
     name: str
     prepare: Callable[[Path, Profile], None]
     environment: Callable[[Path], dict[str, str]] = no_environment
-    command: Callable[[str, str, list[str]], list[str]]
+    command: Callable[[str, str, list[str], str], list[str]]
     session_id: Callable[[Events], str | None]
     is_retry: EventCheck
     cost: Callable[[Events], float]
@@ -43,6 +48,7 @@ class Harness:
     final_text: Callable[[Events], str]
     subscription_cost: Callable[[Events], float] | None = None
     tokens: Callable[[Events], Tokens] = no_tokens
+    refusals: Callable[[Events], tuple[str, ...]] = no_refusals
 
 
 @dataclass
@@ -60,6 +66,7 @@ class AttemptOutput:
     subscription_cost: float = 0.0
     commit_rejection: str | None = None
     tokens: Tokens = field(default_factory=Tokens)
+    permissions_refused: tuple[str, ...] = ()
 
 
 def git(cwd: Path, *args: str) -> str:
@@ -199,8 +206,9 @@ async def run_attempt(
     runner: Runner = subprocess_runner,
     *,
     commit_message: Callable[[str], str],
+    autonomy: str,
 ) -> AttemptOutput:
-    command = harness.command(model, prompt, extra_args)
+    command = harness.command(model, prompt, extra_args, autonomy)
     should_stop = retry_limit(transient_attempts, harness.is_retry)
     exit_code, stdout, stderr = await runner(
         command, worktree, should_stop, harness.environment(worktree)
@@ -223,4 +231,5 @@ async def run_attempt(
         subscription_cost=harness.subscription_cost(events) if harness.subscription_cost else 0.0,
         commit_rejection=commit_rejection,
         tokens=harness.tokens(events),
+        permissions_refused=harness.refusals(events),
     )

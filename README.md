@@ -22,7 +22,7 @@ Conductor takes a `plan.json` produced by a planning model (Claude in Claude Cod
 
 ## Autonomy
 
-`conductor run --autonomy ask|guided|free` sets the run's autonomy ceiling; without it the profile's `autonomy` applies (default `free`). A step may lower it with `"autonomy"`, never raise it: `conductor validate` and `conductor run` reject a step above the ceiling (`validate --autonomy` checks against a given ceiling, otherwise against the default profile's). Only `free` runs for now; `ask` and `guided` are accepted by `validate` and refused by `run` until their behaviour lands (#35).
+`conductor run --autonomy ask|guided|free` sets the run's autonomy ceiling; without it the profile's `autonomy` applies (default `free`). A step may lower it with `"autonomy"`, never raise it: `conductor validate` and `conductor run` reject a step above the ceiling (`validate --autonomy` checks against a given ceiling, otherwise against the default profile's).
 
 At every level, workers are held to fixed denials that no permission approval can lift:
 
@@ -30,7 +30,21 @@ At every level, workers are held to fixed denials that no permission approval ca
 - no checkout, switch, forced branch move or ref update of `main` or `develop`;
 - for OpenCode, no edit by absolute or home path, so no file tool writes outside the worktree.
 
-OpenCode receives them as `tool.use` policies in the worktree's `opencode.json`, which apply after agent rules and saved approvals, so `--auto` cannot approve them; a denied call fails with "Blocked by configuration policy". Claude Code receives them as `--disallowedTools` deny rules, and `acceptEdits` already keeps its edits inside the worktree. The denials match command text, so a command written another way (`sh -c '...'`, a script) can still get through, and Pi has no permission system at all: `validate` and `run` warn about every `pi` provider. The sandbox of #39 is the real boundary.
+**Per-level behaviour:**
+
+- `free` — grants full autonomy: OpenCode runs with `--auto` (confirm-class actions inside the worktree are auto-approved). Merge is automatic after verification and review.
+- `guided` — unlike `free`, OpenCode runs without `--auto`: a permission request is denied and recorded in the attempt, and the worker continues without it. Merge is automatic after verification and review.
+- `ask` — any doubt or permission request pauses the step as `needs_decision`; the brain answers (or asks the user) and the step is rerun. Merges are manual (by hand). Escalation is capped at one tier above the starting difficulty level.
+
+The level changes how a refusal is handled, not the harness configuration: Claude Code always runs with `--permission-mode acceptEdits` and Pi always loads the Conductor extension.
+
+**Fixed denial enforcement per harness:**
+
+- OpenCode: `tool.use` policies in the worktree's `opencode.json` (apply after agent rules and saved approvals, so `--auto` cannot lift them).
+- Claude Code: `--disallowedTools` deny rules, with `--permission-mode acceptEdits` confining edits inside the worktree.
+- Pi: Conductor-owned extension loaded with `-e` that denies the same command patterns.
+
+The denials match command text, so a command written another way (`sh -c '...'`, a script) can still get through; the sandbox of #39 is the real boundary.
 
 ## Privacy levels
 

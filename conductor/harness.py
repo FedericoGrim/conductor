@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from conductor import catalog, credentials
-from conductor.autonomy import forbidden_commands
+from conductor.autonomy import FREE, forbidden_commands
 from conductor.config import Profile, provider_of
 from conductor.errors import (
     MODEL_UNSUITABLE,
@@ -17,6 +17,7 @@ from conductor.errors import (
     mentions_context_limit,
     mentions_unavailable_model,
 )
+from conductor.pi_extension import PERMISSION_EXTENSION_NAME, write_permission_extension
 from conductor.privacy import (
     PI_AGENT_DIR,
     api_model_id,
@@ -32,6 +33,13 @@ OPENCODE_CONFIG_NAME = "opencode.json"
 ERROR_EVENT = "error"
 RETRY_EVENT = "retry"
 TEXT_EVENT = "text"
+TOOL_EVENT = "tool_use"
+# OpenCode's permission layer writes these errors on a refused tool call (observed on 2.2.7).
+OPENCODE_POLICY_DENIAL = "Blocked by configuration policy"
+OPENCODE_AUTO_REJECT = (
+    "This non-interactive run cannot ask the user for permission, so the request was "
+    "rejected. Continue without this action."
+)
 
 ERROR_KINDS = {
     "provider.rate-limit": TRANSIENT,
@@ -65,7 +73,10 @@ def prepare_opencode(worktree: Path, profile: Profile) -> None:
     write_opencode_config(worktree, opencode_config(profile) | repository_instructions(worktree))
 
 
-def build_command(model: str, prompt: str, extra_args: list[str]) -> list[str]:
+def build_command(model: str, prompt: str, extra_args: list[str], autonomy: str) -> list[str]:
+    # --auto answers every permission request "allow": only the free level may do that.
+    # Below it an unmatched "ask" is auto-rejected and the run continues.
+    unattended = ["--auto"] if autonomy == FREE else []
     return [
         "opencode",
         "run",
@@ -73,7 +84,7 @@ def build_command(model: str, prompt: str, extra_args: list[str]) -> list[str]:
         "json",
         "-m",
         model,
-        "--auto",
+        *unattended,
         "--archived",
         *extra_args,
         prompt,
@@ -132,6 +143,25 @@ def final_text(events: Events) -> str:
     return ""
 
 
+def opencode_refusals(events: Events) -> tuple[str, ...]:
+    """One entry per tool call the permission layer refused, as "tool: command"."""
+    refused: list[str] = []
+    for event in events:
+        part = event.get("part")
+        if event.get("type") != TOOL_EVENT or not isinstance(part, dict):
+            continue
+        state = part.get("state")
+        if not isinstance(state, dict) or state.get("status") != "error":
+            continue
+        if state.get("error") not in (OPENCODE_POLICY_DENIAL, OPENCODE_AUTO_REJECT):
+            continue
+        tool = str(part.get("tool", ""))
+        tool_input = state.get("input")
+        command = tool_input.get("command") if isinstance(tool_input, dict) else None
+        refused.append(f"{tool}: {command}" if isinstance(command, str) else tool)
+    return tuple(refused)
+
+
 def classify_opencode_error(error: dict[str, Any]) -> ModelError:
     error_type = str(error.get("type", ""))
     message = str(error.get("message", ""))
@@ -171,7 +201,9 @@ def claude_denied_tools() -> str:
     return "--disallowedTools=" + ",".join(f"Bash({command})" for command in forbidden_commands())
 
 
-def claude_build_command(model: str, prompt: str, extra_args: list[str]) -> list[str]:
+def claude_build_command(
+    model: str, prompt: str, extra_args: list[str], autonomy: str
+) -> list[str]:
     return [
         "claude",
         "-p",
@@ -286,20 +318,40 @@ def claude_error(events: Events, exit_code: int, stderr: str) -> ModelError | No
     return None
 
 
+def claude_refusals(events: Events) -> tuple[str, ...]:
+    """One entry per tool call the permission layer refused, as "tool: command"."""
+    result = next((e for e in reversed(events) if e.get("type") == CLAUDE_RESULT), None)
+    denials = result.get("permission_denials") if result is not None else None
+    if not isinstance(denials, list):
+        return ()
+    refused: list[str] = []
+    for denial in denials:
+        if not isinstance(denial, dict):
+            continue
+        tool = str(denial.get("tool_name", ""))
+        tool_input = denial.get("tool_input")
+        command = tool_input.get("command") if isinstance(tool_input, dict) else None
+        refused.append(f"{tool}: {command}" if isinstance(command, str) else tool)
+    return tuple(refused)
+
+
 PI_SESSION = "session"
 PI_TURN_END = "turn_end"
 PI_AGENT_END = "agent_end"
+PI_TOOL_END = "tool_execution_end"
 PI_RETRY_START = "auto_retry_start"
 PI_RETRY_END = "auto_retry_end"
 PI_ASSISTANT = "assistant"
 PI_TEXT_BLOCK = "text"
 PI_STOP_ERROR = "error"
+# The permission extension blocks a call with this prefix; Pi reports it as a failed tool.
+PI_DENY_PREFIX = "CONDUCTOR_DENY:"
 # Pi reports API errors as strings, and the OpenAI-compatible client prefixes the HTTP
 # status to the text ("401 Incorrect API key provided", "Connection error.").
 PI_STATUS_CODE = re.compile(r"\b[45]\d{2}\b")
 
 
-def pi_command(model: str, prompt: str, extra_args: list[str]) -> list[str]:
+def pi_command(model: str, prompt: str, extra_args: list[str], autonomy: str) -> list[str]:
     return [
         "pi",
         "--mode",
@@ -309,6 +361,9 @@ def pi_command(model: str, prompt: str, extra_args: list[str]) -> list[str]:
         # a worker of an unrelated repository; the target's AGENTS.md/CLAUDE.md stay on.
         "--no-skills",
         "--no-extensions",
+        # --no-extensions turns off discovery only: this explicit path is still loaded.
+        "-e",
+        f"{PI_AGENT_DIR}/{PERMISSION_EXTENSION_NAME}",
         "--no-prompt-templates",
         "--no-themes",
         "--tools",
@@ -357,6 +412,8 @@ def pi_reasoning_models(profile: Profile) -> frozenset[str]:
 
 def pi_prepare(worktree: Path, profile: Profile) -> None:
     write_pi_config(worktree, pi_config(profile, pi_prices(profile), pi_reasoning_models(profile)))
+    # Pi has no permission system: this extension is the worker's fixed denials.
+    write_permission_extension(worktree / PI_AGENT_DIR)
 
 
 def pi_session_id(events: Events) -> str | None:
@@ -450,6 +507,21 @@ def pi_final_text(events: Events) -> str:
     return ""
 
 
+def pi_refusals(events: Events) -> tuple[str, ...]:
+    """One entry per tool call the permission extension blocked, with its deny reason."""
+    refused: list[str] = []
+    for event in events:
+        if event.get("type") != PI_TOOL_END or not event.get("isError"):
+            continue
+        result = event.get("result")
+        content = result.get("content") if isinstance(result, dict) else None
+        block = content[0] if isinstance(content, list) and content else None
+        text = block.get("text") if isinstance(block, dict) else None
+        if isinstance(text, str) and text.startswith(PI_DENY_PREFIX):
+            refused.append(text)
+    return tuple(refused)
+
+
 def pi_status(message: str) -> int | None:
     match = PI_STATUS_CODE.search(message)
     return int(match[0]) if match else None
@@ -499,6 +571,7 @@ OPENCODE = Harness(
     error=attempt_error,
     final_text=final_text,
     tokens=opencode_tokens,
+    refusals=opencode_refusals,
 )
 
 CLAUDE_CODE = Harness(
@@ -513,6 +586,7 @@ CLAUDE_CODE = Harness(
     final_text=claude_final_text,
     subscription_cost=claude_subscription_cost,
     tokens=claude_tokens,
+    refusals=claude_refusals,
 )
 
 PI = Harness(
@@ -526,6 +600,7 @@ PI = Harness(
     error=pi_error,
     final_text=pi_final_text,
     tokens=pi_tokens,
+    refusals=pi_refusals,
 )
 
 HARNESSES = {harness.name: harness for harness in (OPENCODE, CLAUDE_CODE, PI)}

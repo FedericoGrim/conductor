@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from conductor.autonomy import FREE
 from conductor.commits import choose_commit_message
 from conductor.errors import TRANSIENT
 from conductor.harness import (
@@ -54,7 +55,9 @@ def init_repo(tmp_path: Path) -> Path:
 
 
 def test_build_command_targets_model_and_json_output() -> None:
-    cmd = build_command("openrouter/x/y", "write code", extra_args=["--variant", "high"])
+    cmd = build_command(
+        "openrouter/x/y", "write code", extra_args=["--variant", "high"], autonomy=FREE
+    )
     assert cmd[:2] == ["opencode", "run"]
     assert cmd[-1] == "write code"
     for flag in ("--format", "json", "-m", "openrouter/x/y", "--auto", "--archived"):
@@ -210,6 +213,7 @@ def test_run_attempt_uses_injected_runner(tmp_path: Path) -> None:
             commit_message=lambda final_text: "chore(conductor): apply step s1 attempt 1",
             transient_attempts=3,
             harness=OPENCODE,
+            autonomy=FREE,
             runner=fake_runner,
         )
     )
@@ -253,6 +257,7 @@ def test_run_attempt_passes_what_the_harness_environment_returns(tmp_path: Path)
             commit_message=lambda final_text: "chore(conductor): apply step s1 attempt 1",
             transient_attempts=3,
             harness=harness,
+            autonomy=FREE,
             runner=recording_runner,
         )
     )
@@ -288,6 +293,7 @@ def test_run_attempt_passes_an_empty_environment_from_the_default_harness(
             commit_message=lambda final_text: "chore(conductor): apply step s1 attempt 1",
             transient_attempts=3,
             harness=OPENCODE,
+            autonomy=FREE,
             runner=recording_runner,
         )
     )
@@ -325,6 +331,7 @@ def test_run_attempt_stops_after_the_retry_limit_and_reports_a_transient_error(
             commit_message=lambda final_text: "chore(conductor): apply step s1 attempt 1",
             transient_attempts=2,
             harness=OPENCODE,
+            autonomy=FREE,
             runner=retrying_runner,
         )
     )
@@ -404,6 +411,7 @@ def test_run_attempt_reports_a_commit_rejected_by_a_hook(tmp_path: Path) -> None
             commit_message=lambda final_text: "chore(conductor): apply step s1 attempt 1",
             transient_attempts=3,
             harness=OPENCODE,
+            autonomy=FREE,
             runner=writing_runner,
         )
     )
@@ -441,6 +449,7 @@ def test_run_attempt_commits_with_the_callables_message(tmp_path: Path) -> None:
             commit_message=message,
             transient_attempts=3,
             harness=OPENCODE,
+            autonomy=FREE,
             runner=writing_runner,
         )
     )
@@ -481,7 +490,76 @@ def test_run_attempt_records_worker_tokens(tmp_path: Path) -> None:
             commit_message=lambda final_text: "chore(conductor): apply step s1 attempt 1",
             transient_attempts=3,
             harness=harness,
+            autonomy=FREE,
             runner=writing_runner,
         )
     )
     assert output.tokens == known_tokens
+
+
+def test_run_attempt_reports_permissions_refused_from_harness(tmp_path: Path) -> None:
+    repo = init_repo(tmp_path)
+    worktree = tmp_path / "wt"
+    create_worktree(repo, worktree, branch="conductor/s1-1", base="main")
+
+    async def writing_runner(
+        cmd: list[str],
+        cwd: Path,
+        should_stop: Callable[[str], bool],
+        environment: dict[str, str],
+    ) -> tuple[int, str, str]:
+        (cwd / "made.txt").write_text("x = 1\n")
+        events = [text_event("done"), step_finish(0.02)]
+        return 0, "".join(json.dumps(event) + "\n" for event in events), ""
+
+    refused = ("bash:git push", "bash:rm -rf /")
+    harness = replace(OPENCODE, refusals=lambda events: refused)
+
+    output = asyncio.run(
+        run_attempt(
+            worktree,
+            base="main",
+            model="openrouter/a/b",
+            prompt="do it",
+            extra_args=[],
+            commit_message=lambda final_text: "chore(conductor): apply step s1 attempt 1",
+            transient_attempts=3,
+            harness=harness,
+            autonomy=FREE,
+            runner=writing_runner,
+        )
+    )
+    assert output.permissions_refused == refused
+
+
+def test_run_attempt_defaults_to_empty_permissions_refused(tmp_path: Path) -> None:
+    repo = init_repo(tmp_path)
+    worktree = tmp_path / "wt"
+    create_worktree(repo, worktree, branch="conductor/s1-1", base="main")
+
+    async def writing_runner(
+        cmd: list[str],
+        cwd: Path,
+        should_stop: Callable[[str], bool],
+        environment: dict[str, str],
+    ) -> tuple[int, str, str]:
+        (cwd / "made.txt").write_text("x = 1\n")
+        events = [text_event("done"), step_finish(0.02)]
+        return 0, "".join(json.dumps(event) + "\n" for event in events), ""
+
+    # Use OPENCODE harness without custom refusals - should default to empty tuple
+    output = asyncio.run(
+        run_attempt(
+            worktree,
+            base="main",
+            model="openrouter/a/b",
+            prompt="do it",
+            extra_args=[],
+            commit_message=lambda final_text: "chore(conductor): apply step s1 attempt 1",
+            transient_attempts=3,
+            harness=OPENCODE,
+            autonomy=FREE,
+            runner=writing_runner,
+        )
+    )
+    assert output.permissions_refused == ()

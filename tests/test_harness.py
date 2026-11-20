@@ -5,7 +5,7 @@ from typing import Any
 import pytest
 
 from conductor import catalog, credentials
-from conductor.autonomy import forbidden_commands
+from conductor.autonomy import ASK, FREE, GUIDED, LEVELS, forbidden_commands
 from conductor.config import HARNESS_NAMES, Profile, Provider
 from conductor.errors import MODEL_UNSUITABLE, PROVIDER_UNUSABLE, TRANSIENT
 from conductor.harness import (
@@ -13,16 +13,19 @@ from conductor.harness import (
     HARNESSES,
     OPENCODE,
     PI,
+    build_command,
     classify_opencode_error,
     claude_billed_cost,
     claude_build_command,
     claude_error,
     claude_final_text,
     claude_is_retry,
+    claude_refusals,
     claude_session_id,
     claude_subscription_cost,
     claude_tokens,
     harness_for,
+    opencode_refusals,
     opencode_tokens,
     pi_command,
     pi_cost,
@@ -31,10 +34,17 @@ from conductor.harness import (
     pi_final_text,
     pi_is_retry,
     pi_prepare,
+    pi_refusals,
     pi_session_id,
     pi_tokens,
     prepare_opencode,
 )
+from conductor.pi_extension import (
+    PERMISSION_EXTENSION,
+    PERMISSION_EXTENSION_NAME,
+    write_permission_extension,
+)
+from conductor.privacy import PI_AGENT_DIR
 from conductor.tokens import Tokens
 from conductor.worker import Events, git, parse_events
 from tests.factories import make_profile
@@ -81,8 +91,37 @@ def retry_event(status: object = 429, error: str = "rate_limit") -> dict[str, An
     return {"type": "system", "subtype": "api_retry", "error_status": status, "error": error}
 
 
+@pytest.mark.parametrize("level", LEVELS)
+def test_the_opencode_command_runs_unattended_only_at_the_free_level(level: str) -> None:
+    cmd = build_command("openrouter/x/y", "do it", ["--variant", "high"], level)
+    assert ("--auto" in cmd) is (level == FREE)
+    assert cmd[:2] == ["opencode", "run"]
+    assert cmd[-1] == "do it"
+    assert "--archived" in cmd
+    assert cmd.index("--variant") < cmd.index("do it")
+
+
+def test_the_opencode_command_below_free_lets_unmatched_permissions_be_rejected() -> None:
+    for level in (GUIDED, ASK):
+        assert "--auto" not in build_command("openrouter/x/y", "do it", [], level)
+
+
+@pytest.mark.parametrize("level", LEVELS)
+def test_the_claude_code_command_does_not_depend_on_the_level(level: str) -> None:
+    assert claude_build_command("subscription/sonnet", "do it", [], level) == (
+        claude_build_command("subscription/sonnet", "do it", [], FREE)
+    )
+
+
+@pytest.mark.parametrize("level", LEVELS)
+def test_the_pi_command_does_not_depend_on_the_level(level: str) -> None:
+    assert pi_command("openrouter/deepseek/v4", "do it", [], level) == (
+        pi_command("openrouter/deepseek/v4", "do it", [], FREE)
+    )
+
+
 def test_the_claude_code_command_confines_and_isolates_the_worker() -> None:
-    cmd = claude_build_command("subscription/sonnet", "do it", ["--effort", "high"])
+    cmd = claude_build_command("subscription/sonnet", "do it", ["--effort", "high"], FREE)
     assert cmd[0] == "claude"
     assert cmd[1] == "-p"
     assert cmd[-1] == "do it"
@@ -100,7 +139,7 @@ def test_the_claude_code_command_confines_and_isolates_the_worker() -> None:
 
 
 def test_the_claude_code_command_denies_every_forbidden_command() -> None:
-    cmd = claude_build_command("subscription/sonnet", "do it", [])
+    cmd = claude_build_command("subscription/sonnet", "do it", [], FREE)
     denied = next(arg for arg in cmd if arg.startswith("--disallowedTools="))
     rules = denied.removeprefix("--disallowedTools=").split(",")
     assert rules == [f"Bash({command})" for command in forbidden_commands()]
@@ -432,7 +471,7 @@ def test_pi_stream_drops_noise_lines_and_keeps_unicode_line_separators() -> None
 
 
 def test_the_pi_command_isolates_the_worker_and_names_the_api_model() -> None:
-    cmd = pi_command("openrouter/deepseek/v4", "do it", ["--effort", "high"])
+    cmd = pi_command("openrouter/deepseek/v4", "do it", ["--effort", "high"], FREE)
     assert cmd[0] == "pi"
     assert cmd[-1] == "do it"
     assert cmd[cmd.index("--model") + 1] == "deepseek/v4"
@@ -450,6 +489,62 @@ def test_the_pi_command_isolates_the_worker_and_names_the_api_model() -> None:
     assert cmd.index("--effort") < cmd.index("do it")
     # The key travels in the worktree's models.json and the environment, never as an argument.
     assert all("API_KEY" not in part.upper() and part != "--api-key" for part in cmd)
+
+
+def test_the_pi_command_loads_the_permission_extension() -> None:
+    cmd = pi_command("openrouter/deepseek/v4", "do it", [], FREE)
+    assert cmd.index("-e") < cmd.index("do it")
+    assert cmd[cmd.index("-e") + 1] == f"{PI_AGENT_DIR}/{PERMISSION_EXTENSION_NAME}"
+    # Only the explicit extension loads: the user's own ones stay off.
+    assert "--no-extensions" in cmd
+
+
+def test_the_permission_extension_denies_every_forbidden_command() -> None:
+    assert "CONDUCTOR_DENY" in PERMISSION_EXTENSION
+    for pattern in forbidden_commands():
+        assert pattern in PERMISSION_EXTENSION
+
+
+def test_write_permission_extension_writes_the_generated_source(tmp_path: Path) -> None:
+    path = write_permission_extension(tmp_path / "agent")
+    assert path == tmp_path / "agent" / PERMISSION_EXTENSION_NAME
+    assert path.read_text() == PERMISSION_EXTENSION
+
+
+def test_pi_prepare_writes_the_permission_extension(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(catalog, "model_costs", lambda base_url, get=None: {})
+    monkeypatch.setattr(catalog, "reasoning_models", lambda base_url, get=None: frozenset())
+    worktree = init_worktree(tmp_path)
+    pi_prepare(worktree, pi_profile())
+    extension = worktree / PI_AGENT_DIR / PERMISSION_EXTENSION_NAME
+    assert extension.read_text() == PERMISSION_EXTENSION
+
+
+def pi_tool_end(reason: str, is_error: bool = True) -> dict[str, Any]:
+    return {
+        "type": "tool_execution_end",
+        "toolCallId": "call_1",
+        "toolName": "bash",
+        "result": {"content": [{"type": "text", "text": reason}], "details": {}},
+        "isError": is_error,
+    }
+
+
+def test_a_blocked_pi_tool_call_is_a_refusal() -> None:
+    events: Events = [pi_tool_end("CONDUCTOR_DENY: git push *")]
+    assert pi_refusals(events) == ("CONDUCTOR_DENY: git push *",)
+
+
+def test_an_ordinary_pi_tool_end_is_not_a_refusal() -> None:
+    assert pi_refusals(PI_STREAM) == ()
+    assert pi_refusals([pi_tool_end("exit code 1")]) == ()
+    assert pi_refusals([pi_tool_end("CONDUCTOR_DENY: git push *", is_error=False)]) == ()
+
+
+def test_the_pi_harness_reads_its_refusals() -> None:
+    assert PI.refusals is pi_refusals
 
 
 def test_pi_environment_points_at_the_agent_dir_in_the_worktree(tmp_path: Path) -> None:
@@ -732,6 +827,115 @@ def test_pi_tokens_reasoning_is_none() -> None:
     ]
     tokens = pi_tokens(events)
     assert tokens.reasoning is None
+
+
+def opencode_tool(tool: str, status: str, error: str | None = None, **state: Any) -> dict[str, Any]:
+    part_state: dict[str, Any] = {"status": status, **state}
+    if error is not None:
+        part_state["error"] = error
+    return {"type": "tool_use", "part": {"tool": tool, "state": part_state}}
+
+
+POLICY_DENIAL = "Blocked by configuration policy"
+AUTO_REJECT = (
+    "This non-interactive run cannot ask the user for permission, so the request was "
+    "rejected. Continue without this action."
+)
+
+
+def test_a_policy_denial_is_a_refusal_with_its_command() -> None:
+    events: Events = [
+        opencode_tool(
+            "bash",
+            "error",
+            POLICY_DENIAL,
+            input={"command": "git push origin main"},
+        )
+    ]
+    assert opencode_refusals(events) == ("bash: git push origin main",)
+
+
+def test_an_auto_reject_is_a_refusal_with_its_command() -> None:
+    events: Events = [
+        opencode_tool("bash", "error", AUTO_REJECT, input={"command": "rm -rf build"}),
+    ]
+    assert opencode_refusals(events) == ("bash: rm -rf build",)
+
+
+def test_a_refusal_without_a_string_command_is_named_by_its_tool() -> None:
+    events: Events = [
+        opencode_tool("write", "error", POLICY_DENIAL, input={"path": "/etc/hosts"}),
+        opencode_tool("bash", "error", AUTO_REJECT, input={"command": 7}),
+    ]
+    assert opencode_refusals(events) == ("write", "bash")
+
+
+def test_an_ordinary_tool_error_is_not_a_refusal() -> None:
+    events: Events = [
+        opencode_tool("bash", "error", "exit code 1", input={"command": "pytest -q"}),
+        opencode_tool("read", "error", "File not found"),
+    ]
+    assert opencode_refusals(events) == ()
+
+
+def test_a_completed_tool_call_is_not_a_refusal() -> None:
+    events: Events = [
+        opencode_tool("bash", "completed", output="ok", input={"command": "ls"}),
+    ]
+    assert opencode_refusals(events) == ()
+
+
+def test_a_mixed_stream_keeps_only_the_refusals_in_order() -> None:
+    events: Events = [
+        {"type": "step_start", "part": {}},
+        opencode_tool("bash", "completed", output="ok", input={"command": "ls"}),
+        opencode_tool("bash", "error", "exit code 2", input={"command": "pytest"}),
+        opencode_tool("bash", "error", POLICY_DENIAL, input={"command": "git push"}),
+        {"type": "text", "part": {"text": "I cannot push."}},
+        opencode_tool("bash", "error", AUTO_REJECT, input={"command": "curl x"}),
+        {"type": "tool_use", "part": {"tool": "bash"}},
+    ]
+    assert opencode_refusals(events) == ("bash: git push", "bash: curl x")
+
+
+def test_the_opencode_harness_reads_its_refusals() -> None:
+    assert OPENCODE.refusals is opencode_refusals
+
+
+def claude_result_with_denials(denials: list[dict[str, Any]]) -> dict[str, Any]:
+    return {**CLAUDE_RESULT, "permission_denials": denials}
+
+
+def test_a_claude_code_denial_with_a_command_is_a_refusal_with_its_command() -> None:
+    result = claude_result_with_denials(
+        [
+            {
+                "tool_name": "Bash",
+                "tool_use_id": "toolu_1",
+                "tool_input": {"command": "git push origin main"},
+            }
+        ]
+    )
+    assert claude_refusals([CLAUDE_INIT, result]) == ("Bash: git push origin main",)
+
+
+def test_a_claude_code_denial_without_a_command_is_named_by_its_tool() -> None:
+    result = claude_result_with_denials(
+        [{"tool_name": "Edit", "tool_use_id": "toolu_2", "tool_input": {"file_path": "/etc/hosts"}}]
+    )
+    assert claude_refusals([CLAUDE_INIT, result]) == ("Edit",)
+
+
+def test_a_claude_code_result_without_denials_has_no_refusals() -> None:
+    assert claude_refusals([CLAUDE_INIT, CLAUDE_RESULT]) == ()
+
+
+def test_a_claude_code_run_without_a_result_has_no_refusals() -> None:
+    assert claude_refusals([CLAUDE_INIT, CLAUDE_ASSISTANT]) == ()
+
+
+def test_the_claude_code_harness_reads_its_refusals() -> None:
+    assert CLAUDE_CODE.refusals is claude_refusals
 
 
 def test_each_harness_has_its_token_reader() -> None:

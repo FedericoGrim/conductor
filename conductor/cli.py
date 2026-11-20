@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, TextIO
 
 from conductor import billing, reviewer, settings, setup_tui, stats
-from conductor.autonomy import DEFAULT_AUTONOMY, FREE, LEVELS, effective, is_protected
+from conductor.autonomy import ASK, DEFAULT_AUTONOMY, LEVELS, effective, is_protected
 from conductor.commits import choose_commit_message
 from conductor.config import Config, ConfigError, Profile
 from conductor.escalation import RunState, run_step
@@ -50,20 +50,6 @@ def find_config(explicit: Path | None) -> Path:
     )
 
 
-class UnsupportedAutonomyError(ValueError):
-    pass
-
-
-def check_autonomy_available(plan: Plan, ceiling: str) -> None:
-    for step in plan.steps:
-        level = effective(ceiling, step.autonomy)
-        if level != FREE:
-            raise UnsupportedAutonomyError(
-                f"autonomy '{level}' is not available yet (step '{step.id}'); "
-                "only 'free' runs until the ask and guided levels land (#35)"
-            )
-
-
 def validate(args: argparse.Namespace) -> int:
     plan = Plan.load(args.plan)
     has_config = args.config is not None or any(path.exists() for path in DEFAULT_CONFIG_PATHS)
@@ -76,7 +62,7 @@ def validate(args: argparse.Namespace) -> int:
     if config is None:
         return 0
     for profile in config.profiles.values():
-        for warning in (*profile.single_provider_warnings(), *profile.unconfined_warnings()):
+        for warning in profile.single_provider_warnings():
             print(f"warning: {warning}")
     return 0
 
@@ -106,6 +92,7 @@ async def execute_plan(
     profile: Profile,
     log: RunLog,
     extra_args: list[str],
+    ceiling: str,
     rules: tuple[str, ...] = (),
     progress: Progress | None = None,
     status: StatusLine | None = None,
@@ -142,6 +129,7 @@ async def execute_plan(
             extra_args,
             transient_attempts=profile.transient_attempts,
             harness=harness,
+            autonomy=effective(ceiling, step.autonomy),
             commit_message=lambda final_text: choose_commit_message(
                 step.id, number, model, final_text, step.commit
             ),
@@ -176,6 +164,7 @@ async def execute_plan(
             state=state,
             check=check,
             verify=plan.verify_for(step),
+            autonomy=effective(ceiling, step.autonomy),
         )
         numbers = [a["attempt"] for a in result.attempts]
         for number in numbers[:-1]:
@@ -191,12 +180,14 @@ async def execute_plan(
 
     def merge_approved(step: Step, number: int, result: StepResult) -> None:
         branch = f"conductor/{run_name}/{step.id}-{number}"
-        if is_protected(base):
+        step_autonomy = effective(ceiling, step.autonomy)
+        if is_protected(base) or step_autonomy == ASK:
             result.status = NEEDS_MERGE
-            result.detail = (
-                f"'{base}' is protected: Conductor never merges into it; review and "
-                f"merge by hand with `git merge --no-ff {branch}`"
-            )
+            if is_protected(base):
+                reason = f"'{base}' is protected: Conductor never merges into it"
+            else:
+                reason = "effective autonomy 'ask': Conductor never merges automatically"
+            result.detail = f"{reason}; review and merge by hand with `git merge --no-ff {branch}`"
             remove_worktree(repo, worktrees / f"{step.id}-{number}")
             return
         problem = merge_branch(repo, branch, into=base)
@@ -228,9 +219,6 @@ def run(args: argparse.Namespace) -> int:
     plan = Plan.load(args.plan)
     ceiling = args.autonomy or profile.autonomy
     plan.check_ceiling(ceiling)
-    check_autonomy_available(plan, ceiling)
-    for warning in profile.unconfined_warnings():
-        print(f"warning: {warning}", file=sys.stderr)
     rules = domain_rules(repo, plan)
     exclude_from_git(repo, ".conductor/")
     if git(repo, "status", "--porcelain").strip():
@@ -255,6 +243,7 @@ def run(args: argparse.Namespace) -> int:
             profile,
             log,
             args.opencode_arg,
+            ceiling,
             rules,
             progress=progress,
             status=status,
@@ -480,7 +469,6 @@ def main(argv: list[str] | None = None) -> int:
         ConfigError,
         NotARepositoryError,
         settings.SettingsError,
-        UnsupportedAutonomyError,
     ) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2

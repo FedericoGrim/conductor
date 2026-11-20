@@ -4,6 +4,7 @@ from typing import Any
 
 import pytest
 
+from conductor.autonomy import ASK, FREE, GUIDED
 from conductor.config import Profile, Provider
 from conductor.errors import (
     MODEL_UNSUITABLE,
@@ -37,6 +38,7 @@ def output(
     error: ModelError | None = None,
     commit_rejection: str | None = None,
     commit_message: str = "",
+    permissions_refused: tuple[str, ...] = (),
 ) -> AttemptOutput:
     return AttemptOutput(
         exit_code=exit_code,
@@ -47,6 +49,7 @@ def output(
         error=error,
         commit_rejection=commit_rejection,
         commit_message=commit_message,
+        permissions_refused=permissions_refused,
     )
 
 
@@ -60,6 +63,7 @@ def run(
     checked: list[int] | None = None,
     judged_checks: list[list[CheckResult]] | None = None,
     judged_messages: list[str] | None = None,
+    autonomy: str = FREE,
 ) -> Any:
     calls: list[tuple[int, str, str]] = []
     recorded: list[dict[str, Any]] = []
@@ -98,6 +102,7 @@ def run(
             record=record,
             state=state or RunState(),
             check=check,
+            autonomy=autonomy,
         )
     )
     return result, calls, recorded
@@ -579,6 +584,54 @@ def test_a_question_runs_no_checks() -> None:
     checked: list[int] = []
     run([], outputs=[asking()], checked=checked)
     assert checked == []
+
+
+REFUSALS = ("bash:git push", "bash:rm -rf /")
+
+
+def test_a_refusal_at_ask_pauses_the_step_without_review_or_escalation() -> None:
+    reviewed: list[str] = []
+    result, calls, recorded = run(
+        [Verdict(True, "ok", "{}")],
+        outputs=[output(permissions_refused=REFUSALS)],
+        autonomy=ASK,
+        reviewed=reviewed,
+    )
+    assert result.status == "needs_decision"
+    assert len(calls) == 1
+    assert reviewed == []
+    for refusal in REFUSALS:
+        assert refusal in result.detail
+    assert recorded[0]["permissions_refused"] == list(REFUSALS)
+
+
+@pytest.mark.parametrize("autonomy", [GUIDED, FREE])
+def test_a_refusal_above_ask_is_recorded_and_the_step_continues(autonomy: str) -> None:
+    reviewed: list[str] = []
+    result, calls, recorded = run(
+        [Verdict(True, "ok", "{}")],
+        outputs=[output(permissions_refused=REFUSALS)],
+        autonomy=autonomy,
+        reviewed=reviewed,
+    )
+    assert result.status == "approved"
+    assert len(calls) == 1
+    assert reviewed == ["openrouter/r"]
+    assert recorded[0]["permissions_refused"] == list(REFUSALS)
+
+
+def test_ask_escalates_at_most_one_tier_above_the_start() -> None:
+    profile = make_profile(
+        api_key_env="K",
+        tiers=("openrouter/t0", "openrouter/t1", "openrouter/t2", "openrouter/t3"),
+    )
+    result, calls, _ = run(
+        [Verdict(False, "no tests", "{}"), Verdict(False, "still bad", "{}")],
+        profile=profile,
+        autonomy=ASK,
+    )
+    assert result.status == "failed"
+    assert models(calls) == ["openrouter/t1", "openrouter/t2"]
 
 
 def test_the_reviewer_receives_the_checks_that_passed() -> None:
