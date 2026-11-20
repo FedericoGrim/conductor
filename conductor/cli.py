@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, TextIO
 
 from conductor import billing, reviewer, settings, setup_tui, stats
-from conductor.autonomy import DEFAULT_AUTONOMY, LEVELS, effective, is_protected
+from conductor.autonomy import ASK, DEFAULT_AUTONOMY, LEVELS, effective, is_protected
 from conductor.commits import choose_commit_message
 from conductor.config import Config, ConfigError, Profile
 from conductor.escalation import RunState, run_step
@@ -180,12 +180,14 @@ async def execute_plan(
 
     def merge_approved(step: Step, number: int, result: StepResult) -> None:
         branch = f"conductor/{run_name}/{step.id}-{number}"
-        if is_protected(base):
+        step_autonomy = effective(ceiling, step.autonomy)
+        if is_protected(base) or step_autonomy == ASK:
             result.status = NEEDS_MERGE
-            result.detail = (
-                f"'{base}' is protected: Conductor never merges into it; review and "
-                f"merge by hand with `git merge --no-ff {branch}`"
-            )
+            if is_protected(base):
+                reason = f"'{base}' is protected: Conductor never merges into it"
+            else:
+                reason = "effective autonomy 'ask': Conductor never merges automatically"
+            result.detail = f"{reason}; review and merge by hand with `git merge --no-ff {branch}`"
             remove_worktree(repo, worktrees / f"{step.id}-{number}")
             return
         problem = merge_branch(repo, branch, into=base)
